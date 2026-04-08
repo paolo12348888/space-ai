@@ -1,0 +1,127 @@
+package com.spaceai.context;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * contesto Gitraccolta — raccoltaCorrenteprogetto Git Informazione。
+ * <p>
+ * Branch、Stato、ecc.Informazione，iniettaSistemapromptin，
+ * aiuta l'AI a capire la versione del codice corrente e lo stato delle modifiche.
+ */
+public class GitContext {
+
+    private static final Logger log = LoggerFactory.getLogger(GitContext.class);
+    private static final int CMD_TIMEOUT = 5; // secondi
+
+    private final Path projectDir;
+    private String branch;
+    private String status;
+    private String recentCommits;
+    private boolean isGitRepo;
+
+    public GitContext(Path projectDir) {
+        this.projectDir = projectDir;
+        this.isGitRepo = Files.isDirectory(projectDir.resolve(".git"));
+    }
+
+    /**
+     * Raccogli contesto GitInformazione
+     */
+    public GitContext collect() {
+        if (!isGitRepo) {
+            log.debug("Current directory is not a Git repository: {}", projectDir);
+            return this;
+        }
+
+        this.branch = runGitCommand("rev-parse", "--abbrev-ref", "HEAD");
+        this.status = runGitCommand("status", "--short", "--branch");
+        this.recentCommits = runGitCommand("log", "--oneline", "-5", "--no-decorate");
+
+        return this;
+    }
+
+    /**
+     * Costruisci contesto Gitriepilogo（iniettaSistemaprompt)
+     */
+    public String buildSummary() {
+        if (!isGitRepo) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("# Git Context\n\n");
+
+        if (branch != null && !branch.isBlank()) {
+            sb.append("- Branch: ").append(branch).append("\n");
+        }
+
+        if (status != null && !status.isBlank()) {
+            // modificaFile
+            long modifiedCount = status.lines()
+                    .filter(l -> !l.startsWith("##"))
+                    .count();
+            if (modifiedCount > 0) {
+                sb.append("- Modified files: ").append(modifiedCount).append("\n");
+                sb.append("- Status:\n```\n").append(status).append("\n```\n");
+            } else {
+                sb.append("- Working tree: clean\n");
+            }
+        }
+
+        if (recentCommits != null && !recentCommits.isBlank()) {
+            sb.append("- Recent commits:\n```\n").append(recentCommits).append("\n```\n");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Esegui Git Comando
+     */
+    private String runGitCommand(String... args) {
+        try {
+            var command = new java.util.ArrayList<String>();
+            command.add("git");
+            command.addAll(java.util.List.of(args));
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.directory(projectDir.toFile());
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+            StringBuilder output = new StringBuilder();
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            boolean finished = process.waitFor(CMD_TIMEOUT, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return "";
+            }
+
+            return output.toString().stripTrailing();
+
+        } catch (Exception e) {
+            log.debug("Git command execution failed: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    // Getters
+    public boolean isGitRepo() { return isGitRepo; }
+    public String getBranch() { return branch; }
+    public String getStatus() { return status; }
+    public String getRecentCommits() { return recentCommits; }
+}
