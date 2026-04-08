@@ -27,10 +27,14 @@ spring:
           max-tokens: ${AI_MAX_TOKENS:8096}
           temperature: 0.7
 
-  # Non avvia il server Web (modalità CLI pura)
+  # Modalità web: servlet per Render (override con -Dspring.main.web-application-type=none per CLI locale)
   main:
-    web-application-type: none
+    web-application-type: ${SPRING_WEB_TYPE:none}
     banner-mode: off
+
+# Porta server (usata da Render)
+server:
+  port: ${PORT:8080}
 
   # thread virtuali
   threads:
