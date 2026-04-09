@@ -1,12 +1,5 @@
 spring:
   ai:
-    # === Configurazione API compatibile OpenAI — DEFAULT: DeepSeek ===
-    # Compatibile con DeepSeek, Qwen, GPT-4o, e qualsiasi API OpenAI-compatible
-    # Imposta AI_BASE_URL per cambiare provider:
-    #   DeepSeek:  https://api.deepseek.com
-    #   Qwen:      https://dashscope.aliyuncs.com/compatible-mode/v1
-    #   OpenAI:    https://api.openai.com
-    #   ModelScope (tuo LLM): https://api-inference.modelscope.cn/v1
     openai:
       api-key: ${AI_API_KEY:}
       base-url: ${AI_BASE_URL:https://api.deepseek.com}
@@ -15,41 +8,33 @@ spring:
           model: ${AI_MODEL:deepseek-chat}
           max-tokens: ${AI_MAX_TOKENS:8096}
           temperature: 0.7
-
-    # === Configurazione API nativa Anthropic (opzionale) ===
-    # Abilitare impostando space-ai.provider=anthropic
     anthropic:
       api-key: ${AI_API_KEY:}
       base-url: ${AI_BASE_URL:https://api.anthropic.com}
       chat:
         options:
-          model: ${AI_MODEL:claude-sonnet-4-20250514}  # ID API Anthropic (usato solo se provider=anthropic)
+          model: ${AI_MODEL:claude-sonnet-4-20250514}
           max-tokens: ${AI_MAX_TOKENS:8096}
           temperature: 0.7
 
-  # Modalità web: servlet per Render (override con -Dspring.main.web-application-type=none per CLI locale)
   main:
-    web-application-type: ${SPRING_WEB_TYPE:none}
+    # Web SERVER abilitato per Render
+    web-application-type: servlet
     banner-mode: off
 
-# Porta server (usata da Render)
-server:
-  port: ${PORT:8080}
-
-  # thread virtuali
   threads:
     virtual:
       enabled: true
 
-# === Configurazione personalizzata Space AI Java ===
+server:
+  port: ${PORT:10000}
+
 space-ai:
-  # Provider API: openai (default, compatibile DeepSeek/Qwen/ModelScope) o anthropic
   provider: ${SPACE_AI_PROVIDER:openai}
 
-# Log: in modalità CLI mostra solo WARN e superiori, per mantenere la console pulita
 logging:
   level:
     root: WARN
-    com.spaceai: WARN
+    com.spaceai: INFO
     org.springframework: WARN
     org.jline: WARN

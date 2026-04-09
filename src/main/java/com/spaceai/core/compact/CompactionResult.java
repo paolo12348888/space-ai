@@ -43,4 +43,12 @@ public record CompactionResult(
     public static CompactionResult failure(CompactLayer layer, String reason) {
         return new CompactionResult(false, layer, 0, 0, null, reason);
     }
+
+    /**
+     * Alias di {@link #reason()} per compatibilità con i test.
+     * Restituisce la descrizione/motivazione del risultato.
+     */
+    public String description() {
+        return reason;
+    }
 }
