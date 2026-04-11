@@ -13,11 +13,6 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
 
-/**
- * REST Controller per SPACE AI Web API.
- * Gestisce chiamate dirette HTTP per compatibilità con OpenRouter,
- * DeepSeek e qualsiasi provider OpenAI-compatible.
- */
 @RestController
 @RequestMapping("/api")
 @CrossOrigin(origins = "*")
@@ -33,11 +28,6 @@ public class ChatController {
         this.agentLoop = agentLoop;
     }
 
-    /**
-     * POST /api/chat
-     * Usa chiamata HTTP diretta per supportare tutti i provider
-     * incluso OpenRouter che richiede header speciali.
-     */
     @PostMapping(value = "/chat",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
@@ -48,12 +38,11 @@ public class ChatController {
                     .body(Map.of("error", "Il campo 'message' è obbligatorio"));
         }
 
-        String baseUrl = System.getenv().getOrDefault("AI_BASE_URL", "https://api.deepseek.com");
+        String baseUrl = System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey  = System.getenv().getOrDefault("AI_API_KEY", "");
-        String model   = System.getenv().getOrDefault("AI_MODEL", "deepseek-chat");
+        String model   = System.getenv().getOrDefault("AI_MODEL", "llama-3.1-8b-instant");
 
         try {
-            // Costruisce il body della richiesta OpenAI-compatible
             ObjectNode requestBody = MAPPER.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("max_tokens", 2048);
@@ -62,7 +51,7 @@ public class ChatController {
             ArrayNode messages = MAPPER.createArrayNode();
             ObjectNode systemMsg = MAPPER.createObjectNode();
             systemMsg.put("role", "system");
-            systemMsg.put("content", "Sei SPACE AI, un assistente esperto di programmazione e tecnologia. Rispondi sempre in italiano in modo chiaro e preciso.");
+            systemMsg.put("content", "Sei SPACE AI, un assistente esperto di finanza, trading e programmazione. Rispondi sempre in italiano in modo chiaro e preciso.");
             messages.add(systemMsg);
 
             ObjectNode userMsg = MAPPER.createObjectNode();
@@ -71,12 +60,15 @@ public class ChatController {
             messages.add(userMsg);
             requestBody.set("messages", messages);
 
-            // Header HTTP — include quelli richiesti da OpenRouter
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.setBearerAuth(apiKey);
+            // Header per OpenRouter
             headers.set("HTTP-Referer", "https://space-ai-940e.onrender.com");
             headers.set("X-Title", "SPACE AI");
+            // Header per ngrok (bypass browser warning)
+            headers.set("ngrok-skip-browser-warning", "true");
+            headers.set("User-Agent", "SPACE-AI-Server/1.0");
 
             String endpoint = baseUrl.endsWith("/") ? baseUrl + "chat/completions"
                                                     : baseUrl + "/chat/completions";
@@ -114,17 +106,14 @@ public class ChatController {
         }
     }
 
-    /**
-     * GET /api/health
-     */
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of(
                 "status",   "online",
                 "service",  "SPACE AI",
                 "provider", System.getenv().getOrDefault("SPACE_AI_PROVIDER", "openai"),
-                "model",    System.getenv().getOrDefault("AI_MODEL", "deepseek-chat"),
-                "baseUrl",  System.getenv().getOrDefault("AI_BASE_URL", "https://api.deepseek.com")
+                "model",    System.getenv().getOrDefault("AI_MODEL", "llama-3.1-8b-instant"),
+                "baseUrl",  System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1")
         ));
     }
 }
