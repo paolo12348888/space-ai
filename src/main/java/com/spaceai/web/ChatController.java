@@ -20,7 +20,6 @@ public class ChatController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -40,7 +39,7 @@ public class ChatController {
 
         String baseUrl = System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey  = System.getenv().getOrDefault("AI_API_KEY", "");
-        String model   = System.getenv().getOrDefault("AI_MODEL", "llama-3.1-8b-instant");
+        String model   = System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile");
 
         try {
             ObjectNode requestBody = MAPPER.createObjectNode();
@@ -62,7 +61,9 @@ public class ChatController {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey);
+            if (!apiKey.isEmpty()) {
+                headers.setBearerAuth(apiKey);
+            }
             // Header per OpenRouter
             headers.set("HTTP-Referer", "https://space-ai-940e.onrender.com");
             headers.set("X-Title", "SPACE AI");
@@ -70,14 +71,23 @@ public class ChatController {
             headers.set("ngrok-skip-browser-warning", "true");
             headers.set("User-Agent", "SPACE-AI-Server/1.0");
 
-            String endpoint = baseUrl.endsWith("/") ? baseUrl + "chat/completions"
-                                                    : baseUrl + "/chat/completions";
+            // Determina endpoint corretto
+            String endpoint;
+            if (baseUrl.contains("ngrok") || baseUrl.contains("serveo") || baseUrl.contains("localtunnel")) {
+                // Colab tunnel — usa /chat/completions direttamente
+                endpoint = baseUrl.endsWith("/") ? baseUrl + "chat/completions"
+                                                 : baseUrl + "/chat/completions";
+            } else {
+                // Provider standard OpenAI-compatible
+                endpoint = baseUrl.endsWith("/") ? baseUrl + "chat/completions"
+                                                 : baseUrl + "/chat/completions";
+            }
+
+            log.info("Chiamata AI → {} | modello: {}", endpoint, model);
 
             HttpEntity<String> request = new HttpEntity<>(
                 MAPPER.writeValueAsString(requestBody), headers
             );
-
-            log.info("Chiamata AI → {} | modello: {}", endpoint, model);
 
             ResponseEntity<String> response = restTemplate.postForEntity(
                 endpoint, request, String.class
@@ -112,7 +122,7 @@ public class ChatController {
                 "status",   "online",
                 "service",  "SPACE AI",
                 "provider", System.getenv().getOrDefault("SPACE_AI_PROVIDER", "openai"),
-                "model",    System.getenv().getOrDefault("AI_MODEL", "llama-3.1-8b-instant"),
+                "model",    System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
                 "baseUrl",  System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1")
         ));
     }
