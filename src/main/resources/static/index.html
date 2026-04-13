@@ -177,6 +177,13 @@ var attachedFiles = [];
 var isRecording = false;
 var recognition = null;
 
+// Sessione unica per utente (persistente nel browser)
+var SESSION_ID = localStorage.getItem("spaceai_session");
+if (!SESSION_ID) {
+  SESSION_ID = "sess_" + Math.random().toString(36).slice(2) + Date.now();
+  localStorage.setItem("spaceai_session", SESSION_ID);
+}
+
 inpEl.addEventListener("input", function(){
   inpEl.style.height = "auto";
   inpEl.style.height = Math.min(inpEl.scrollHeight, 140) + "px";
@@ -199,6 +206,21 @@ async function loadHealth(){
 }
 loadHealth();
 
+// Carica storico chat al avvio
+async function loadChatHistory(){
+  try{
+    var r = await fetch("/api/history/" + SESSION_ID);
+    var d = await r.json();
+    if(d.messages && d.messages.length > 0){
+      removeWelcome();
+      d.messages.forEach(function(msg){
+        addRow(msg.content, msg.role === "user" ? "user" : "ai");
+      });
+    }
+  } catch(e){ console.log("Storico non disponibile"); }
+}
+loadChatHistory();
+
 function handleFiles(files){
   for(var i=0;i<files.length;i++){
     var file = files[i];
@@ -216,8 +238,8 @@ function renderFilePreviews(){
   attachedFiles.forEach(function(f, i){
     var tag = document.createElement("div");
     tag.className = "file-tag";
-    var icon = f.type.startsWith("image/") ? "X" : "D";
-    tag.innerHTML = icon + " " + f.name + ' <button onclick="removeFile(' + i + ')">x</button>';
+    var icon = f.type.startsWith("image/") ? "🖼️" : "📄";
+    tag.innerHTML = icon + " " + f.name + " <button onclick=\"removeFile(" + i + ")\">×</button>";
     filePreview.appendChild(tag);
   });
 }
@@ -239,7 +261,7 @@ function toggleRecording(){
 
 function startRecording(){
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SR){ alert("Il browser non supporta il riconoscimento vocale. Usa Chrome."); return; }
+  if(!SR){ alert("Usa Chrome per il riconoscimento vocale."); return; }
   recognition = new SR();
   recognition.lang = "it-IT";
   recognition.continuous = false;
@@ -254,12 +276,22 @@ function startRecording(){
 function stopRecording(){ if(recognition) recognition.stop(); isRecording=false; micBtn.classList.remove("recording"); recIndicator.classList.remove("visible"); }
 
 function newChat(){
+  // Nuova sessione
+  SESSION_ID = "sess_" + Math.random().toString(36).slice(2) + Date.now();
+  localStorage.setItem("spaceai_session", SESSION_ID);
   msgsEl.innerHTML = "";
   attachedFiles = [];
   renderFilePreviews();
   var w = document.createElement("div"); w.id = "welcome";
-  w.innerHTML = "<img class='welcome-logo' src='" + LOGO + "'/><div class='welcome-hi'>Ciao, sono <em>SPACE AI</em></div><p class='welcome-sub'>Nuova conversazione pronta.</p>";
+  w.innerHTML = "<img class=\"welcome-logo\" src=\"" + LOGO + "\"/><div class=\"welcome-hi\">Ciao, sono <em>SPACE AI</em></div><p class=\"welcome-sub\">Nuova conversazione pronta.</p>";
   msgsEl.appendChild(w);
+  // Aggiorna sidebar
+  var items = document.querySelectorAll(".chat-item");
+  items.forEach(function(i){ i.classList.remove("active"); });
+  var newItem = document.createElement("div");
+  newItem.className = "chat-item active";
+  newItem.innerHTML = "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/></svg> Nuova chat";
+  document.querySelector(".sidebar-section").after(newItem);
 }
 
 function removeWelcome(){ var w=document.getElementById("welcome"); if(w) w.remove(); }
@@ -282,7 +314,7 @@ function addTyping(){
   var av = document.createElement("div"); av.className = "av";
   var img = document.createElement("img"); img.src = LOGO; av.appendChild(img);
   var bub = document.createElement("div"); bub.className = "bubble";
-  bub.innerHTML = "<div class='typing-b'><span></span><span></span><span></span></div>";
+  bub.innerHTML = "<div class=\"typing-b\"><span></span><span></span><span></span></div>";
   row.appendChild(av); row.appendChild(bub);
   msgsEl.appendChild(row); msgsEl.scrollTop = msgsEl.scrollHeight;
 }
@@ -296,9 +328,16 @@ async function sendMessage(){
       var file = attachedFiles[i];
       try{
         var content = await readFileAsText(file);
-        if(file.type.startsWith("image/")){ text += "\n\n[Immagine: " + file.name + "]"; }
-        else { text += "\n\n--- File: " + file.name + " ---\n" + content.slice(0,3000); }
-      } catch(e){ text += "\n\n[File: " + file.name + "]"; }
+        if(file.type.startsWith("image/")){ text += "
+
+[Immagine: " + file.name + "]"; }
+        else { text += "
+
+--- File: " + file.name + " ---
+" + content.slice(0,3000); }
+      } catch(e){ text += "
+
+[File: " + file.name + "]"; }
     }
     attachedFiles = []; renderFilePreviews();
   }
@@ -306,13 +345,17 @@ async function sendMessage(){
   btnEl.disabled = true;
   addRow(text, "user"); addTyping();
   try{
-    var res = await fetch("/api/chat", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text}) });
+    var res = await fetch("/api/chat", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:text, sessionId:SESSION_ID})
+    });
     var data = await res.json();
     removeTyping();
-    if(data.error) addRow("Errore: " + data.error, "err");
+    if(data.error) addRow("❌ " + data.error, "err");
     else addRow(data.response || "(risposta vuota)", "ai");
   } catch(e){
-    removeTyping(); addRow("Errore di rete: " + e.message, "err");
+    removeTyping(); addRow("❌ Errore di rete: " + e.message, "err");
   } finally {
     btnEl.disabled = false; inpEl.focus();
   }
