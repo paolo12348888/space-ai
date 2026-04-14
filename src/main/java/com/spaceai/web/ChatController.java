@@ -25,26 +25,37 @@ public class ChatController {
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
 
-    // System prompt avanzato — capacità complete
-    private static final String SYSTEM_PROMPT = """
-        Sei SPACE AI, un assistente AI avanzato creato da Paolo.
-        Data attuale: %s
-        
-        Le tue capacità:
-        - Analisi e scrittura di codice (Python, Java, JavaScript, SQL, ecc.)
-        - Finanza, trading, analisi tecnica e fondamentale
-        - Ragionamento avanzato e problem solving
-        - Analisi di documenti e dati allegati
-        - Ricerca e sintesi di informazioni aggiornate
-        - Matematica, statistica e data science
-        
-        Regole:
-        - Rispondi SEMPRE in italiano a meno che l'utente non scriva in un'altra lingua
-        - Sii preciso, dettagliato e usa esempi pratici
-        - Per il codice usa blocchi formattati con il linguaggio
-        - Se non sai qualcosa di recente, dillo chiaramente
-        - Sei capace di fare analisi approfondite, non solo risposte brevi
-        """;
+    // Sistema neurale ispirato a Claude: curiosita, onesta, precisione, utilita
+    private static final String SYSTEM_PROMPT =
+        "Sei SPACE AI, un assistente AI avanzato creato da Paolo. " +
+        "Data e ora attuale: %s. " +
+        "\n\n" +
+        "## La tua identita\n" +
+        "Sei un assistente intelligente, curioso e preciso. " +
+        "Hai una personalita autentica: sei diretto, onesto e ti importa davvero aiutare. " +
+        "Non sei un semplice chatbot - sei un partner intellettuale. " +
+        "\n\n" +
+        "## Le tue capacita complete\n" +
+        "- **Programmazione**: Python, Java, JavaScript, TypeScript, SQL, Bash, e molto altro. Scrivi codice funzionante, debug, spiega algoritmi.\n" +
+        "- **Finanza e Trading**: analisi tecnica (RSI, MACD, Bande di Bollinger), analisi fondamentale (P/E, DCF, bilanci), strategie di trading, gestione del rischio, crypto, forex.\n" +
+        "- **Ragionamento avanzato**: problem solving complesso, logica, matematica, statistica, data science.\n" +
+        "- **Analisi documenti**: leggi e analizza file allegati, CSV, codice, testi.\n" +
+        "- **Scrittura**: testi, email, report, documentazione tecnica.\n" +
+        "- **Conoscenza generale**: scienza, storia, tecnologia, arte - rispondi con profondita.\n" +
+        "\n\n" +
+        "## Come ragioni (ispirato ai migliori modelli)\n" +
+        "1. **Comprendi prima di rispondere**: analizza cosa vuole davvero l utente\n" +
+        "2. **Pensa step-by-step**: per problemi complessi, mostra il ragionamento\n" +
+        "3. **Sii preciso**: dai risposte accurate, cita i limiti quando esistono\n" +
+        "4. **Sii utile**: non solo rispondi alla domanda, anticipa i bisogni successivi\n" +
+        "5. **Sii onesto**: se non sai qualcosa, dillo. Non inventare.\n" +
+        "\n\n" +
+        "## Regole di risposta\n" +
+        "- Rispondi SEMPRE in italiano a meno che l utente non scriva in un altra lingua\n" +
+        "- Usa markdown per formattare (grassetto, liste, codice)\n" +
+        "- Per il codice usa sempre i backtick con il linguaggio specificato\n" +
+        "- Risposte complete e dettagliate, non troncare mai\n" +
+        "- La data attuale e %s - hai conoscenza fino a inizio 2024, per eventi dopo segnalalo\n";
 
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
@@ -59,20 +70,26 @@ public class ChatController {
 
         if (userMessage.isEmpty()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Il campo 'message' è obbligatorio"));
+                    .body(Map.of("error", "Il campo message e obbligatorio"));
         }
 
-        String baseUrl      = System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1");
-        String apiKey       = System.getenv().getOrDefault("AI_API_KEY", "");
-        String model        = System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile");
-        String supabaseUrl  = System.getenv().getOrDefault("SUPABASE_URL", "");
-        String supabaseKey  = System.getenv().getOrDefault("SUPABASE_KEY", "");
+        String baseUrl     = System.getenv().getOrDefault("AI_BASE_URL", "https://api.groq.com/openai/v1");
+        String apiKey      = System.getenv().getOrDefault("AI_API_KEY", "");
+        String model       = System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile");
+        String supabaseUrl = System.getenv().getOrDefault("SUPABASE_URL", "");
+        String supabaseKey = System.getenv().getOrDefault("SUPABASE_KEY", "");
 
         try {
-            // 1. Carica storico chat da Supabase
-            List<Map<String, String>> history = loadHistory(sessionId, supabaseUrl, supabaseKey);
+            // 1. Carica storico (con fallback sicuro)
+            List<Map<String, String>> history = new ArrayList<>();
+            if (!supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
+                history = loadHistory(sessionId, supabaseUrl, supabaseKey);
+            }
 
-            // 2. Costruisci i messaggi con system prompt aggiornato
+            // 2. Costruisci prompt
+            String today = LocalDateTime.now()
+                    .format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
+
             ObjectNode requestBody = MAPPER.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("max_tokens", 4096);
@@ -80,31 +97,29 @@ public class ChatController {
 
             ArrayNode messages = MAPPER.createArrayNode();
 
-            // System prompt con data corrente
-            String today = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
-            ObjectNode systemMsg = MAPPER.createObjectNode();
-            systemMsg.put("role", "system");
-            systemMsg.put("content", String.format(SYSTEM_PROMPT, today));
-            messages.add(systemMsg);
+            // System message
+            ObjectNode sysMsg = MAPPER.createObjectNode();
+            sysMsg.put("role", "system");
+            sysMsg.put("content", String.format(SYSTEM_PROMPT, today, today));
+            messages.add(sysMsg);
 
-            // Aggiungi storico (ultimi 20 messaggi)
+            // Storico ultimi 20 messaggi
             int start = Math.max(0, history.size() - 20);
             for (int i = start; i < history.size(); i++) {
-                Map<String, String> msg = history.get(i);
-                ObjectNode histMsg = MAPPER.createObjectNode();
-                histMsg.put("role", msg.get("role"));
-                histMsg.put("content", msg.get("content"));
-                messages.add(histMsg);
+                ObjectNode hMsg = MAPPER.createObjectNode();
+                hMsg.put("role",    history.get(i).get("role"));
+                hMsg.put("content", history.get(i).get("content"));
+                messages.add(hMsg);
             }
 
-            // Messaggio utente corrente
-            ObjectNode userMsg = MAPPER.createObjectNode();
-            userMsg.put("role", "user");
-            userMsg.put("content", userMessage);
-            messages.add(userMsg);
+            // Messaggio utente
+            ObjectNode uMsg = MAPPER.createObjectNode();
+            uMsg.put("role", "user");
+            uMsg.put("content", userMessage);
+            messages.add(uMsg);
             requestBody.set("messages", messages);
 
-            // 3. Chiama il modello AI
+            // 3. Headers
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             if (!apiKey.isEmpty()) headers.setBearerAuth(apiKey);
@@ -117,27 +132,34 @@ public class ChatController {
                     baseUrl + "chat/completions" :
                     baseUrl + "/chat/completions";
 
-            HttpEntity<String> request = new HttpEntity<>(
-                    MAPPER.writeValueAsString(requestBody), headers);
-
-            log.info("AI call → {} | model: {} | session: {}", endpoint, model, sessionId);
+            log.info("AI call -> {} | model: {} | history: {} msg", endpoint, model, history.size());
 
             ResponseEntity<String> response = restTemplate.postForEntity(
-                    endpoint, request, String.class);
+                    endpoint,
+                    new HttpEntity<>(MAPPER.writeValueAsString(requestBody), headers),
+                    String.class
+            );
 
             JsonNode json = MAPPER.readTree(response.getBody());
             String aiResponse = json.path("choices").get(0)
                     .path("message").path("content").asText();
 
-            // 4. Salva messaggio utente + risposta in Supabase
-            saveMessage(sessionId, "user", userMessage, supabaseUrl, supabaseKey);
-            saveMessage(sessionId, "assistant", aiResponse, supabaseUrl, supabaseKey);
+            // 4. Salva in Supabase (non blocca la risposta se fallisce)
+            if (!supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
+                try {
+                    saveMessage(sessionId, "user",      userMessage, supabaseUrl, supabaseKey);
+                    saveMessage(sessionId, "assistant", aiResponse,  supabaseUrl, supabaseKey);
+                } catch (Exception e) {
+                    log.warn("Supabase save failed (non-blocking): {}", e.getMessage());
+                }
+            }
 
             return ResponseEntity.ok(Map.of(
-                    "response", aiResponse,
-                    "status", "ok",
-                    "model", model,
-                    "sessionId", sessionId
+                    "response",  aiResponse,
+                    "status",    "ok",
+                    "model",     model,
+                    "sessionId", sessionId,
+                    "history",   history.size()
             ));
 
         } catch (Exception e) {
@@ -145,26 +167,22 @@ public class ChatController {
             log.error("Errore AI: {}", errMsg);
             return ResponseEntity.status(502)
                     .body(Map.of(
-                            "error", "Errore AI: " + errMsg,
+                            "error",    "Errore AI: " + errMsg,
                             "provider", baseUrl,
-                            "model", model
+                            "model",    model
                     ));
         }
     }
 
-    // ── Carica storico da Supabase ──────────────────────────────
-    @SuppressWarnings("unchecked")
     private List<Map<String, String>> loadHistory(String sessionId,
-                                                   String supabaseUrl,
-                                                   String supabaseKey) {
+                                                    String supabaseUrl,
+                                                    String supabaseKey) {
         List<Map<String, String>> history = new ArrayList<>();
-        if (supabaseUrl.isEmpty() || supabaseKey.isEmpty()) return history;
-
         try {
             String url = supabaseUrl + "/rest/v1/messages"
                     + "?session_id=eq." + sessionId
                     + "&order=created_at.asc"
-                    + "&limit=50"
+                    + "&limit=40"
                     + "&select=role,content";
 
             HttpHeaders h = new HttpHeaders();
@@ -181,59 +199,57 @@ public class ChatController {
                         "content", node.path("content").asText()
                 ));
             }
-            log.info("Storico caricato: {} messaggi per sessione {}", history.size(), sessionId);
         } catch (Exception e) {
-            log.warn("Errore caricamento storico Supabase: {}", e.getMessage());
+            log.warn("Supabase load failed: {}", e.getMessage());
         }
         return history;
     }
 
-    // ── Salva messaggio in Supabase ─────────────────────────────
-    private void saveMessage(String sessionId, String role,
-                              String content, String supabaseUrl, String supabaseKey) {
-        if (supabaseUrl.isEmpty() || supabaseKey.isEmpty()) return;
-        try {
-            String url = supabaseUrl + "/rest/v1/messages";
+    private void saveMessage(String sessionId, String role, String content,
+                              String supabaseUrl, String supabaseKey) throws Exception {
+        HttpHeaders h = new HttpHeaders();
+        h.setContentType(MediaType.APPLICATION_JSON);
+        h.set("apikey", supabaseKey);
+        h.set("Authorization", "Bearer " + supabaseKey);
+        h.set("Prefer", "return=minimal");
 
-            HttpHeaders h = new HttpHeaders();
-            h.setContentType(MediaType.APPLICATION_JSON);
-            h.set("apikey", supabaseKey);
-            h.set("Authorization", "Bearer " + supabaseKey);
-            h.set("Prefer", "return=minimal");
+        ObjectNode b = MAPPER.createObjectNode();
+        b.put("session_id", sessionId);
+        b.put("role",       role);
+        b.put("content",    content);
 
-            ObjectNode body = MAPPER.createObjectNode();
-            body.put("session_id", sessionId);
-            body.put("role", role);
-            body.put("content", content);
-
-            restTemplate.postForEntity(url,
-                    new HttpEntity<>(MAPPER.writeValueAsString(body), h), String.class);
-        } catch (Exception e) {
-            log.warn("Errore salvataggio Supabase: {}", e.getMessage());
-        }
+        restTemplate.postForEntity(
+                supabaseUrl + "/rest/v1/messages",
+                new HttpEntity<>(MAPPER.writeValueAsString(b), h),
+                String.class
+        );
     }
 
-    // ── Carica storico via API ──────────────────────────────────
     @GetMapping("/history/{sessionId}")
     public ResponseEntity<Object> getHistory(@PathVariable String sessionId) {
         String supabaseUrl = System.getenv().getOrDefault("SUPABASE_URL", "");
         String supabaseKey = System.getenv().getOrDefault("SUPABASE_KEY", "");
-        List<Map<String, String>> history = loadHistory(sessionId, supabaseUrl, supabaseKey);
-        return ResponseEntity.ok(Map.of("messages", history, "sessionId", sessionId));
+        if (supabaseUrl.isEmpty()) {
+            return ResponseEntity.ok(Map.of("messages", List.of(), "sessionId", sessionId));
+        }
+        return ResponseEntity.ok(Map.of(
+                "messages",  loadHistory(sessionId, supabaseUrl, supabaseKey),
+                "sessionId", sessionId
+        ));
     }
 
-    // ── Health check ────────────────────────────────────────────
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
-        String today = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
-        boolean supabaseOk = !System.getenv().getOrDefault("SUPABASE_URL", "").isEmpty();
+        String today = LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
+        boolean supabase = !System.getenv().getOrDefault("SUPABASE_URL", "").isEmpty();
         return ResponseEntity.ok(Map.of(
-                "status",    "online",
-                "service",   "SPACE AI",
-                "model",     System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
-                "baseUrl",   System.getenv().getOrDefault("AI_BASE_URL", ""),
-                "supabase",  supabaseOk ? "connected" : "not configured",
-                "date",      today
+                "status",   "online",
+                "service",  "SPACE AI",
+                "model",    System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
+                "baseUrl",  System.getenv().getOrDefault("AI_BASE_URL", ""),
+                "supabase", supabase ? "connected" : "not configured",
+                "date",     today
         ));
     }
 }
