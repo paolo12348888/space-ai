@@ -11,6 +11,8 @@ import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -34,306 +36,281 @@ public class ChatController {
                 .format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
     }
 
-    // ── SISTEMA PROMPT CORE ───────────────────────────────────────
-    private String coreSystem() {
-        return "Sei SPACE AI, assistente avanzato creato da Paolo. Data: " + today() + ". "
-             + "REGOLA FONDAMENTALE: Rispondi SEMPRE e SOLO alla domanda attuale dell utente. "
-             + "NON ripetere mai risposte precedenti. NON ignorare mai la domanda. "
-             + "Se non hai dati in tempo reale (es. prezzi crypto), dillo chiaramente. "
-             + "Se chiedono un grafico testuale, crealo con ASCII art. "
-             + "Se chiedono un immagine, spiega che non puoi generarla ma descrivi come crearla. "
-             + "Rispondi in italiano. Sii diretto, preciso, utile.";
+    // ── WEB SEARCH con Tavily ─────────────────────────────────────
+    private String searchWeb(String query) {
+        String tavilyKey = System.getenv().getOrDefault("TAVILY_API_KEY", "");
+        if (tavilyKey.isEmpty()) {
+            log.warn("TAVILY_API_KEY non configurata");
+            return null;
+        }
+        try {
+            ObjectNode req = MAPPER.createObjectNode();
+            req.put("api_key", tavilyKey);
+            req.put("query", query);
+            req.put("search_depth", "advanced");
+            req.put("max_results", 5);
+            req.put("include_answer", true);
+
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+
+            ResponseEntity<String> resp = restTemplate.postForEntity(
+                    "https://api.tavily.com/search",
+                    new HttpEntity<>(MAPPER.writeValueAsString(req), h),
+                    String.class);
+
+            JsonNode json = MAPPER.readTree(resp.getBody());
+            StringBuilder sb = new StringBuilder();
+
+            if (json.has("answer") && !json.path("answer").asText().isBlank()) {
+                sb.append("RISPOSTA BREVE: ").append(json.path("answer").asText()).append("\n\n");
+            }
+
+            JsonNode results = json.path("results");
+            if (results.isArray()) {
+                sb.append("FONTI RECENTI:\n");
+                int i = 1;
+                for (JsonNode r : results) {
+                    sb.append(i++).append(". ").append(r.path("title").asText()).append("\n");
+                    String content = r.path("content").asText();
+                    sb.append("   ").append(content, 0, Math.min(250, content.length())).append("\n");
+                    sb.append("   URL: ").append(r.path("url").asText()).append("\n\n");
+                }
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("Tavily error: {}", e.getMessage());
+            return null;
+        }
     }
 
-    // ── 60 AGENTI SPECIALIZZATI ───────────────────────────────────
+    // ── RILEVAMENTO WEB SEARCH ────────────────────────────────────
+    private boolean needsWebSearch(String msg) {
+        String q = msg.toLowerCase();
+        return q.contains("cerca sul web") || q.contains("cerca online") ||
+               q.contains("notizie") || q.contains("oggi") || q.contains("attuale") ||
+               q.contains("adesso") || q.contains("aggiornato") || q.contains("ultimo") ||
+               q.contains("prezzo") || q.contains("quotazione") || q.contains("mercato oggi") ||
+               q.contains("ultime notizie") || q.contains("2026") || q.contains("2025") ||
+               q.contains("valore attuale") || q.contains("come sta") || q.contains("quanto vale");
+    }
+
+    // ── CORE SYSTEM PROMPT ────────────────────────────────────────
+    private String coreSystem() {
+        return "Sei SPACE AI, assistente AI avanzato creato da Paolo. Data: " + today() + ". "
+             + "REGOLA ASSOLUTA: Rispondi SEMPRE e SOLO alla domanda ATTUALE dell utente. "
+             + "NON ripetere mai le stesse risposte. NON ignorare mai la domanda. "
+             + "Se ti vengono forniti [DATI WEB IN TEMPO REALE], USALI nella risposta. "
+             + "Se non hai dati in tempo reale e non c e ricerca web, dillo chiaramente. "
+             + "Rispondi in italiano. Sii diretto, preciso, utile. "
+             + "Usa markdown: **grassetto**, liste, ```codice```.";
+    }
+
+    // ── 60 AGENTI ─────────────────────────────────────────────────
     private String agentPrompt(String agent) {
         String d = today();
         switch (agent) {
-            // ── META AGENTI ──
             case "router":
-                return "Sei il ROUTER di SPACE AI. Analizza SOLO la domanda attuale e rispondi con JSON. "
-                     + "Ignora completamente lo storico per la scelta degli agenti. "
-                     + "JSON formato: {\"agents\":[\"code\"],\"complexity\":\"low\"} "
-                     + "Agenti disponibili: code,finance,research,reasoner,math,debug,security,data,"
-                     + "writer,translator,planner,summarizer,legal,medical,science,history,"
-                     + "philosophy,creative,seo,coach,astro,chemistry,physics,biology,"
-                     + "geography,psychology,sociology,economics,politics,arts,music,"
-                     + "cooking,travel,sports,gaming,movies,books,tech,ai,blockchain,"
-                     + "cloud,devops,database,frontend,backend,mobile,ux,product,"
-                     + "startup,hr,accounting,tax,real_estate,insurance,crypto,forex,"
-                     + "nutrition,fitness,mental_health,environment,energy,education. "
-                     + "Scegli 1-2 agenti. Rispondi SOLO con il JSON valido, zero altro testo.";
-
-            // ── TECNOLOGIA ──
+                return "Sei il ROUTER di SPACE AI. Analizza SOLO la domanda attuale. "
+                     + "Rispondi SOLO con JSON valido: {\"agents\":[\"code\"],\"complexity\":\"low\"} "
+                     + "Agenti: code,finance,research,reasoner,math,debug,security,data,ai,cloud,"
+                     + "devops,database,frontend,backend,mobile,blockchain,tech,crypto,forex,"
+                     + "real_estate,accounting,tax,physics,chemistry,biology,astro,science,"
+                     + "environment,energy,medical,nutrition,fitness,mental_health,psychology,"
+                     + "history,philosophy,economics,politics,geography,arts,music,books,movies,"
+                     + "cooking,travel,sports,gaming,writer,creative,planner,startup,hr,product,"
+                     + "ux,seo,coach,education,translator,legal,summarizer. "
+                     + "Scegli 1-2 agenti. SOLO JSON, zero altro testo.";
             case "code":
                 return "Sei CODE di SPACE AI. Data:" + d + ". "
-                     + "IMPORTANTE: Rispondi SOLO alla domanda specifica. "
+                     + "Rispondi SOLO alla domanda specifica. "
                      + "Esperto: Python,Java,JS,TS,Go,Rust,C++,SQL,React,Spring,FastAPI,Docker. "
-                     + "Codice COMPLETO e FUNZIONANTE con ```. Commenti utili. Rispondi in italiano.";
-            case "debug":
-                return "Sei DEBUG di SPACE AI. Data:" + d + ". "
-                     + "Analizza e correggi errori nel codice. Identifica root cause. "
-                     + "Soluzione completa + spiegazione + prevenzione. Rispondi in italiano.";
-            case "security":
-                return "Sei SECURITY di SPACE AI. Data:" + d + ". "
-                     + "OWASP,pentest difensivo,crittografia,JWT,OAuth,GDPR. "
-                     + "Solo scopi difensivi. Rispondi in italiano.";
-            case "data":
-                return "Sei DATA di SPACE AI. Data:" + d + ". "
-                     + "Pandas,NumPy,Scikit-learn,TensorFlow,PyTorch,SQL,ML,DL,NLP. "
-                     + "Codice pratico + spiegazioni. Rispondi in italiano.";
-            case "ai":
-                return "Sei AI di SPACE AI. Data:" + d + ". "
-                     + "LLM,fine-tuning,RAG,embeddings,prompt engineering,ML ops,AGI. "
-                     + "Spiegazioni tecniche profonde. Rispondi in italiano.";
-            case "cloud":
-                return "Sei CLOUD di SPACE AI. Data:" + d + ". "
-                     + "AWS,GCP,Azure,Kubernetes,Terraform,serverless,microservizi. "
-                     + "Architetture scalabili. Rispondi in italiano.";
-            case "devops":
-                return "Sei DEVOPS di SPACE AI. Data:" + d + ". "
-                     + "CI/CD,GitHub Actions,Docker,Jenkins,monitoring,SRE. "
-                     + "Best practices. Rispondi in italiano.";
-            case "database":
-                return "Sei DATABASE di SPACE AI. Data:" + d + ". "
-                     + "PostgreSQL,MySQL,MongoDB,Redis,Elasticsearch,SQL avanzato,ottimizzazione. "
-                     + "Query ottimizzate. Rispondi in italiano.";
-            case "frontend":
-                return "Sei FRONTEND di SPACE AI. Data:" + d + ". "
-                     + "React,Vue,Angular,HTML5,CSS3,Tailwind,WebGL,performance,accessibilita. "
-                     + "Codice bello e funzionale. Rispondi in italiano.";
-            case "backend":
-                return "Sei BACKEND di SPACE AI. Data:" + d + ". "
-                     + "API REST,GraphQL,gRPC,Spring Boot,FastAPI,Node.js,architettura. "
-                     + "Codice production-ready. Rispondi in italiano.";
-            case "mobile":
-                return "Sei MOBILE di SPACE AI. Data:" + d + ". "
-                     + "React Native,Flutter,Swift,Kotlin,iOS,Android,PWA. "
-                     + "App performanti. Rispondi in italiano.";
-            case "blockchain":
-                return "Sei BLOCKCHAIN di SPACE AI. Data:" + d + ". "
-                     + "Ethereum,Solidity,Web3,DeFi,NFT,smart contract,Layer2. "
-                     + "Spiegazioni tecniche accurate. Rispondi in italiano.";
-            case "tech":
-                return "Sei TECH di SPACE AI. Data:" + d + ". "
-                     + "Hardware,reti,IoT,embedded,elettronica,tecnologie emergenti. "
-                     + "Aggiornato alle ultime novita. Rispondi in italiano.";
-
-            // ── FINANZA ──
+                     + "Codice COMPLETO con ```. Mai troncare. Rispondi in italiano.";
             case "finance":
                 return "Sei FINANCE di SPACE AI. Data:" + d + ". "
-                     + "REGOLA: Rispondi SOLO alla domanda specifica dell utente. "
-                     + "Se chiedono prezzi in tempo reale: dì chiaramente che non li hai e suggerisci CoinGecko/TradingView. "
-                     + "Se chiedono grafico: crea ASCII art testuale del concetto. "
-                     + "Esperto: RSI,MACD,Bollinger,Fibonacci,Elliott,P/E,DCF,EBITDA,VaR,Sharpe. "
-                     + "Esempi numerici concreti. Rispondi in italiano.";
+                     + "REGOLA: Rispondi SOLO alla domanda attuale dell utente. "
+                     + "Se ci sono [DATI WEB IN TEMPO REALE] nel messaggio, usali. "
+                     + "RSI,MACD,Bollinger,Fibonacci,P/E,DCF,VaR,Sharpe,portfolio. "
+                     + "Esempi numerici. Rispondi in italiano.";
             case "crypto":
                 return "Sei CRYPTO di SPACE AI. Data:" + d + ". "
-                     + "Bitcoin,Ethereum,altcoin,DeFi,NFT,tokenomics,on-chain analysis. "
-                     + "NOTA: non ho prezzi in tempo reale. Per prezzi attuali usa CoinGecko. "
-                     + "Analisi fondamentale e tecnica crypto. Rispondi in italiano.";
-            case "forex":
-                return "Sei FOREX di SPACE AI. Data:" + d + ". "
-                     + "Valute,carry trade,correlazioni,banche centrali,macroeconomia FX. "
-                     + "Analisi tecnica e fondamentale. Rispondi in italiano.";
-            case "real_estate":
-                return "Sei REAL_ESTATE di SPACE AI. Data:" + d + ". "
-                     + "Investimenti immobiliari,ROI,rendimento netto,REIT,mercato italiano. "
-                     + "Calcoli pratici. Rispondi in italiano.";
-            case "accounting":
-                return "Sei ACCOUNTING di SPACE AI. Data:" + d + ". "
-                     + "Contabilita,bilancio,conto economico,cash flow,IAS/IFRS,analisi finanziaria. "
-                     + "Rispondi in italiano.";
-            case "tax":
-                return "Sei TAX di SPACE AI. Data:" + d + ". "
-                     + "Fiscalita italiana,imposte,IVA,IRPEF,ottimizzazione fiscale,crypto tasse. "
-                     + "Info generali, non consulenza vincolante. Rispondi in italiano.";
-            case "insurance":
-                return "Sei INSURANCE di SPACE AI. Data:" + d + ". "
-                     + "Assicurazioni vita,danni,RC,LTC,polizze investimento. "
-                     + "Confronto e consigli pratici. Rispondi in italiano.";
-
-            // ── SCIENZE ──
-            case "math":
-                return "Sei MATH di SPACE AI. Data:" + d + ". "
-                     + "Algebra,calcolo,statistica,probabilita,game theory,ottimizzazione. "
-                     + "Mostra TUTTI i passaggi. Verifica risultati. Rispondi in italiano.";
-            case "physics":
-                return "Sei PHYSICS di SPACE AI. Data:" + d + ". "
-                     + "Meccanica classica,quantistica,relatività,termodinamica,elettromagnetismo. "
-                     + "Formule + intuizioni. Rispondi in italiano.";
-            case "chemistry":
-                return "Sei CHEMISTRY di SPACE AI. Data:" + d + ". "
-                     + "Chimica organica,inorganica,analitica,reazioni,legami,spettroscopia. "
-                     + "Rispondi in italiano.";
-            case "biology":
-                return "Sei BIOLOGY di SPACE AI. Data:" + d + ". "
-                     + "Biologia molecolare,genetica,CRISPR,evoluzione,ecologia,microbiologia. "
-                     + "Rispondi in italiano.";
-            case "astro":
-                return "Sei ASTRO di SPACE AI. Data:" + d + ". "
-                     + "Astronomia,cosmologia,esopianeti,NASA,SpaceX,universo,buchi neri. "
-                     + "Rispondi in italiano.";
-            case "science":
-                return "Sei SCIENCE di SPACE AI. Data:" + d + ". "
-                     + "Metodo scientifico,ricerca,interdisciplinare,neuroscienza,climatologia. "
-                     + "Distingui teoria da ipotesi. Rispondi in italiano.";
-            case "environment":
-                return "Sei ENVIRONMENT di SPACE AI. Data:" + d + ". "
-                     + "Cambio climatico,sostenibilita,energie rinnovabili,carbon footprint. "
-                     + "Dati scientifici aggiornati. Rispondi in italiano.";
-            case "energy":
-                return "Sei ENERGY di SPACE AI. Data:" + d + ". "
-                     + "Energie rinnovabili,solare,eolico,nucleare,idrogeno,storage,grid. "
-                     + "Analisi costi-benefici. Rispondi in italiano.";
-
-            // ── SALUTE ──
-            case "medical":
-                return "Sei MEDICAL di SPACE AI. Data:" + d + ". "
-                     + "Anatomia,fisiologia,farmacologia,prevenzione,sintomi comuni. "
-                     + "SOLO info generali, mai diagnosi. Consulta sempre il medico. Rispondi in italiano.";
-            case "nutrition":
-                return "Sei NUTRITION di SPACE AI. Data:" + d + ". "
-                     + "Nutrizione,diete,macronutrienti,micronutrienti,supplementi,meal planning. "
-                     + "Consigli basati su evidenze. Rispondi in italiano.";
-            case "fitness":
-                return "Sei FITNESS di SPACE AI. Data:" + d + ". "
-                     + "Allenamento,schede,ipertrofia,cardio,calisthenics,recupero,sport. "
-                     + "Programmi personalizzati. Rispondi in italiano.";
-            case "mental_health":
-                return "Sei MENTAL_HEALTH di SPACE AI. Data:" + d + ". "
-                     + "Psicologia,mindfulness,stress,ansia,produttivita mentale,CBT. "
-                     + "Supporto informativo, non terapia. Rispondi in italiano.";
-            case "psychology":
-                return "Sei PSYCHOLOGY di SPACE AI. Data:" + d + ". "
-                     + "Psicologia cognitiva,sociale,comportamentale,bias,decision making. "
-                     + "Rispondi in italiano.";
-
-            // ── UMANISTICA ──
+                     + "Se ci sono [DATI WEB IN TEMPO REALE] usali per prezzi aggiornati. "
+                     + "Bitcoin,Ethereum,DeFi,NFT,tokenomics,on-chain,Layer2. "
+                     + "Analisi tecnica e fondamentale crypto. Rispondi in italiano.";
             case "research":
                 return "Sei RESEARCH di SPACE AI. Data:" + d + ". "
-                     + "Ricerca accurata e verificata su qualsiasi argomento. "
-                     + "Distingui fatti da opinioni. Cita fonti. "
-                     + "Per eventi post-2024 segnala limite conoscenze. Rispondi in italiano.";
+                     + "Se ci sono [DATI WEB IN TEMPO REALE] nel messaggio, sintetizzali. "
+                     + "Altrimenti fornisci info accurate dalle tue conoscenze. "
+                     + "Per eventi post-2024 segnala il limite. Rispondi in italiano.";
             case "reasoner":
                 return "Sei REASONER di SPACE AI. Data:" + d + ". "
-                     + "REGOLA: Analizza la domanda ATTUALE, non lo storico. "
-                     + "Ragionamento step-by-step. Identifica assunzioni. "
-                     + "Considera piu angolazioni. Rispondi in italiano.";
+                     + "Analizza la domanda ATTUALE step-by-step. "
+                     + "Identifica assunzioni. Considera piu angolazioni. Rispondi in italiano.";
+            case "math":
+                return "Sei MATH di SPACE AI. Data:" + d + ". "
+                     + "Algebra,calcolo,statistica,probabilita,ottimizzazione. "
+                     + "Mostra TUTTI i passaggi. Rispondi in italiano.";
+            case "debug":
+                return "Sei DEBUG di SPACE AI. Data:" + d + ". "
+                     + "Analizza bug, identifica root cause, soluzione completa. Rispondi in italiano.";
+            case "security":
+                return "Sei SECURITY di SPACE AI. Data:" + d + ". "
+                     + "OWASP,crittografia,JWT,OAuth,GDPR. Solo scopi difensivi. Rispondi in italiano.";
+            case "data":
+                return "Sei DATA di SPACE AI. Data:" + d + ". "
+                     + "Pandas,NumPy,Scikit-learn,TensorFlow,ML,DL,NLP,SQL avanzato. Rispondi in italiano.";
+            case "ai":
+                return "Sei AI-EXPERT di SPACE AI. Data:" + d + ". "
+                     + "LLM,fine-tuning,RAG,embeddings,prompt engineering,ML ops. Rispondi in italiano.";
+            case "cloud":
+                return "Sei CLOUD di SPACE AI. Data:" + d + ". "
+                     + "AWS,GCP,Azure,Kubernetes,Terraform,serverless. Rispondi in italiano.";
+            case "devops":
+                return "Sei DEVOPS di SPACE AI. Data:" + d + ". "
+                     + "CI/CD,GitHub Actions,Docker,monitoring,SRE. Rispondi in italiano.";
+            case "database":
+                return "Sei DATABASE di SPACE AI. Data:" + d + ". "
+                     + "PostgreSQL,MySQL,MongoDB,Redis,SQL ottimizzato. Rispondi in italiano.";
+            case "frontend":
+                return "Sei FRONTEND di SPACE AI. Data:" + d + ". "
+                     + "React,Vue,HTML5,CSS3,Tailwind,performance. Rispondi in italiano.";
+            case "backend":
+                return "Sei BACKEND di SPACE AI. Data:" + d + ". "
+                     + "API REST,GraphQL,Spring Boot,FastAPI,Node.js. Rispondi in italiano.";
+            case "mobile":
+                return "Sei MOBILE di SPACE AI. Data:" + d + ". "
+                     + "React Native,Flutter,Swift,Kotlin,iOS,Android. Rispondi in italiano.";
+            case "blockchain":
+                return "Sei BLOCKCHAIN di SPACE AI. Data:" + d + ". "
+                     + "Ethereum,Solidity,Web3,DeFi,smart contract. Rispondi in italiano.";
+            case "tech":
+                return "Sei TECH di SPACE AI. Data:" + d + ". "
+                     + "Hardware,reti,IoT,embedded,tecnologie emergenti. Rispondi in italiano.";
+            case "forex":
+                return "Sei FOREX di SPACE AI. Data:" + d + ". "
+                     + "Valute,carry trade,banche centrali,macroeconomia FX. Rispondi in italiano.";
+            case "real_estate":
+                return "Sei REAL_ESTATE di SPACE AI. Data:" + d + ". "
+                     + "Investimenti immobiliari,ROI,REIT,mercato italiano. Rispondi in italiano.";
+            case "accounting":
+                return "Sei ACCOUNTING di SPACE AI. Data:" + d + ". "
+                     + "Bilancio,conto economico,cash flow,IAS/IFRS. Rispondi in italiano.";
+            case "tax":
+                return "Sei TAX di SPACE AI. Data:" + d + ". "
+                     + "Fiscalita italiana,IVA,IRPEF,crypto tasse. Info generali. Rispondi in italiano.";
+            case "physics":
+                return "Sei PHYSICS di SPACE AI. Data:" + d + ". "
+                     + "Meccanica,quantistica,relativita,termodinamica. Rispondi in italiano.";
+            case "chemistry":
+                return "Sei CHEMISTRY di SPACE AI. Data:" + d + ". "
+                     + "Chimica organica,inorganica,reazioni,legami. Rispondi in italiano.";
+            case "biology":
+                return "Sei BIOLOGY di SPACE AI. Data:" + d + ". "
+                     + "Biologia molecolare,genetica,CRISPR,evoluzione. Rispondi in italiano.";
+            case "astro":
+                return "Sei ASTRO di SPACE AI. Data:" + d + ". "
+                     + "Astronomia,cosmologia,esopianeti,universo. Rispondi in italiano.";
+            case "science":
+                return "Sei SCIENCE di SPACE AI. Data:" + d + ". "
+                     + "Metodo scientifico,neuroscienza,climatologia. Rispondi in italiano.";
+            case "environment":
+                return "Sei ENVIRONMENT di SPACE AI. Data:" + d + ". "
+                     + "Clima,sostenibilita,energie rinnovabili. Rispondi in italiano.";
+            case "energy":
+                return "Sei ENERGY di SPACE AI. Data:" + d + ". "
+                     + "Solare,eolico,nucleare,idrogeno,storage. Rispondi in italiano.";
+            case "medical":
+                return "Sei MEDICAL di SPACE AI. Data:" + d + ". "
+                     + "Anatomia,farmacologia,prevenzione. Solo info generali. Rispondi in italiano.";
+            case "nutrition":
+                return "Sei NUTRITION di SPACE AI. Data:" + d + ". "
+                     + "Diete,macronutrienti,meal planning. Rispondi in italiano.";
+            case "fitness":
+                return "Sei FITNESS di SPACE AI. Data:" + d + ". "
+                     + "Allenamento,schede,ipertrofia,cardio. Rispondi in italiano.";
+            case "mental_health":
+                return "Sei MENTAL_HEALTH di SPACE AI. Data:" + d + ". "
+                     + "Mindfulness,stress,ansia,CBT. Solo supporto informativo. Rispondi in italiano.";
+            case "psychology":
+                return "Sei PSYCHOLOGY di SPACE AI. Data:" + d + ". "
+                     + "Psicologia cognitiva,bias,decision making. Rispondi in italiano.";
             case "history":
                 return "Sei HISTORY di SPACE AI. Data:" + d + ". "
-                     + "Storia mondiale,italiana,europea,archeologia,biografie. "
-                     + "Contestualizza eventi, cause e conseguenze. Rispondi in italiano.";
+                     + "Storia mondiale,italiana,europea. Cause e conseguenze. Rispondi in italiano.";
             case "philosophy":
                 return "Sei PHILOSOPHY di SPACE AI. Data:" + d + ". "
-                     + "Filosofia occidentale e orientale,etica,AI ethics,epistemologia. "
-                     + "Piu prospettive. Pensiero critico. Rispondi in italiano.";
+                     + "Etica,epistemologia,AI ethics. Piu prospettive. Rispondi in italiano.";
             case "economics":
                 return "Sei ECONOMICS di SPACE AI. Data:" + d + ". "
-                     + "Micro e macroeconomia,teoria dei giochi,econometria,politiche fiscali. "
-                     + "Rispondi in italiano.";
+                     + "Micro e macro,teoria dei giochi,politiche fiscali. Rispondi in italiano.";
             case "politics":
                 return "Sei POLITICS di SPACE AI. Data:" + d + ". "
-                     + "Sistemi politici,geopolitica,relazioni internazionali. "
-                     + "Neutrale e bilanciato. Rispondi in italiano.";
+                     + "Sistemi politici,geopolitica. Neutrale. Rispondi in italiano.";
             case "geography":
                 return "Sei GEOGRAPHY di SPACE AI. Data:" + d + ". "
-                     + "Geografia fisica e umana,cartografia,geopolitica,paesi e culture. "
-                     + "Rispondi in italiano.";
-            case "sociology":
-                return "Sei SOCIOLOGY di SPACE AI. Data:" + d + ". "
-                     + "Societa,cultura,disuguaglianze,movimenti sociali,demografia. "
-                     + "Rispondi in italiano.";
+                     + "Geografia fisica e umana,paesi e culture. Rispondi in italiano.";
             case "arts":
                 return "Sei ARTS di SPACE AI. Data:" + d + ". "
-                     + "Arte,pittura,scultura,architettura,fotografia,storia dell arte. "
-                     + "Rispondi in italiano.";
+                     + "Arte,pittura,architettura,fotografia. Rispondi in italiano.";
             case "music":
                 return "Sei MUSIC di SPACE AI. Data:" + d + ". "
-                     + "Teoria musicale,generi,strumenti,produzione,storia della musica. "
-                     + "Rispondi in italiano.";
+                     + "Teoria musicale,strumenti,produzione. Rispondi in italiano.";
             case "books":
                 return "Sei BOOKS di SPACE AI. Data:" + d + ". "
-                     + "Letteratura mondiale,consigli di lettura,analisi testi,scrittura creativa. "
-                     + "Rispondi in italiano.";
+                     + "Letteratura,consigli lettura,analisi testi. Rispondi in italiano.";
             case "movies":
                 return "Sei MOVIES di SPACE AI. Data:" + d + ". "
-                     + "Cinema,serie TV,regia,sceneggiatura,consigli film,analisi critica. "
-                     + "Rispondi in italiano.";
-
-            // ── LIFESTYLE ──
+                     + "Cinema,serie TV,analisi critica. Rispondi in italiano.";
             case "cooking":
                 return "Sei COOKING di SPACE AI. Data:" + d + ". "
-                     + "Cucina italiana e mondiale,ricette,tecniche,vino,pasticceria. "
-                     + "Ricette dettagliate con ingredienti e dosi. Rispondi in italiano.";
+                     + "Cucina italiana e mondiale,ricette con dosi precise. Rispondi in italiano.";
             case "travel":
                 return "Sei TRAVEL di SPACE AI. Data:" + d + ". "
-                     + "Destinazioni,itinerari,consigli pratici,budget travel,cultura locale. "
-                     + "Consigli personalizzati. Rispondi in italiano.";
+                     + "Destinazioni,itinerari,budget travel. Rispondi in italiano.";
             case "sports":
                 return "Sei SPORTS di SPACE AI. Data:" + d + ". "
-                     + "Sport,calcio,tennis,NBA,F1,Olimpiadi,statistiche,tattica. "
-                     + "Rispondi in italiano.";
+                     + "Sport,calcio,tennis,NBA,F1,tattica. Rispondi in italiano.";
             case "gaming":
                 return "Sei GAMING di SPACE AI. Data:" + d + ". "
-                     + "Videogiochi,strategie,game design,esports,console,PC gaming. "
-                     + "Rispondi in italiano.";
-
-            // ── BUSINESS ──
+                     + "Videogiochi,strategie,esports,game design. Rispondi in italiano.";
             case "writer":
                 return "Sei WRITER di SPACE AI. Data:" + d + ". "
-                     + "Email,report,articoli,blog,documentazione,pitch,storytelling,SEO content. "
-                     + "Adatta tono al contesto. Rispondi in italiano.";
+                     + "Email,report,articoli,storytelling,copywriting. Rispondi in italiano.";
             case "creative":
                 return "Sei CREATIVE di SPACE AI. Data:" + d + ". "
-                     + "Scrittura creativa,brainstorming,naming,slogan,design thinking,idee. "
-                     + "Originale e sorprendente. Rispondi in italiano.";
+                     + "Brainstorming,naming,slogan,design thinking. Originale! Rispondi in italiano.";
             case "planner":
                 return "Sei PLANNER di SPACE AI. Data:" + d + ". "
-                     + "Project management,Agile,Scrum,OKR,roadmap,SWOT,time management. "
-                     + "Piani concreti con timeline. Rispondi in italiano.";
+                     + "Project management,Agile,OKR,roadmap,SWOT. Rispondi in italiano.";
             case "startup":
                 return "Sei STARTUP di SPACE AI. Data:" + d + ". "
-                     + "Business model,pitch,fundraising,MVP,growth,VC,equity. "
-                     + "Consigli pratici per founder. Rispondi in italiano.";
+                     + "Business model,pitch,fundraising,MVP,growth. Rispondi in italiano.";
             case "hr":
                 return "Sei HR di SPACE AI. Data:" + d + ". "
-                     + "Recruiting,colloqui,employer branding,cultura aziendale,carriera. "
-                     + "Rispondi in italiano.";
+                     + "Recruiting,colloqui,cultura aziendale,carriera. Rispondi in italiano.";
             case "product":
                 return "Sei PRODUCT di SPACE AI. Data:" + d + ". "
-                     + "Product management,roadmap,user story,OKR,metriche,PRD. "
-                     + "Rispondi in italiano.";
+                     + "Product management,roadmap,user story,metriche. Rispondi in italiano.";
             case "ux":
                 return "Sei UX di SPACE AI. Data:" + d + ". "
-                     + "UX/UI design,user research,wireframe,Figma,accessibilita,usabilita. "
-                     + "Rispondi in italiano.";
+                     + "UX/UI,user research,Figma,accessibilita. Rispondi in italiano.";
             case "seo":
                 return "Sei SEO di SPACE AI. Data:" + d + ". "
-                     + "SEO,keyword research,Google Analytics,content marketing,ads,growth. "
-                     + "Rispondi in italiano.";
+                     + "SEO,keyword,Google Analytics,content marketing. Rispondi in italiano.";
             case "coach":
                 return "Sei COACH di SPACE AI. Data:" + d + ". "
-                     + "Produttivita,mindset,habit building,leadership,intelligenza emotiva. "
-                     + "Azioni concrete. Rispondi in italiano.";
+                     + "Produttivita,mindset,habit,leadership. Rispondi in italiano.";
             case "education":
                 return "Sei EDUCATION di SPACE AI. Data:" + d + ". "
-                     + "Pedagogia,metodi di apprendimento,spaced repetition,e-learning. "
-                     + "Rispondi in italiano.";
-
-            // ── SPECIFICI ──
+                     + "Pedagogia,apprendimento,spaced repetition. Rispondi in italiano.";
             case "translator":
                 return "Sei TRANSLATOR di SPACE AI. "
-                     + "Traduttore multilingua: IT,EN,FR,ES,DE,PT,ZH,JA,AR,RU. "
-                     + "Mantieni significato e tono. Spiega sfumature culturali.";
+                     + "Multilingua: IT,EN,FR,ES,DE,PT,ZH,JA,AR,RU. Mantieni tono originale.";
             case "legal":
                 return "Sei LEGAL di SPACE AI. Data:" + d + ". "
-                     + "Diritto italiano,GDPR,contratti,societa,lavoro,IP. "
-                     + "Solo info generali, non consulenza vincolante. Rispondi in italiano.";
+                     + "Diritto italiano,GDPR,contratti,IP. Solo info generali. Rispondi in italiano.";
             case "summarizer":
-                return "Sei SUMMARIZER di SPACE AI. Data:" + d + ". "
-                     + "Sintetizza in punti chiave chiari. Bullet points. Rispondi in italiano.";
-
+                return "Sei SUMMARIZER di SPACE AI. Sintetizza in bullet points chiari. Rispondi in italiano.";
             default:
                 return coreSystem();
         }
@@ -341,10 +318,9 @@ public class ChatController {
 
     private String synthesizerPrompt() {
         return "Sei il SYNTHESIZER di SPACE AI. Data:" + today() + ". "
-             + "Unifica gli output degli agenti in UNA risposta finale perfetta. "
-             + "REGOLE: elimina ridondanze, usa markdown (grassetto,liste,codice), "
-             + "MAI usare === o --- come separatori, rispondi in italiano, "
-             + "rispondi SEMPRE alla domanda originale dell utente.";
+             + "Unifica gli output in UNA risposta finale coerente. "
+             + "Elimina ridondanze. Usa markdown. MAI === o ---. "
+             + "Rispondi SEMPRE alla domanda originale. Rispondi in italiano.";
     }
 
     // ── ENDPOINT PRINCIPALE ──────────────────────────────────────
@@ -372,37 +348,48 @@ public class ChatController {
                 history = loadHistory(sessionId, supabaseUrl, supabaseKey);
             }
 
-            // 2. Router — passa SOLO il messaggio corrente, NON lo storico
-            List<String> agents = routeQuery(userMessage, baseUrl, apiKey, model);
-            log.info("Domanda: {} | Agenti: {}",
-                    userMessage.substring(0, Math.min(50, userMessage.length())), agents);
+            // 2. Web search se necessario
+            String webData = null;
+            if (needsWebSearch(userMessage)) {
+                log.info("Web search per: {}", userMessage.substring(0, Math.min(40, userMessage.length())));
+                webData = searchWeb(userMessage);
+            }
 
-            // 3. Agenti lavorano con storico corretto
+            // 3. Arricchisci il messaggio con i dati web
+            String enrichedMessage = userMessage;
+            if (webData != null && !webData.isBlank()) {
+                enrichedMessage = userMessage + "\n\n[DATI WEB IN TEMPO REALE - " + today() + "]:\n" + webData;
+            }
+
+            // 4. Router — SOLO messaggio corrente, NO storico
+            List<String> agents = routeQuery(userMessage, baseUrl, apiKey, model);
+            log.info("Agenti: {} | WebSearch: {}", agents, webData != null);
+
+            // 5. Agenti con messaggio arricchito e storico
             List<String> outputs = new ArrayList<>();
             for (String agent : agents) {
-                String out = callLLM(agentPrompt(agent), userMessage, history,
+                String out = callLLM(agentPrompt(agent), enrichedMessage, history,
                                      baseUrl, apiKey, model, 2500);
                 if (out != null && !out.isBlank()) {
                     outputs.add("[" + agent.toUpperCase() + "]\n" + out);
                 }
             }
 
-            // 4. Risposta finale
+            // 6. Risposta finale
             String finalResponse;
             if (outputs.isEmpty()) {
-                finalResponse = callLLM(coreSystem(), userMessage, history,
+                finalResponse = callLLM(coreSystem(), enrichedMessage, history,
                                         baseUrl, apiKey, model, 2000);
             } else if (outputs.size() == 1) {
                 finalResponse = outputs.get(0).replaceFirst("\\[\\w+\\]\\n", "");
             } else {
                 String combined = String.join("\n\n", outputs);
-                String synthMsg = "Domanda utente: " + userMessage
-                                + "\n\nOutput agenti:\n\n" + combined;
+                String synthMsg = "Domanda: " + userMessage + "\n\nOutput:\n\n" + combined;
                 finalResponse = callLLM(synthesizerPrompt(), synthMsg,
                                         new ArrayList<>(), baseUrl, apiKey, model, 3000);
             }
 
-            // 5. Salva
+            // 7. Salva
             if (!supabaseUrl.isEmpty()) {
                 try {
                     saveMessage(sessionId, "user",      userMessage,   supabaseUrl, supabaseKey);
@@ -413,11 +400,12 @@ public class ChatController {
             }
 
             return ResponseEntity.ok(Map.of(
-                    "response",  finalResponse,
-                    "status",    "ok",
-                    "model",     model,
-                    "agents",    agents.toString(),
-                    "sessionId", sessionId
+                    "response",   finalResponse,
+                    "status",     "ok",
+                    "model",      model,
+                    "agents",     agents.toString(),
+                    "webSearch",  webData != null ? "true" : "false",
+                    "sessionId",  sessionId
             ));
 
         } catch (Exception e) {
@@ -425,9 +413,8 @@ public class ChatController {
             try {
                 String fallback = callLLM(coreSystem(), userMessage,
                                           new ArrayList<>(), baseUrl, apiKey, model, 2000);
-                return ResponseEntity.ok(Map.of(
-                        "response", fallback, "status", "ok_fallback",
-                        "model", model, "sessionId", sessionId));
+                return ResponseEntity.ok(Map.of("response", fallback,
+                        "status", "ok_fallback", "sessionId", sessionId));
             } catch (Exception e2) {
                 return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));
             }
@@ -436,86 +423,87 @@ public class ChatController {
 
     // ── ROUTER ────────────────────────────────────────────────────
     private List<String> routeQuery(String query, String baseUrl, String apiKey, String model) {
-        // Prima prova con il router LLM
         try {
             String resp = callLLM(agentPrompt("router"),
-                    "DOMANDA DA ANALIZZARE (rispondi solo con JSON): " + query,
-                    new ArrayList<>(), baseUrl, apiKey, model, 120);
+                    "DOMANDA: " + query,
+                    new ArrayList<>(), baseUrl, apiKey, model, 100);
             int s = resp.indexOf("{");
             int e = resp.lastIndexOf("}") + 1;
             if (s >= 0 && e > s) {
                 JsonNode json = MAPPER.readTree(resp.substring(s, e));
                 List<String> agents = new ArrayList<>();
                 json.path("agents").forEach(n -> agents.add(n.asText()));
-                if (!agents.isEmpty() && agents.size() <= 3) {
-                    return agents;
-                }
+                if (!agents.isEmpty() && agents.size() <= 3) return agents;
             }
         } catch (Exception e) {
-            log.warn("Router LLM fallito, uso keyword: {}", e.getMessage());
+            log.warn("Router LLM fallito: {}", e.getMessage());
         }
 
-        // Fallback con keyword matching
+        // Keyword fallback
         String q = query.toLowerCase();
-        if (q.contains("codice") || q.contains("python") || q.contains("java") ||
-            q.contains("javascript") || q.contains("programma") || q.contains("scrivi") ||
-            q.contains("funzione") || q.contains("script") || q.contains("sql")) {
+        if (q.contains("python") || q.contains("java") || q.contains("codice") ||
+            q.contains("javascript") || q.contains("programma") || q.contains("script") ||
+            q.contains("funzione") || q.contains("sql") || q.contains("scrivi codice")) {
             return List.of("code");
         }
         if (q.contains("grafico") || q.contains("chart") || q.contains("plot") ||
-            q.contains("visualizza") || q.contains("disegna")) {
+            q.contains("visualizza") || q.contains("disegna grafic")) {
             return List.of("data", "code");
         }
-        if (q.contains("crypto") || q.contains("cripto") || q.contains("bitcoin") ||
-            q.contains("ethereum") || q.contains("valore") || q.contains("prezzo crypto")) {
+        if (q.contains("bitcoin") || q.contains("ethereum") || q.contains("crypto") ||
+            q.contains("cripto") || q.contains("nft") || q.contains("defi")) {
             return List.of("crypto");
         }
-        if (q.contains("rsi") || q.contains("macd") || q.contains("trading") ||
-            q.contains("azioni") || q.contains("investimento") || q.contains("borsa") ||
-            q.contains("finanza") || q.contains("mercato")) {
+        if (q.contains("borsa") || q.contains("azioni") || q.contains("trading") ||
+            q.contains("investimento") || q.contains("rsi") || q.contains("macd") ||
+            q.contains("finanza") || q.contains("mercato") || q.contains("portafoglio")) {
             return List.of("finance");
         }
-        if (q.contains("traduci") || q.contains("translate") || q.contains("inglese") ||
-            q.contains("francese") || q.contains("tedesco") || q.contains("spagnolo")) {
+        if (q.contains("traduci") || q.contains("in inglese") || q.contains("in francese") ||
+            q.contains("in tedesco") || q.contains("in spagnolo")) {
             return List.of("translator");
         }
-        if (q.contains("scrivi") || q.contains("email") || q.contains("testo") ||
-            q.contains("articolo") || q.contains("racconto")) {
-            return List.of("writer");
-        }
         if (q.contains("matematica") || q.contains("calcola") || q.contains("equazione") ||
-            q.contains("formula") || q.contains("statistica")) {
+            q.contains("integrale") || q.contains("statistica") || q.contains("probabilita")) {
             return List.of("math");
         }
+        if (q.contains("bug") || q.contains("errore nel codice") || q.contains("non funziona")) {
+            return List.of("debug");
+        }
         if (q.contains("legge") || q.contains("contratto") || q.contains("gdpr") ||
-            q.contains("diritto") || q.contains("avvocato")) {
+            q.contains("avvocato") || q.contains("diritto")) {
             return List.of("legal");
         }
-        if (q.contains("ricetta") || q.contains("cucina") || q.contains("piatto") ||
-            q.contains("cucinare")) {
+        if (q.contains("ricetta") || q.contains("cucina") || q.contains("cucinare")) {
             return List.of("cooking");
         }
-        if (q.contains("viaggio") || q.contains("vacanza") || q.contains("visitare")) {
+        if (q.contains("viaggio") || q.contains("vacanza") || q.contains("dove visitare")) {
             return List.of("travel");
         }
-        if (q.contains("allenamento") || q.contains("palestra") || q.contains("sport") ||
-            q.contains("dieta") || q.contains("nutrizione")) {
+        if (q.contains("allenamento") || q.contains("palestra") || q.contains("muscoli")) {
             return List.of("fitness");
         }
-        if (q.contains("storia") || q.contains("storico") || q.contains("guerra")) {
+        if (q.contains("dieta") || q.contains("nutrizione") || q.contains("calorie")) {
+            return List.of("nutrition");
+        }
+        if (q.contains("storia") || q.contains("guerra") || q.contains("storico")) {
             return List.of("history");
+        }
+        if (q.contains("film") || q.contains("serie tv") || q.contains("cinema")) {
+            return List.of("movies");
         }
         if (q.contains("musica") || q.contains("canzone") || q.contains("chitarra")) {
             return List.of("music");
         }
-        if (q.contains("film") || q.contains("serie") || q.contains("cinema")) {
-            return List.of("movies");
+        if (q.contains("email") || q.contains("articolo") || q.contains("testo") ||
+            q.contains("scrivi un")) {
+            return List.of("writer");
         }
-        if (q.contains("libro") || q.contains("romanzo") || q.contains("leggere")) {
-            return List.of("books");
-        }
-        if (q.contains("startup") || q.contains("business") || q.contains("azienda")) {
+        if (q.contains("startup") || q.contains("business plan") || q.contains("azienda")) {
             return List.of("startup");
+        }
+        if (q.contains("notizie") || q.contains("news") || q.contains("ultime")) {
+            return List.of("research");
         }
 
         return List.of("reasoner");
@@ -534,7 +522,6 @@ public class ChatController {
         req.put("presence_penalty", 0.3);
 
         ArrayNode messages = MAPPER.createArrayNode();
-
         ObjectNode sys = MAPPER.createObjectNode();
         sys.put("role", "system");
         sys.put("content", systemPrompt);
@@ -575,8 +562,7 @@ public class ChatController {
     }
 
     // ── SUPABASE ──────────────────────────────────────────────────
-    private List<Map<String, String>> loadHistory(String sessionId,
-                                                    String url, String key) {
+    private List<Map<String, String>> loadHistory(String sessionId, String url, String key) {
         List<Map<String, String>> history = new ArrayList<>();
         try {
             String endpoint = url + "/rest/v1/messages"
@@ -624,13 +610,16 @@ public class ChatController {
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
-        String d = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"));
+        boolean tavily = !System.getenv().getOrDefault("TAVILY_API_KEY", "").isEmpty();
+        boolean supabase = !System.getenv().getOrDefault("SUPABASE_URL", "").isEmpty();
         return ResponseEntity.ok(Map.of(
-                "status",  "online",
-                "service", "SPACE AI 360 - 60 Agenti",
-                "model",   System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
-                "agents",  "60 agenti attivi",
-                "date",    d
+                "status",    "online",
+                "service",   "SPACE AI 360",
+                "model",     System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
+                "agents",    "60 agenti",
+                "webSearch", tavily ? "enabled" : "disabled - aggiungi TAVILY_API_KEY",
+                "supabase",  supabase ? "connected" : "off",
+                "date",      today()
         ));
     }
 }
