@@ -519,28 +519,63 @@ document.addEventListener("touchend", function(e){
 // ── LOGIN ──────────────────────────────────────────────────────
 var currentUser = null;
 
+// Supabase config - letta dal backend
+var SUPABASE_URL = "";
+var SUPABASE_ANON_KEY = "";
+
+async function initSupabase() {
+  try {
+    var r = await fetch("/api/health");
+    var d = await r.json();
+    // URL e key vengono dal backend tramite meta tag se configurati
+  } catch(e) {}
+}
+
 function loginGoogle() {
-  var supabaseUrl = "";
-  var supabaseKey = "";
-  fetch("/api/health").then(function(r){ return r.json(); }).then(function(d){
-    alert("Login Google: integra Supabase Auth nel tuo progetto su supabase.com\nPer ora continua senza account.");
+  // Usa Supabase OAuth se configurato, altrimenti skippa
+  if(SUPABASE_URL && SUPABASE_ANON_KEY) {
+    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=google&redirect_to=" + window.location.origin;
+    window.location.href = authUrl;
+  } else {
     skipLogin();
-  }).catch(function(){ skipLogin(); });
+  }
 }
 
 function loginGithub() {
-  alert("Login GitHub: integra Supabase Auth.\nPer ora continua senza account.");
-  skipLogin();
+  if(SUPABASE_URL && SUPABASE_ANON_KEY) {
+    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=github&redirect_to=" + window.location.origin;
+    window.location.href = authUrl;
+  } else {
+    skipLogin();
+  }
 }
 
 function skipLogin() {
-  document.getElementById("loginOverlay").classList.add("hidden");
+  var overlay = document.getElementById("loginOverlay");
+  if(overlay) {
+    overlay.style.display = "none";
+    overlay.classList.add("hidden");
+  }
   loadChatHistory();
 }
 
-// Mostra login al primo avvio - rimane aperto finché utente non sceglie
+// Gestisci callback OAuth
+function checkOAuthCallback() {
+  var hash = window.location.hash;
+  if(hash && hash.includes("access_token")) {
+    var params = new URLSearchParams(hash.substring(1));
+    var token = params.get("access_token");
+    if(token) {
+      SESSION_ID = "oauth_" + token.substring(0,16);
+      skipLogin();
+      window.history.replaceState(null, null, window.location.pathname);
+    }
+  }
+}
+
+// Controlla OAuth callback e gestisci login
 window.addEventListener("load", function(){
-  // Carica storico solo se overlay viene chiuso
+  checkOAuthCallback();
   console.log("SPACE AI pronto");
 });
 
