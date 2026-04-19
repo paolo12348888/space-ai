@@ -417,6 +417,29 @@ function addTyping(){
 }
 function removeTyping(){ var t=document.getElementById("typing"); if(t) t.remove(); }
 
+function addImageRow(b64data, mimeType) {
+  removeWelcome();
+  var row = document.createElement("div"); row.className = "row ai";
+  var av = document.createElement("div"); av.className = "av";
+  var img_av = document.createElement("img"); img_av.src = LOGO; av.appendChild(img_av);
+  var bub = document.createElement("div"); bub.className = "bubble";
+  bub.style.cssText = "padding:8px;max-width:90%";
+  var img = document.createElement("img");
+  img.src = "data:" + mimeType + ";base64," + b64data;
+  img.style.cssText = "max-width:100%;border-radius:12px;display:block";
+  img.alt = "Immagine generata da SPACE AI";
+  var dl = document.createElement("a");
+  dl.href = img.src;
+  dl.download = "space-ai-image.jpg";
+  dl.style.cssText = "display:inline-block;margin-top:8px;font-size:.75rem;color:var(--accent)";
+  dl.textContent = "Scarica immagine";
+  bub.appendChild(img);
+  bub.appendChild(dl);
+  row.appendChild(av); row.appendChild(bub);
+  msgsEl.appendChild(row);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
 // ── SEND MESSAGE (FUNZIONE PRINCIPALE) ────────────────────────
 async function sendMessage(){
   var text = inpEl.value.trim();
@@ -471,7 +494,12 @@ async function sendMessage(){
     if(data.error){
       addRow("Errore: " + data.error, "err");
     } else {
-      addRow(data.response || "(risposta vuota)", "ai");
+      // Mostra testo risposta
+      if(data.response) addRow(data.response, "ai");
+      // Mostra immagine generata se presente
+      if(data.image) {
+        addImageRow(data.image, data.imageType || "image/jpeg");
+      }
     }
 
   }catch(e){
@@ -519,22 +547,23 @@ document.addEventListener("touchend", function(e){
 // ── LOGIN ──────────────────────────────────────────────────────
 var currentUser = null;
 
-// Supabase config - letta dal backend
+// Supabase config
 var SUPABASE_URL = "";
 var SUPABASE_ANON_KEY = "";
 
-async function initSupabase() {
+// Carica config Supabase dal backend
+async function loadSupabaseConfig() {
   try {
-    var r = await fetch("/api/health");
+    var r = await fetch("/api/config");
     var d = await r.json();
-    // URL e key vengono dal backend tramite meta tag se configurati
-  } catch(e) {}
+    SUPABASE_URL = d.supabaseUrl || "";
+    SUPABASE_ANON_KEY = d.supabaseKey || "";
+  } catch(e) { console.log("Config:", e.message); }
 }
 
 function loginGoogle() {
-  // Usa Supabase OAuth se configurato, altrimenti skippa
   if(SUPABASE_URL && SUPABASE_ANON_KEY) {
-    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=google&redirect_to=" + window.location.origin;
+    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(window.location.origin);
     window.location.href = authUrl;
   } else {
     skipLogin();
@@ -543,7 +572,7 @@ function loginGoogle() {
 
 function loginGithub() {
   if(SUPABASE_URL && SUPABASE_ANON_KEY) {
-    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=github&redirect_to=" + window.location.origin;
+    var authUrl = SUPABASE_URL + "/auth/v1/authorize?provider=github&redirect_to=" + encodeURIComponent(window.location.origin);
     window.location.href = authUrl;
   } else {
     skipLogin();
@@ -559,24 +588,30 @@ function skipLogin() {
   loadChatHistory();
 }
 
-// Gestisci callback OAuth
+// Gestisci callback OAuth Supabase
 function checkOAuthCallback() {
   var hash = window.location.hash;
-  if(hash && hash.includes("access_token")) {
+  if(hash && (hash.includes("access_token") || hash.includes("error"))) {
     var params = new URLSearchParams(hash.substring(1));
     var token = params.get("access_token");
+    var error = params.get("error_description");
     if(token) {
-      SESSION_ID = "oauth_" + token.substring(0,16);
+      SESSION_ID = "oauth_" + token.substring(0,20);
       skipLogin();
       window.history.replaceState(null, null, window.location.pathname);
+      console.log("Login OAuth completato");
+    } else if(error) {
+      console.log("OAuth error:", error);
+      skipLogin();
     }
   }
 }
 
-// Controlla OAuth callback e gestisci login
-window.addEventListener("load", function(){
+// Init al caricamento
+window.addEventListener("load", async function(){
+  await loadSupabaseConfig();
   checkOAuthCallback();
-  console.log("SPACE AI pronto");
+  console.log("SPACE AI pronto - Supabase:", SUPABASE_URL ? "configurato" : "non configurato");
 });
 
 // Carica storico al avvio  
