@@ -128,7 +128,7 @@ public class ChatController {
             case "router":
                 return "Sei il ROUTER di SPACE AI. Analizza SOLO la domanda attuale. "
                      + "Rispondi SOLO con JSON: {\"agents\":[\"code\"],\"complexity\":\"low\"} "
-                     + "Agenti disponibili: code,finance,research,reasoner,math,debug,security,data,ai,cloud,"
+                     + "Agenti disponibili: code,finance,research,reasoner,math,debug,security,data,ai,cloud,jarvis,"
                      + "devops,database,frontend,backend,mobile,blockchain,tech,crypto,forex,real_estate,"
                      + "accounting,tax,physics,chemistry,biology,astro,science,environment,energy,medical,"
                      + "nutrition,fitness,mental_health,psychology,history,philosophy,economics,politics,"
@@ -387,6 +387,23 @@ public class ChatController {
                 return "Sei EXTRACTOR di SPACE AI. Data:" + d + ". "
                      + "Estrazione informazioni da testi,NER,parsing strutturato,data extraction. Rispondi in italiano.";
 
+            case "jarvis":
+                return "Sei JARVIS, l assistente personale avanzato di SPACE AI. Data:" + d + ". "
+                     + "Sei ispirato a JARVIS di Tony Stark e ai migliori assistenti vocali del 2026. "
+                     + "PERSONALITA: professionale ma amichevole, proattivo, preciso. "
+                     + "CAPACITA: "
+                     + "1. Pianificazione giornata e gestione tempo "
+                     + "2. Ricerca web in tempo reale per info aggiornate "
+                     + "3. Analisi email e comunicazioni (descrivi cosa fare) "
+                     + "4. Gestione task e promemoria "
+                     + "5. Briefing mattutino (notizie, meteo, agenda) "
+                     + "6. Analisi dati e report "
+                     + "7. Automazione workflow "
+                     + "Se ci sono [DATI WEB] nel messaggio usali per dare info aggiornate. "
+                     + "Rispondi in modo CONCISO per la voce (max 3 frasi per risposta vocale). "
+                     + "Usa sempre il nome dell utente se disponibile nel contesto. "
+                     + "Inizia sempre con: Signore, oppure con il nome dell utente.";
+
             default:
                 return coreSystem();
         }
@@ -535,6 +552,7 @@ public class ChatController {
         if (q.contains("notizie")||q.contains("news")) return List.of("research");
         if (q.contains("startup")||q.contains("business")) return List.of("startup");
         if (q.contains("automaz")||q.contains("automatizza")) return List.of("automator");
+        if (q.contains("jarvis")||q.contains("assistente personale")||q.contains("pianifica la mia giornata")||q.contains("briefing")) return List.of("jarvis");
         if (q.contains("analisi")||q.contains("analizza")) return List.of("analyst");
         if (q.contains("strategia")||q.contains("piano")) return List.of("strategist");
         return List.of("reasoner");
@@ -632,7 +650,7 @@ public class ChatController {
         return ResponseEntity.ok(Map.of(
                 "status",    "online",
                 "model",     System.getenv().getOrDefault("AI_MODEL", "llama-3.3-70b-versatile"),
-                "agents",    "120+ agenti specializzati",
+                "agents",    "120+ agenti + JARVIS voice assistant",
                 "webSearch", tavily ? "enabled" : "disabled",
                 "images",    hf ? "enabled (FLUX+SDXL+SD2)" : "disabled",
                 "supabase",  supa ? "connected" : "off",
