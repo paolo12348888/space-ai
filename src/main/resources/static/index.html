@@ -151,7 +151,7 @@ body::after{content:"";position:fixed;inset:0;background:radial-gradient(ellipse
 
 /* LOGIN */
 .login-wrap{position:fixed;inset:0;background:rgba(10,12,16,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:1000;padding:24px}
-.login-wrap.gone{display:none}
+.login-wrap.gone{display:none!important;visibility:hidden!important;pointer-events:none!important;z-index:-999!important}
 .login-logo{width:76px;height:76px;border-radius:50%;object-fit:cover;box-shadow:0 0 40px rgba(0,200,255,0.4)}
 .login-title{font-family:"Syne",sans-serif;font-weight:800;font-size:1.7rem;color:#fff}
 .login-title span{color:var(--accent)}
@@ -305,6 +305,7 @@ textarea::placeholder{color:var(--muted)}
     <div class="sb-item" onclick="setMode('search');closeSidebar()">🔍 Ricerca web</div>
     <div class="sb-item" onclick="setMode('image');closeSidebar()">🎨 Genera immagine</div>
     <div class="sb-item" onclick="setMode('think');closeSidebar()">🧠 Thinking mode</div>
+    <div class="sb-item" onclick="setMode('jarvis');closeSidebar()">🤵 JARVIS mode</div>
     <div class="sb-section" style="margin-top:6px">Strumenti</div>
     <div class="sb-item" onclick="toggleDash();closeSidebar()">📊 Dashboard</div>
     <div class="sb-item" onclick="toggleProfile();closeSidebar()">👤 Il mio profilo</div>
@@ -353,6 +354,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">🔍 Mercati live</div>
           <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">💹 Analisi azioni</div>
           <div class="chip" onclick="qs('Crea una startup nel settore AI')">🚀 Startup AI</div>
+          <div class="chip" onclick="setMode('jarvis');qs('Dammi il briefing del giorno')">🤵 Attiva JARVIS</div>
         </div>
       </div>
     </div>
@@ -423,7 +425,16 @@ async function loadConfig(){try{var r=await fetch("/api/config");var d=await r.j
 // ── LOGIN ──────────────────────────────────────────────────────
 function loginGoogle(){if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);}else{skipLogin();}}
 function loginGithub(){if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);}else{skipLogin();}}
-function skipLogin(){var o=document.getElementById("loginWrap");if(o){o.style.display="none";o.classList.add("gone");}loadHistory2();loadProfileLocal();renderAlerts();}
+function skipLogin(){
+  var o=document.getElementById("loginWrap");
+  if(o){
+    o.style.cssText="display:none!important;opacity:0!important;pointer-events:none!important;z-index:-999!important;visibility:hidden!important";
+    o.classList.add("gone");
+  }
+  loadHistory2();
+  loadProfileLocal();
+  renderAlerts();
+}
 function checkOAuth(){var h=window.location.hash;if(h&&h.includes("access_token")){var p=new URLSearchParams(h.substring(1));var t=p.get("access_token");if(t){SESSION_ID="oauth_"+t.substring(0,20);skipLogin();window.history.replaceState(null,null,window.location.pathname);}}}
 
 // ── PROFILE ───────────────────────────────────────────────────
@@ -466,19 +477,21 @@ async function loadHistory2(){try{var r=await fetch("/api/history/"+SESSION_ID);
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener("load",async function(){
   await loadConfig();
-  checkOAuth();
   loadHealth();
   loadProfileLocal();
   renderAlerts();
-  if(!SUPABASE_URL){skipLogin();}
+  // Entra sempre - login opzionale
+  skipLogin();
+  checkOAuth();
 });
 
 // ── MODALITA ─────────────────────────────────────────────────
 function setMode(m){
   curMode=m;
-  var L={auto:"🤖 Auto",code:"💻 Codice",finance:"📈 Finanza",search:"🔍 Ricerca",image:"🎨 Immagine",think:"🧠 Thinking"};
+  var L={auto:"🤖 Auto",code:"💻 Codice",finance:"📈 Finanza",search:"🔍 Ricerca",image:"🎨 Immagine",think:"🧠 Thinking",jarvis:"🤵 JARVIS"};
   document.getElementById("modeLbl").textContent=L[m]||"🤖 Auto";
-  inpEl.placeholder=m==="image"?"Descrivi l immagine...":m==="think"?"Fai una domanda complessa...":"Chiedi qualsiasi cosa...";
+  inpEl.placeholder=m==="image"?"Descrivi l immagine...":m==="think"?"Fai una domanda complessa...":m==="jarvis"?"Parla con JARVIS... (o usa il microfono)":"Chiedi qualsiasi cosa...";
+  if(m==="jarvis"){startJarvisMode();}else{stopJarvisMode();}
 }
 
 // ── TEXTAREA ─────────────────────────────────────────────────
@@ -575,6 +588,48 @@ function addImageRow(b64,mime){
 function addTyping(){removeWelcome();var row=document.createElement("div");row.className="row ai";row.id="typing";var av=document.createElement("div");av.className="av";var im=document.createElement("img");im.src=LOGO;av.appendChild(im);var bub=document.createElement("div");bub.className="bubble";bub.innerHTML="<div class=\"typing-b\"><span></span><span></span><span></span></div>";row.appendChild(av);row.appendChild(bub);msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;}
 function removeTyping(){var t=document.getElementById("typing");if(t)t.remove();}
 
+// ── JARVIS MODE ───────────────────────────────────────────────
+var jarvisActive=false;
+var jarvisLoop=null;
+
+function startJarvisMode(){
+  if(jarvisActive)return;
+  jarvisActive=true;
+  addRow("🤵 JARVIS attivato. Sono pronto ad assisterla, Signore. Parli pure o scriva nella casella di testo.","ai");
+  // Avvia ascolto continuo
+  startContinuousListening();
+}
+
+function stopJarvisMode(){
+  jarvisActive=false;
+  if(jarvisLoop){clearInterval(jarvisLoop);jarvisLoop=null;}
+  stopRec();
+}
+
+function startContinuousListening(){
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR||!jarvisActive)return;
+  var r=new SR();
+  r.lang="it-IT";r.continuous=false;r.interimResults=false;
+  r.onstart=function(){document.getElementById("micBtn").classList.add("on");document.getElementById("recBar").classList.add("on");};
+  r.onresult=function(e){
+    var t=e.results[0][0].transcript.trim();
+    if(t){inpEl.value=t;sendMessage();}
+  };
+  r.onend=function(){
+    document.getElementById("micBtn").classList.remove("on");
+    document.getElementById("recBar").classList.remove("on");
+    // Riavvia ascolto dopo risposta (con delay)
+    if(jarvisActive){setTimeout(startContinuousListening,2000);}
+  };
+  r.onerror=function(){
+    document.getElementById("micBtn").classList.remove("on");
+    document.getElementById("recBar").classList.remove("on");
+    if(jarvisActive){setTimeout(startContinuousListening,3000);}
+  };
+  r.start();
+}
+
 // ── SEND ──────────────────────────────────────────────────────
 async function sendMessage(){
   var text=inpEl.value.trim();
@@ -593,6 +648,12 @@ async function sendMessage(){
   else if(curMode==="search")enriched="[RICERCA WEB AGGIORNATA 2026] "+text;
   else if(curMode==="image")enriched="Genera immagine di: "+text;
   else if(curMode==="think")enriched="[THINKING MODE - ragiona step by step prima di rispondere] "+text;
+  else if(curMode==="jarvis"){
+    var jCtx="";
+    if(userProfile.name)jCtx="[Nome utente: "+userProfile.name+"] ";
+    if(userProfile.sector)jCtx+="[Settore: "+userProfile.sector+"] ";
+    enriched=jCtx+"[JARVIS MODE - rispondi come assistente personale vocale JARVIS, conciso e professionale] "+text;
+  }
 
   // Aggiungi contesto profilo
   if(userProfile.sector||userProfile.style){
