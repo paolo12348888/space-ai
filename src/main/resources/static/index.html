@@ -426,14 +426,20 @@ async function loadConfig(){try{var r=await fetch("/api/config");var d=await r.j
 function loginGoogle(){if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);}else{skipLogin();}}
 function loginGithub(){if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);}else{skipLogin();}}
 function skipLogin(){
-  var o=document.getElementById("loginWrap");
-  if(o){
-    o.style.cssText="display:none!important;opacity:0!important;pointer-events:none!important;z-index:-999!important;visibility:hidden!important";
-    o.classList.add("gone");
-  }
-  loadHistory2();
-  loadProfileLocal();
-  renderAlerts();
+  try {
+    var o = document.getElementById("loginWrap");
+    if(o){
+      o.style.display = "none";
+      o.style.visibility = "hidden";
+      o.style.pointerEvents = "none";
+      o.style.zIndex = "-999";
+      o.style.opacity = "0";
+      o.classList.add("gone");
+    }
+    loadHistory2();
+    loadProfileLocal();
+    renderAlerts();
+  } catch(e) { console.log("skipLogin error:", e); }
 }
 function checkOAuth(){var h=window.location.hash;if(h&&h.includes("access_token")){var p=new URLSearchParams(h.substring(1));var t=p.get("access_token");if(t){SESSION_ID="oauth_"+t.substring(0,20);skipLogin();window.history.replaceState(null,null,window.location.pathname);}}}
 
@@ -475,14 +481,14 @@ async function loadHealth(){try{var r=await fetch("/api/health");var d=await r.j
 async function loadHistory2(){try{var r=await fetch("/api/history/"+SESSION_ID);var d=await r.json();if(d.messages&&d.messages.length>0){removeWelcome();d.messages.forEach(function(m){addRow(m.content,m.role==="user"?"user":"ai");});}}catch(e){}}
 
 // ── INIT ──────────────────────────────────────────────────────
-window.addEventListener("load",async function(){
-  await loadConfig();
-  loadHealth();
-  loadProfileLocal();
-  renderAlerts();
-  // Entra sempre - login opzionale
+window.addEventListener("load", function(){
+  // Entra subito nella chat - nessun blocco login
   skipLogin();
-  checkOAuth();
+  // Poi carica il resto in background
+  loadConfig().then(function(){
+    checkOAuth();
+  });
+  loadHealth();
 });
 
 // ── MODALITA ─────────────────────────────────────────────────
