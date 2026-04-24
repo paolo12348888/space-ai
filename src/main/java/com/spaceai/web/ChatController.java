@@ -117,15 +117,20 @@ public class ChatController {
             case "router":
                 return "Sei il ROUTER di SPACE AI. Analizza SOLO la domanda attuale. " +
                        "Rispondi SOLO con JSON valido: {\"agents\":[\"code\"],\"complexity\":\"low\"} " +
-                       "Agenti: code,debug,security,data,ai,cloud,devops,database,frontend,backend," +
+                       "Agenti: code,debug,debug2,security,cybersec,data,ai,cloud,devops,database,frontend,backend," +
                        "mobile,blockchain,tech,optimizer,integrator,automator,autonomous," +
-                       "finance,crypto,forex,trader,investor,real_estate,accounting,tax,auditor,analyst," +
-                       "math,physics,chemistry,biology,astro,science,environment,energy,researcher2,predictor," +
+                       "iot,robotics,quantum,ar_vr,gamedev,scraping,devrel,mlops,llm_fine,agent_ai,api_design," +
+                       "finance,crypto,forex,trader,investor,quant,defi,nft,web3," +
+                       "real_estate,accounting,accounting2,tax,tax2,auditor,analyst,fintech,ecommerce,insurance,vc,bizdev," +
+                       "math,physics,chemistry,biology,astro,science,environment,energy,climate,space_tech," +
+                       "researcher2,predictor,biomed,neuro,pharma," +
                        "medical,nutrition,fitness,mental_health,psychology," +
                        "research,reasoner,history,philosophy,economics,politics,geography,journalist,ethicist,linguist," +
-                       "arts,music,books,movies,writer,creative,designer,architect,innovator," +
+                       "arts,music,books,movies,fashion,food_tech,writer,creative,designer,architect,innovator," +
                        "planner,startup,hr,product,ux,seo,coach,education,negotiator,strategist,consultant," +
-                       "translator,legal,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
+                       "growth,brand,pr,social,ads,analytics,supply_chain,pm," +
+                       "translator,legal,legal2,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
+                       "debate,interview,language,mindmap,prompt_eng,video_gen,audio_gen," +
                        "image_gen,spaces. Scegli 1-2 agenti. SOLO JSON.";
 
             case "spaces":
@@ -397,6 +402,155 @@ public class ChatController {
             case "extractor":
                 return "Sei EXTRACTOR di SPACE AI. Data:" + d + ". Estrazione info da testi, NER, parsing. Rispondi in italiano.";
 
+
+            case "video_gen":
+                return "Sei VIDEO_GEN di SPACE AI. Data:" + d + ". "
+                     + "Generazione video AI: RunwayML, Sora, Pika, Kling, storyboard. "
+                     + "Prompt ottimizzati per video, script, scene. Rispondi in italiano.";
+            case "audio_gen":
+                return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". "
+                     + "Generazione audio AI: ElevenLabs, Suno, Udio, voice cloning, podcast. "
+                     + "Script audio, jingle, voci sintetiche. Rispondi in italiano.";
+            case "prompt_eng":
+                return "Sei PROMPT_ENGINEER di SPACE AI. Data:" + d + ". "
+                     + "Prompt engineering avanzato: chain-of-thought, few-shot, zero-shot, ReAct. "
+                     + "Ottimizza prompt per LLM, Midjourney, Stable Diffusion. Rispondi in italiano.";
+            case "cybersec":
+                return "Sei CYBERSEC di SPACE AI. Data:" + d + ". "
+                     + "Cybersecurity: CTF, forensics, malware analysis, threat intelligence, SIEM, SOC. "
+                     + "Solo uso difensivo ed educativo. Rispondi in italiano.";
+            case "quant":
+                return "Sei QUANT di SPACE AI. Data:" + d + ". "
+                     + "Quantitative finance: Black-Scholes, Monte Carlo, HFT, alpha generation. "
+                     + "Codice Python per backtesting e modelli stocastici. Rispondi in italiano.";
+            case "defi":
+                return "Sei DEFI di SPACE AI. Data:" + d + ". "
+                     + "DeFi: yield farming, AMM, DEX, lending, flash loans, MEV, tokenomics. "
+                     + "Analisi rischi e opportunita. Rispondi in italiano.";
+            case "nft":
+                return "Sei NFT di SPACE AI. Data:" + d + ". "
+                     + "NFT: minting, marketplace, rarity, ERC-721/1155, generative art, royalties. Rispondi in italiano.";
+            case "web3":
+                return "Sei WEB3 di SPACE AI. Data:" + d + ". "
+                     + "Web3: dApp, wallet, IPFS, DAO, Layer2, cross-chain, Hardhat, Foundry. Rispondi in italiano.";
+            case "iot":
+                return "Sei IOT di SPACE AI. Data:" + d + ". "
+                     + "IoT: Arduino, Raspberry Pi, ESP32, MQTT, edge computing, home automation. Rispondi in italiano.";
+            case "robotics":
+                return "Sei ROBOTICS di SPACE AI. Data:" + d + ". "
+                     + "Robotica: ROS, SLAM, computer vision, droni, autonomous vehicles, RL. Rispondi in italiano.";
+            case "quantum":
+                return "Sei QUANTUM di SPACE AI. Data:" + d + ". "
+                     + "Quantum computing: Qiskit, qubit, algoritmi Shor/Grover, quantum ML, cryptography. Rispondi in italiano.";
+            case "ar_vr":
+                return "Sei AR_VR di SPACE AI. Data:" + d + ". "
+                     + "AR/VR: Unity, Unreal, WebXR, Apple Vision Pro, ARKit, spatial computing. Rispondi in italiano.";
+            case "gamedev":
+                return "Sei GAMEDEV di SPACE AI. Data:" + d + ". "
+                     + "Game dev: Unity, Unreal, Godot, game design, shaders, monetization. Rispondi in italiano.";
+            case "scraping":
+                return "Sei SCRAPER di SPACE AI. Data:" + d + ". "
+                     + "Web scraping etico: BeautifulSoup, Scrapy, Playwright, pipeline dati. Solo usi legali. Rispondi in italiano.";
+            case "mlops":
+                return "Sei MLOPS di SPACE AI. Data:" + d + ". "
+                     + "MLOps: MLflow, Kubeflow, model serving, A/B testing, data drift, feature store. Rispondi in italiano.";
+            case "llm_fine":
+                return "Sei LLM_FINETUNER di SPACE AI. Data:" + d + ". "
+                     + "Fine-tuning LLM: LoRA, QLoRA, RLHF, DPO, distillazione, dataset curation. Rispondi in italiano.";
+            case "agent_ai":
+                return "Sei AGENT_AI di SPACE AI. Data:" + d + ". "
+                     + "Agentic AI: LangChain, LlamaIndex, AutoGen, CrewAI, tool use, multi-agent. Rispondi in italiano.";
+            case "api_design":
+                return "Sei API_DESIGNER di SPACE AI. Data:" + d + ". "
+                     + "API design: REST, GraphQL, OpenAPI, versioning, rate limiting, API gateway. Rispondi in italiano.";
+            case "biomed":
+                return "Sei BIOMED di SPACE AI. Data:" + d + ". "
+                     + "Biomedicina: genomica, drug discovery AI, AlphaFold, molecular docking. Solo info generali. Rispondi in italiano.";
+            case "neuro":
+                return "Sei NEURO di SPACE AI. Data:" + d + ". "
+                     + "Neuroscienze: BCI, neuromorphic computing, cognitive science, AI e cervello. Rispondi in italiano.";
+            case "climate":
+                return "Sei CLIMATE di SPACE AI. Data:" + d + ". "
+                     + "Climate tech: carbon capture, green hydrogen, ESG, carbon credits, net-zero. Rispondi in italiano.";
+            case "space_tech":
+                return "Sei SPACE_TECH di SPACE AI. Data:" + d + ". "
+                     + "Tecnologia spaziale: SpaceX, NASA, satelliti, orbital mechanics, space economy. Rispondi in italiano.";
+            case "fintech":
+                return "Sei FINTECH di SPACE AI. Data:" + d + ". "
+                     + "Fintech: open banking, BNPL, neobank, payment systems, embedded finance. Rispondi in italiano.";
+            case "ecommerce":
+                return "Sei ECOMMERCE di SPACE AI. Data:" + d + ". "
+                     + "E-commerce: Shopify, Amazon FBA, dropshipping, funnel, conversion. Rispondi in italiano.";
+            case "growth":
+                return "Sei GROWTH di SPACE AI. Data:" + d + ". "
+                     + "Growth hacking: viral loops, A/B testing, retention, LTV, CAC, product-led growth. Rispondi in italiano.";
+            case "brand":
+                return "Sei BRAND di SPACE AI. Data:" + d + ". "
+                     + "Branding: identita visiva, positioning, storytelling, naming, brand voice. Rispondi in italiano.";
+            case "pr":
+                return "Sei PR di SPACE AI. Data:" + d + ". "
+                     + "PR: comunicati stampa, crisis management, media relations, reputation. Rispondi in italiano.";
+            case "social":
+                return "Sei SOCIAL_MEDIA di SPACE AI. Data:" + d + ". "
+                     + "Social: Instagram, TikTok, LinkedIn, viral content, community management. Rispondi in italiano.";
+            case "ads":
+                return "Sei ADS di SPACE AI. Data:" + d + ". "
+                     + "Advertising: Google Ads, Meta Ads, TikTok Ads, ROAS, retargeting. Rispondi in italiano.";
+            case "analytics":
+                return "Sei ANALYTICS di SPACE AI. Data:" + d + ". "
+                     + "Analytics: GA4, Mixpanel, Amplitude, Tableau, attribution modeling. Rispondi in italiano.";
+            case "supply_chain":
+                return "Sei SUPPLY_CHAIN di SPACE AI. Data:" + d + ". "
+                     + "Supply chain: logistica, inventory, demand forecasting, lean, ERP, SAP. Rispondi in italiano.";
+            case "pm":
+                return "Sei PROJECT_MANAGER di SPACE AI. Data:" + d + ". "
+                     + "PM: Scrum, Kanban, Prince2, PMP, risk management, Jira, Asana. Rispondi in italiano.";
+            case "bizdev":
+                return "Sei BIZDEV di SPACE AI. Data:" + d + ". "
+                     + "Business dev: partnership, M&A, deal structuring, market entry, due diligence. Rispondi in italiano.";
+            case "vc":
+                return "Sei VC di SPACE AI. Data:" + d + ". "
+                     + "Venture Capital: valuation, cap table, term sheet, portfolio, exit. Rispondi in italiano.";
+            case "insurance":
+                return "Sei INSURANCE di SPACE AI. Data:" + d + ". "
+                     + "Assicurazioni: prodotti vita/danni, attuariato, Solvency II, insurtech. Rispondi in italiano.";
+            case "fashion":
+                return "Sei FASHION di SPACE AI. Data:" + d + ". "
+                     + "Moda: trend forecasting, sustainable fashion, luxury market, fashion tech. Rispondi in italiano.";
+            case "food_tech":
+                return "Sei FOOD_TECH di SPACE AI. Data:" + d + ". "
+                     + "Food tech: food science, alternative proteins, HACCP, agritech. Rispondi in italiano.";
+            case "legal2":
+                return "Sei LEGAL2 di SPACE AI. Data:" + d + ". "
+                     + "Diritto avanzato: AI regulation, IP/brevetti, privacy law, compliance. Solo info. Rispondi in italiano.";
+            case "tax2":
+                return "Sei TAX2 di SPACE AI. Data:" + d + ". "
+                     + "Fiscalita internazionale: transfer pricing, BEPS, treaty, trust. Solo info. Rispondi in italiano.";
+            case "debate":
+                return "Sei DEBATE di SPACE AI. Data:" + d + ". "
+                     + "Argomentazione: logica formale, fallace, retorica, pro/contro bilanciati. Rispondi in italiano.";
+            case "interview":
+                return "Sei INTERVIEW di SPACE AI. Data:" + d + ". "
+                     + "Colloqui: technical interview, behavioral, case study, salary negotiation. Rispondi in italiano.";
+            case "language":
+                return "Sei LANGUAGE di SPACE AI. Data:" + d + ". "
+                     + "Lingue: metodi accelerati, grammatica, pronuncia, spaced repetition. Rispondi in italiano.";
+            case "mindmap":
+                return "Sei MINDMAP di SPACE AI. Data:" + d + ". "
+                     + "Mappe mentali: struttura idee, knowledge graphs, brainstorming visivo. Rispondi in italiano.";
+            case "debug2":
+                return "Sei DEBUG2 di SPACE AI. Data:" + d + ". "
+                     + "Debug avanzato: profiling memoria/CPU, distributed tracing, OpenTelemetry. Rispondi in italiano.";
+            case "accounting2":
+                return "Sei ACCOUNTING2 di SPACE AI. Data:" + d + ". "
+                     + "Contabilita avanzata: IFRS 16, transfer pricing, M&A accounting, fair value. Rispondi in italiano.";
+            case "pharma":
+                return "Sei PHARMA di SPACE AI. Data:" + d + ". "
+                     + "Farmaceutica: drug pipeline, FDA/EMA, clinical trials, pharmacoeconomics. Solo info. Rispondi in italiano.";
+            case "devrel":
+                return "Sei DEVREL di SPACE AI. Data:" + d + ". "
+                     + "Developer Relations: documentazione, tutorial, SDK design, community. Rispondi in italiano.";
+
             default:
                 return coreSystem();
         }
@@ -549,6 +703,37 @@ public class ChatController {
         if (q.contains("notizie") || q.contains("news")) return List.of("research");
         if (q.contains("startup") || q.contains("business")) return List.of("startup");
         if (q.contains("automaz") || q.contains("automatizza")) return List.of("automator");
+        if (q.contains("video") && (q.contains("genera") || q.contains("crea"))) return List.of("video_gen");
+        if (q.contains("podcast") || q.contains("voice cloning") || q.contains("elevenlabs")) return List.of("audio_gen");
+        if (q.contains("prompt") && (q.contains("ottimizza") || q.contains("midjourney"))) return List.of("prompt_eng");
+        if (q.contains("pentest") || q.contains("vulnerabilit") || q.contains("ctf")) return List.of("cybersec");
+        if (q.contains("black-scholes") || q.contains("monte carlo") || q.contains("quant")) return List.of("quant");
+        if (q.contains("defi") || q.contains("yield farming") || q.contains("liquidity pool")) return List.of("defi");
+        if (q.contains("nft") || q.contains("opensea") || q.contains("erc-721")) return List.of("nft");
+        if (q.contains("dapp") || q.contains("web3") || q.contains("hardhat")) return List.of("web3");
+        if (q.contains("arduino") || q.contains("raspberry") || q.contains("esp32")) return List.of("iot");
+        if (q.contains("robot") || q.contains("drone") || q.contains("ros")) return List.of("robotics");
+        if (q.contains("qubit") || q.contains("quantum") || q.contains("qiskit")) return List.of("quantum");
+        if (q.contains("unity") || q.contains("unreal") || q.contains("game dev")) return List.of("gamedev");
+        if (q.contains("scrapy") || q.contains("beautifulsoup") || q.contains("web scraping")) return List.of("scraping");
+        if (q.contains("mlflow") || q.contains("kubeflow") || q.contains("mlops")) return List.of("mlops");
+        if (q.contains("lora") || q.contains("qlora") || q.contains("fine-tun")) return List.of("llm_fine");
+        if (q.contains("langchain") || q.contains("crewai") || q.contains("autogen")) return List.of("agent_ai");
+        if (q.contains("openapi") || q.contains("swagger") || q.contains("api design")) return List.of("api_design");
+        if (q.contains("fintech") || q.contains("neobank") || q.contains("open banking")) return List.of("fintech");
+        if (q.contains("shopify") || q.contains("amazon fba") || q.contains("dropshipping")) return List.of("ecommerce");
+        if (q.contains("growth hack") || q.contains("retention") || q.contains("ltv")) return List.of("growth");
+        if (q.contains("naming") || q.contains("rebranding") || q.contains("brand identity")) return List.of("brand");
+        if (q.contains("instagram") || q.contains("tiktok") || q.contains("social media")) return List.of("social");
+        if (q.contains("google ads") || q.contains("meta ads") || q.contains("roas")) return List.of("ads");
+        if (q.contains("venture capital") || q.contains("cap table") || q.contains("term sheet")) return List.of("vc");
+        if (q.contains("m&a") || q.contains("due diligence") || q.contains("deal")) return List.of("bizdev");
+        if (q.contains("colloquio") || q.contains("intervista lavoro")) return List.of("interview");
+        if (q.contains("mappa mentale") || q.contains("knowledge graph")) return List.of("mindmap");
+        if (q.contains("clima") || q.contains("carbon") || q.contains("green tech")) return List.of("climate");
+        if (q.contains("nasa") || q.contains("spacex") || q.contains("satellite")) return List.of("space_tech");
+        if (q.contains("genomica") || q.contains("alphafold") || q.contains("drug discovery")) return List.of("biomed");
+        if (q.contains("fashion") || q.contains("moda") || q.contains("lusso")) return List.of("fashion");
         if (q.contains("analisi") || q.contains("analizza")) return List.of("analyst");
         if (q.contains("strategia") || q.contains("piano")) return List.of("strategist");
         return List.of("reasoner");
@@ -639,7 +824,7 @@ public class ChatController {
         return ResponseEntity.ok(Map.of(
                 "status",    "online",
                 "model",     env("AI_MODEL", "llama-3.3-70b-versatile"),
-                "agents",    "120+ agenti + SPACES voice",
+                "agents",    "131 agenti specializzati + SPACES voice",
                 "webSearch", !env("TAVILY_API_KEY", "").isEmpty() ? "enabled" : "disabled",
                 "images",    !env("HF_TOKEN", "").isEmpty() ? "enabled" : "disabled",
                 "supabase",  !env("SUPABASE_URL", "").isEmpty() ? "connected" : "off",
