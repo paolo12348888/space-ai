@@ -176,7 +176,7 @@ textarea::placeholder{color:var(--muted)}
 
     <div class="input-area">
       <div class="fprev" id="fprev"></div>
-      <div class="rec-bar" id="recBar"><div class="rdot"></div><span id="recTxt">Registrazione...</span></div>
+      <div class="rec-bar" id="recBar"><div class="rdot"></div><span id="recTxt">In ascolto...</span></div>
       <div class="inbox">
         <div class="inbox-top">
           <textarea id="inp" placeholder="Chiedi qualsiasi cosa..." rows="1"></textarea>
@@ -262,32 +262,92 @@ window.addEventListener("load", function(){
 // MODALITA
 function setMode(m){
   curMode = m;
-  if(m !== "spaces") spacesOn = false;
+  if(m !== "spaces"){
+    spacesOn = false;
+    if(typeof stopSpaces === "function") stopSpaces();
+  }
   var L = {auto:"&#129302; Auto", code:"&#128187; Codice", finance:"&#128200; Finanza", search:"&#128269; Ricerca", image:"&#127912; Immagine", spaces:"&#127756; SPACES"};
   document.getElementById("modeLbl").innerHTML = L[m]||"&#129302; Auto";
   inpEl.placeholder = m==="image"?"Descrivi l'immagine...":m==="spaces"?"Parla con SPACES...":"Chiedi qualsiasi cosa...";
 }
 
-// SPACES
+// SPACES - AI vocale con voce italiana femminile
+var spacesRecog = null;
+var spacesListening = false;
+var spacesRestartTimer = null;
+
 function startSpaces(){
   curMode = "spaces";
   spacesOn = true;
   setMode("spaces");
-  addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.", "ai");
-  speak("SPACES attivato. Sono pronto.", null);
-  listenLoop();
+  addRow("SPACES attivato! Sono in ascolto. Parla pure.", "ai");
+  setTimeout(function(){ speakIT("Ciao! SPACES attivato. Sono pronta ad ascoltarti.", null, function(){ spacesStartListen(); }); }, 300);
 }
-function listenLoop(){
-  if(!spacesOn) return;
-  var SR = window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR) return;
-  var r = new SR();
-  r.lang="it-IT"; r.continuous=false; r.interimResults=false;
-  r.onstart = function(){ document.getElementById("recBar").classList.add("on"); document.getElementById("recTxt").textContent="&#127756; SPACES in ascolto..."; };
-  r.onresult = function(e){ var t=e.results[0][0].transcript.trim(); if(t){inpEl.value=t; sendMsg();} };
-  r.onend = function(){ document.getElementById("recBar").classList.remove("on"); if(spacesOn) setTimeout(listenLoop,1500); };
-  r.onerror = function(){ document.getElementById("recBar").classList.remove("on"); if(spacesOn) setTimeout(listenLoop,2000); };
-  r.start();
+
+function stopSpaces(){
+  spacesOn = false;
+  spacesListening = false;
+  if(spacesRestartTimer){ clearTimeout(spacesRestartTimer); spacesRestartTimer=null; }
+  if(spacesRecog){ try{ spacesRecog.abort(); }catch(e){} spacesRecog=null; }
+  document.getElementById("recBar").classList.remove("on");
+  document.getElementById("recTxt").textContent = "Registrazione...";
+}
+
+function spacesStartListen(){
+  if(!spacesOn || spacesListening) return;
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ addRow("Browser non supportato. Usa Chrome.", "err"); return; }
+
+  spacesRecog = new SR();
+  spacesRecog.lang = "it-IT";
+  spacesRecog.continuous = false;
+  spacesRecog.interimResults = false;
+  spacesRecog.maxAlternatives = 1;
+
+  spacesRecog.onstart = function(){
+    spacesListening = true;
+    document.getElementById("recBar").classList.add("on");
+    document.getElementById("recTxt").textContent = "SPACES in ascolto...";
+  };
+
+  spacesRecog.onresult = function(e){
+    spacesListening = false;
+    document.getElementById("recBar").classList.remove("on");
+    var t = e.results[0][0].transcript.trim();
+    if(t && t.length > 1){
+      inpEl.value = t;
+      sendMsg();
+      // Non riavviare subito - aspetta risposta
+    }
+  };
+
+  spacesRecog.onerror = function(e){
+    spacesListening = false;
+    document.getElementById("recBar").classList.remove("on");
+    // Ignora errori "no-speech" - sono normali
+    if(e.error !== "no-speech" && e.error !== "aborted"){
+      console.log("SPACES error:", e.error);
+    }
+    if(spacesOn){
+      spacesRestartTimer = setTimeout(spacesStartListen, 2000);
+    }
+  };
+
+  spacesRecog.onend = function(){
+    spacesListening = false;
+    document.getElementById("recBar").classList.remove("on");
+    // Riavvia solo se non stiamo aspettando una risposta
+    if(spacesOn && !btnEl.disabled){
+      spacesRestartTimer = setTimeout(spacesStartListen, 1500);
+    }
+  };
+
+  try {
+    spacesRecog.start();
+  } catch(e){
+    spacesListening = false;
+    if(spacesOn) spacesRestartTimer = setTimeout(spacesStartListen, 2000);
+  }
 }
 
 // TEXTAREA
@@ -321,15 +381,84 @@ function startRec(){
 }
 function stopRec(){if(recog)recog.stop();isRec=false;document.getElementById("micBtn").classList.remove("on");document.getElementById("recBar").classList.remove("on");}
 
-// TTS
-function speak(text,btn){
-  if(curSpeech){window.speechSynthesis.cancel();curSpeech=null;document.querySelectorAll(".abtn.on").forEach(function(b){b.classList.remove("on");});return;}
-  var clean=text.replace(/[#*`>]/g,"").replace(/\n+/g," ").trim().slice(0,2000);
-  var u=new SpeechSynthesisUtterance(clean);u.lang="it-IT";u.rate=1.0;
-  var vs=window.speechSynthesis.getVoices();var iv=vs.find(function(v){return v.lang.startsWith("it");});if(iv)u.voice=iv;
-  u.onstart=function(){curSpeech=u;if(btn)btn.classList.add("on");};
-  u.onend=u.onerror=function(){curSpeech=null;if(btn)btn.classList.remove("on");if(spacesOn)setTimeout(listenLoop,500);};
+// TTS - Voce italiana femminile premium
+function getBestItalianVoice(){
+  var voices = window.speechSynthesis.getVoices();
+  // Priorita: voci premium femminili italiane
+  var preferred = [
+    "Alice", "Federica", "Luca", "Paola",  // macOS/iOS
+    "Google italiano", "Google italiano Femmina",  // Chrome
+    "Microsoft Elsa", "Microsoft Cosimo",  // Windows
+  ];
+  for(var p of preferred){
+    var v = voices.find(function(v){ return v.name.includes(p) && v.lang.startsWith("it"); });
+    if(v) return v;
+  }
+  // Fallback: qualsiasi voce italiana femminile
+  var itVoices = voices.filter(function(v){ return v.lang.startsWith("it"); });
+  // Preferisci voci online (piu naturali)
+  var online = itVoices.find(function(v){ return !v.localService; });
+  if(online) return online;
+  // Ultima risorsa: prima voce italiana
+  return itVoices[0] || null;
+}
+
+function speakIT(text, btn, onEndCb){
+  if(curSpeech){
+    window.speechSynthesis.cancel();
+    curSpeech=null;
+    document.querySelectorAll(".abtn.on").forEach(function(b){b.classList.remove("on");});
+    if(btn) return; // secondo click = stop
+  }
+  var clean = text.replace(/[#*`>\[\]]/g,"").replace(/
++/g," ").replace(/\s+/g," ").trim().slice(0,3000);
+  if(!clean) return;
+
+  var u = new SpeechSynthesisUtterance(clean);
+  u.lang = "it-IT";
+  u.rate = 1.05;   // leggermente piu veloce, naturale
+  u.pitch = 1.1;   // tono leggermente piu alto (femminile)
+  u.volume = 1.0;
+
+  // Carica voci (potrebbero non essere pronte subito)
+  function trySetVoice(){
+    var v = getBestItalianVoice();
+    if(v){ u.voice = v; console.log("Voce:", v.name); }
+  }
+  trySetVoice();
+  if(!u.voice){ window.speechSynthesis.onvoiceschanged = function(){ trySetVoice(); }; }
+
+  u.onstart = function(){ curSpeech=u; if(btn) btn.classList.add("on"); };
+  u.onend = function(){
+    curSpeech=null;
+    if(btn) btn.classList.remove("on");
+    if(onEndCb) onEndCb();
+    else if(spacesOn && !btnEl.disabled){
+      // Riprendi ascolto dopo risposta
+      spacesRestartTimer = setTimeout(spacesStartListen, 800);
+    }
+  };
+  u.onerror = function(e){
+    curSpeech=null;
+    if(btn) btn.classList.remove("on");
+    console.log("TTS error:", e.error);
+    if(onEndCb) onEndCb();
+    else if(spacesOn) spacesRestartTimer = setTimeout(spacesStartListen, 1000);
+  };
+
+  // Fix Chrome: speechSynthesis si ferma dopo 15s
+  var resumeTimer = setInterval(function(){
+    if(!curSpeech){ clearInterval(resumeTimer); return; }
+    window.speechSynthesis.pause();
+    window.speechSynthesis.resume();
+  }, 10000);
+
   window.speechSynthesis.speak(u);
+}
+
+// Funzione speak compatibile (per pulsante Ascolta)
+function speak(text, btn){
+  speakIT(text, btn, null);
 }
 
 // MARKDOWN
@@ -470,11 +599,29 @@ async function sendMsg(){
     var data=await res.json();removeTyping();
     if(data.error){addRow("Errore: "+data.error,"err");}
     else{
-      if(data.response){addRow(data.response,"ai");if(spacesOn)setTimeout(function(){speak(data.response,null);},300);}
+      if(data.response){
+        addRow(data.response,"ai");
+        if(spacesOn){
+          // Ferma ascolto durante risposta
+          if(spacesRecog){ try{spacesRecog.abort();}catch(e){} }
+          if(spacesRestartTimer){ clearTimeout(spacesRestartTimer); spacesRestartTimer=null; }
+          setTimeout(function(){ speakIT(data.response, null, null); }, 400);
+        }
+      }
       if(data.image) addImgRow(data.image,data.imageType||"image/jpeg");
     }
   }catch(e){removeTyping();addRow("Errore di rete: "+e.message,"err");}
-  finally{btnEl.disabled=false;inpEl.focus();}
+  finally{
+    btnEl.disabled=false;
+    inpEl.value="";
+    inpEl.style.height="auto";
+    inpEl.focus();
+    // Se SPACES attivo, riprendi ascolto dopo risposta
+    if(spacesOn && !curSpeech){
+      if(spacesRestartTimer) clearTimeout(spacesRestartTimer);
+      spacesRestartTimer = setTimeout(spacesStartListen, 1000);
+    }
+  }
 }
 </script>
 </body>
