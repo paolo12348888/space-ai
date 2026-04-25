@@ -383,14 +383,56 @@ function addRow(text,type){
 function addImgRow(b64,mime){
   removeWelcome();
   var row=document.createElement("div");row.className="row ai";
-  var av=document.createElement("div");av.className="av";var im=document.createElement("img");im.src=LOGO;av.appendChild(im);
-  var bub=document.createElement("div");bub.className="bubble";bub.style.cssText="padding:8px;max-width:92%";
-  var img=document.createElement("img");img.src="data:"+(mime||"image/jpeg")+";base64,"+b64;img.style.cssText="max-width:100%;border-radius:10px;display:block;cursor:zoom-in";img.onclick=function(){window.open(img.src,"_blank");};
-  var acts=document.createElement("div");acts.className="acts";
-  var dl=document.createElement("a");dl.href=img.src;dl.download="space-ai-"+Date.now()+".jpg";dl.className="abtn";dl.style.textDecoration="none";
-  dl.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica';
-  acts.appendChild(dl);bub.appendChild(img);bub.appendChild(acts);
-  row.appendChild(av);row.appendChild(bub);msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
+  var av=document.createElement("div");av.className="av";
+  var avIm=document.createElement("img");avIm.src=LOGO;av.appendChild(avIm);
+  var bub=document.createElement("div");bub.className="bubble";
+  bub.style.cssText="padding:10px;max-width:95%;background:var(--surface);border:1px solid var(--border);border-radius:18px;border-top-left-radius:4px";
+
+  // Label
+  var lbl=document.createElement("div");
+  lbl.style.cssText="font-size:.72rem;color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:5px";
+  lbl.innerHTML='&#127912; Immagine generata da SPACE AI';
+  bub.appendChild(lbl);
+
+  // Immagine
+  var img=document.createElement("img");
+  img.src="data:"+(mime||"image/jpeg")+";base64,"+b64;
+  img.style.cssText="max-width:100%;border-radius:12px;display:block;cursor:zoom-in;box-shadow:0 4px 20px rgba(0,0,0,0.4)";
+  img.alt="Immagine generata da SPACE AI";
+  img.title="Clicca per aprire a schermo intero";
+  img.onclick=function(){window.open(img.src,"_blank");};
+  bub.appendChild(img);
+
+  // Azioni
+  var acts=document.createElement("div");acts.className="acts";acts.style.marginTop="10px";
+
+  // Download JPG
+  var dlJpg=document.createElement("a");
+  dlJpg.href=img.src;
+  dlJpg.download="space-ai-image-"+Date.now()+".jpg";
+  dlJpg.className="abtn";dlJpg.style.textDecoration="none";
+  dlJpg.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica JPG';
+  acts.appendChild(dlJpg);
+
+  // Download PNG (converti)
+  var dlPng=document.createElement("button");dlPng.className="abtn";
+  dlPng.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica PNG';
+  dlPng.onclick=function(){
+    var canvas=document.createElement("canvas");
+    var image=new Image();image.src=img.src;
+    image.onload=function(){canvas.width=image.width;canvas.height=image.height;canvas.getContext("2d").drawImage(image,0,0);var a=document.createElement("a");a.download="space-ai-image-"+Date.now()+".png";a.href=canvas.toDataURL("image/png");a.click();};
+  };
+  acts.appendChild(dlPng);
+
+  // Apri fullscreen
+  var fs=document.createElement("button");fs.className="abtn";
+  fs.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg> Schermo intero';
+  fs.onclick=function(){window.open(img.src,"_blank");};
+  acts.appendChild(fs);
+
+  bub.appendChild(acts);
+  row.appendChild(av);row.appendChild(bub);
+  msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
 }
 
 function addTyping(){
