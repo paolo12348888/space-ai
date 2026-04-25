@@ -309,6 +309,7 @@ var spacesOn=false,spacesRecog=null,spacesListening=false,spacesRestartTimer=nul
 var SID="s"+Math.random().toString(36).slice(2,10)+Date.now();
 var SUPABASE_URL="";
 var neuralData={totalReqs:0,profile:{},insights:[]};
+var isProcessing=false;  // blocca loop
 
 // SIDEBAR
 function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");}
@@ -461,7 +462,12 @@ function speak(text,btn){speakIT(text,btn,null);}
 
 // TEXTAREA
 inpEl.addEventListener("input",function(){inpEl.style.height="auto";inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";});
-inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
+inpEl.addEventListener("keydown",function(e){
+  if(e.key==="Enter"&&!e.shiftKey){
+    e.preventDefault();
+    if(!isProcessing) sendMsg();
+  }
+});
 
 // FILES
 function handleFiles(f){for(var i=0;i<f.length;i++){if(!attachedFiles.find(function(x){return x.name===f[i].name;}))attachedFiles.push(f[i]);}renderFiles();}
@@ -577,6 +583,7 @@ function removeTyping(){var t=document.getElementById("typing");if(t)t.remove();
 
 // SEND
 async function sendMsg(){
+  if(isProcessing) return;  // blocca doppi invii
   var text=inpEl.value.trim();
   var fileContent="";
   if(attachedFiles.length>0){
@@ -600,10 +607,15 @@ async function sendMsg(){
   else if(curMode==="search")msg="[RICERCA WEB 2026] "+text;
   else if(curMode==="image")msg="Genera immagine di: "+text;
   else if(curMode==="spaces")msg="[SPACES MODE] "+text;
-  if(!msg||btnEl.disabled)return;
+
+  if(!msg||btnEl.disabled||isProcessing)return;
+  isProcessing=true;
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   if(isThink)document.getElementById("thinkingBar").classList.add("on");
+  // Svuota subito input per evitare re-invii
+  inpEl.value="";
+  inpEl.style.height="auto";
   addRow(text,"user");addTyping(isThink);
   try{
     var payload={message:msg,sessionId:SID,thinking:isThink?"true":"false"};
@@ -620,15 +632,19 @@ async function sendMsg(){
         if(spacesOn)setTimeout(function(){speakIT(data.response,null,null);},400);
       }
       if(data.image)addImgRow(data.image,data.imageType||"image/jpeg");
-      // Aggiorna profilo neurale silenziosamente
       if(data.learnedProfile&&data.learnedProfile!=="{}"){
         document.getElementById("neuralStatus").textContent="neural "+data.totalRequests+"req";
       }
     }
   }catch(e){removeTyping();document.getElementById("thinkingBar").classList.remove("on");addRow("Errore di rete: "+e.message,"err");}
   finally{
-    btnEl.disabled=false;inpEl.focus();
-    if(spacesOn&&!curSpeech)spacesRestartTimer=setTimeout(spacesStartListen,1000);
+    isProcessing=false;
+    btnEl.disabled=false;
+    inpEl.value="";
+    inpEl.style.height="auto";
+    inpEl.focus();
+    // SPACES riparte solo dopo che la voce finisce (gestito in speakIT onend)
+    // NON qui - evita il loop
   }
 }
 </script>
