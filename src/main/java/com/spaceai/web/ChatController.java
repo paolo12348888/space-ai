@@ -77,30 +77,58 @@ public class ChatController {
 
     // ── GENERAZIONE IMMAGINI ─────────────────────────────────────
     private String generateImage(String prompt) {
-        String hfKey = env("HF_TOKEN", "");
-        if (hfKey.isEmpty()) return "Configura HF_TOKEN su Render per generare immagini.";
-        String[] models = {
-            "black-forest-labs/FLUX.1-schnell",
-            "stabilityai/stable-diffusion-2-1",
-            "runwayml/stable-diffusion-v1-5"
-        };
-        for (String model : models) {
-            try {
-                HttpHeaders h = new HttpHeaders();
-                h.setContentType(MediaType.APPLICATION_JSON);
-                h.setBearerAuth(hfKey);
-                ObjectNode req = MAPPER.createObjectNode();
-                req.put("inputs", prompt);
-                ResponseEntity<byte[]> resp = restTemplate.postForEntity(
-                        "https://api-inference.huggingface.co/models/" + model,
-                        new HttpEntity<>(MAPPER.writeValueAsString(req), h), byte[].class);
-                if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000) {
-                    log.info("Immagine generata con {}", model);
-                    return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
-                }
-            } catch (Exception e) { log.warn("HF {}: {}", model, e.getMessage()); }
+        // Prima prova Pollinations.ai (gratis, no key, sempre disponibile)
+        try {
+            String encoded = java.net.URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
+            String url = "https://image.pollinations.ai/prompt/" + encoded
+                       + "?width=768&height=768&nologo=true&enhance=true&model=flux";
+            log.info("Generazione immagine con Pollinations: {}", prompt.substring(0, Math.min(50, prompt.length())));
+            org.springframework.web.client.RestTemplate rt = new org.springframework.web.client.RestTemplate();
+            // Timeout lungo per generazione
+            rt.getMessageConverters().add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
+            ResponseEntity<byte[]> resp = rt.getForEntity(url, byte[].class);
+            if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 5000) {
+                log.info("Immagine generata con Pollinations ({} bytes)", resp.getBody().length);
+                return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
+            }
+        } catch (Exception e) {
+            log.warn("Pollinations fallito: {}", e.getMessage());
         }
-        return "Non riesco a generare l'immagine al momento. Riprova tra qualche minuto.";
+
+        // Fallback: HuggingFace con i modelli disponibili
+        String hfKey = env("HF_TOKEN", "");
+        if (!hfKey.isEmpty()) {
+            String[] models = {
+                "black-forest-labs/FLUX.1-schnell",
+                "stabilityai/stable-diffusion-xl-base-1.0",
+                "stabilityai/stable-diffusion-2-1"
+            };
+            for (String model : models) {
+                try {
+                    log.info("Tentativo HF model: {}", model);
+                    HttpHeaders h = new HttpHeaders();
+                    h.setContentType(MediaType.APPLICATION_JSON);
+                    h.setBearerAuth(hfKey);
+                    // Attendi se il modello e in cold start
+                    ObjectNode req = MAPPER.createObjectNode();
+                    req.put("inputs", prompt);
+                    ObjectNode params = MAPPER.createObjectNode();
+                    params.put("wait_for_model", true);
+                    req.set("parameters", params);
+                    ResponseEntity<byte[]> resp = restTemplate.postForEntity(
+                            "https://api-inference.huggingface.co/models/" + model,
+                            new HttpEntity<>(MAPPER.writeValueAsString(req), h), byte[].class);
+                    if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000) {
+                        log.info("Immagine generata con HF {} ({} bytes)", model, resp.getBody().length);
+                        return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
+                    }
+                } catch (Exception e) {
+                    log.warn("HF {} fallito: {}", model, e.getMessage());
+                }
+            }
+        }
+
+        return "Non riesco a generare l'immagine. Riprova tra qualche minuto.";
     }
 
     // ── SYSTEM PROMPT BASE ───────────────────────────────────────
