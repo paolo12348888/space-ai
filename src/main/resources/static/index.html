@@ -583,87 +583,84 @@ function removeTyping(){var t=document.getElementById("typing");if(t)t.remove();
 
 // SEND
 async function sendMsg(){
-  // Guard: blocca se già in elaborazione
-  if(isProcessing || btnEl.disabled) return;
-  
+  // Guard doppio invio
+  if(isProcessing) return;
+
   // Leggi testo PRIMA di svuotare
   var text = inpEl.value.trim();
   var fileContent = "";
-  
-  // Aggiungi file allegati al testo
+
+  // File allegati
   if(attachedFiles.length > 0){
-    for(var i = 0; i < attachedFiles.length; i++){
+    for(var i=0;i<attachedFiles.length;i++){
       try{
         var c = await readFile(attachedFiles[i]);
         if(attachedFiles[i].type.startsWith("image/"))
           text += "\n[Immagine: " + attachedFiles[i].name + "]";
         else
           fileContent += "\n--- FILE: " + attachedFiles[i].name + " ---\n" + c.slice(0,3000);
-      } catch(e){ text += "\n[File: " + attachedFiles[i].name + "]"; }
+      }catch(e){ text += "\n[File: " + attachedFiles[i].name + "]"; }
     }
-    attachedFiles = []; renderFiles();
+    attachedFiles=[]; renderFiles();
   }
-  
-  // Guard: testo vuoto
+
+  // Esci se testo vuoto
   if(!text) return;
-  
-  // Prepara messaggio con prefisso modalita
-  var isThink = thinkMode || text.toLowerCase().includes("[thinking");
+
+  // Prepara msg con modalita
+  var isThink = thinkMode || text.toLowerCase().indexOf("[thinking") >= 0;
   var msg = text;
-  if(curMode === "code")    msg = "[MODALITA CODICE] " + text;
-  else if(curMode === "finance") msg = "[MODALITA FINANZA] " + text;
-  else if(curMode === "search")  msg = "[RICERCA WEB 2026] " + text;
-  else if(curMode === "image")   msg = "Genera immagine di: " + text;
-  else if(curMode === "spaces")  msg = "[SPACES MODE] " + text;
-  
+  if(curMode==="code")    msg = "[MODALITA CODICE] " + text;
+  else if(curMode==="finance") msg = "[MODALITA FINANZA] " + text;
+  else if(curMode==="search")  msg = "[RICERCA WEB 2026] " + text;
+  else if(curMode==="image")   msg = "Genera immagine di: " + text;
+  else if(curMode==="spaces")  msg = "[SPACES MODE] " + text;
+
   // Blocca UI
   isProcessing = true;
   btnEl.disabled = true;
   inpEl.value = "";
   inpEl.style.height = "auto";
-  
   if(isThink) document.getElementById("thinkingBar").classList.add("on");
   addRow(text, "user");
   addTyping(isThink);
-  
+
   try{
     var payload = {message: msg, sessionId: SID, thinking: isThink ? "true" : "false"};
     if(fileContent) payload.fileContent = fileContent;
-    
+
     var res = await fetch("/api/chat", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload)
     });
-    
+
     removeTyping();
     document.getElementById("thinkingBar").classList.remove("on");
-    
+
     if(!res.ok){
       addRow("Errore server: " + res.status, "err");
-      return;
-    }
-    
-    var data = await res.json();
-    
-    if(data.error){
-      addRow("Errore: " + data.error, "err");
     } else {
-      var rowType = data.mode === "thinking" ? "thinking" : "ai";
-      if(data.response){
-        addRow(data.response, rowType);
-        if(spacesOn) setTimeout(function(){ speakIT(data.response, null, null); }, 400);
+      var data = await res.json();
+      if(data.error){
+        addRow("Errore: " + data.error, "err");
+      } else {
+        var rowType = (data.mode === "thinking") ? "thinking" : "ai";
+        if(data.response){
+          addRow(data.response, rowType);
+          if(spacesOn) setTimeout(function(){ speakIT(data.response, null, null); }, 400);
+        }
+        if(data.image) addImgRow(data.image, data.imageType || "image/jpeg");
+        if(data.totalRequests)
+          document.getElementById("neuralStatus").textContent = "neural " + data.totalRequests + "req";
       }
-      if(data.image) addImgRow(data.image, data.imageType || "image/jpeg");
-      if(data.totalRequests)
-        document.getElementById("neuralStatus").textContent = "neural " + data.totalRequests + "req";
     }
-    
   } catch(e){
     removeTyping();
     document.getElementById("thinkingBar").classList.remove("on");
     addRow("Errore di rete: " + e.message, "err");
   } finally{
+    // SEMPRE eseguito - sblocca UI
     isProcessing = false;
     btnEl.disabled = false;
     inpEl.focus();
