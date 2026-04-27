@@ -11,6 +11,7 @@ import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.URLEncoder;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -129,10 +130,10 @@ public class ChatController {
     // ── GENERAZIONE IMMAGINI ──────────────────────────────────────
     private String generateImage(String prompt) {
         try {
-            String encoded = java.net.URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
+            String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
             String url = "https://image.pollinations.ai/prompt/" + encoded
                        + "?width=768&height=768&nologo=true&enhance=true&model=flux";
-            log.info("Generazione immagine Pollinations: {}", prompt.substring(0, Math.min(50, prompt.length())));
+            log.info("Generazione immagine: {}", prompt.substring(0, Math.min(50, prompt.length())));
             ResponseEntity<byte[]> resp = restTemplate.getForEntity(url, byte[].class);
             if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 5000) {
                 return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
@@ -141,21 +142,23 @@ public class ChatController {
 
         String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
-            String[] models = {"black-forest-labs/FLUX.1-schnell","stabilityai/stable-diffusion-xl-base-1.0"};
-            for (String model : models) {
-                try {
-                    HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON); h.setBearerAuth(hfKey);
-                    ObjectNode req = MAPPER.createObjectNode(); req.put("inputs", prompt);
-                    ObjectNode params = MAPPER.createObjectNode(); params.put("wait_for_model", true); req.set("parameters", params);
-                    ResponseEntity<byte[]> resp = restTemplate.postForEntity(
-                            "https://api-inference.huggingface.co/models/" + model,
-                            new HttpEntity<>(MAPPER.writeValueAsString(req), h), byte[].class);
-                    if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000)
-                        return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
-                } catch (Exception e) { log.warn("HF {}: {}", model, e.getMessage()); }
-            }
+            try {
+                HttpHeaders h = new HttpHeaders();
+                h.setContentType(MediaType.APPLICATION_JSON);
+                h.setBearerAuth(hfKey);
+                ObjectNode req = MAPPER.createObjectNode();
+                req.put("inputs", prompt);
+                ObjectNode params = MAPPER.createObjectNode();
+                params.put("wait_for_model", true);
+                req.set("parameters", params);
+                ResponseEntity<byte[]> resp = restTemplate.postForEntity(
+                        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+                        new HttpEntity<>(MAPPER.writeValueAsString(req), h), byte[].class);
+                if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000)
+                    return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
+            } catch (Exception e) { log.warn("HF: {}", e.getMessage()); }
         }
-        return "Non riesco a generare l'immagine. Riprova.";
+        return "Non riesco a generare l'immagine. Riprova tra qualche minuto.";
     }
 
     // ── THINKING MODE (come Claude extended thinking) ─────────────
