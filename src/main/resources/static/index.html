@@ -125,6 +125,8 @@ textarea::placeholder{color:var(--muted)}
     <div class="sbi" onclick="setMode('search');closeSB()">&#128269; Ricerca web</div>
     <div class="sbi" onclick="setMode('image');closeSB()">&#127912; Genera immagine</div>
     <div class="sbi" onclick="startSpaces();closeSB()">&#127756; SPACES (AI vocale)</div>
+    <div class="sbi" onclick="setMode('security');closeSB()">&#128737; AEGIS Security</div>
+    <div class="sbi" onclick="setMode('neural');closeSB()">&#129504; Neural Core</div>
     <div class="sec" style="margin-top:6px">Recenti</div>
     <div class="sbi on">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -156,6 +158,7 @@ textarea::placeholder{color:var(--muted)}
       <div class="brand" style="font-size:.95rem">SPACE<span> AI</span></div>
       <div class="topbar-model" id="topModel">...</div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span style="font-size:.6rem;color:#b060ff;opacity:.8;cursor:pointer" onclick="showNeuralPanel()">&#129504; neural</span>
         <span style="font-size:.6rem;color:#b060ff;opacity:.8">&#9889; quantum</span>
         <div class="dot"></div>
       </div>
@@ -174,6 +177,8 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
           <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
           <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
+          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
+          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
         </div>
       </div>
     </div>
@@ -205,6 +210,39 @@ textarea::placeholder{color:var(--muted)}
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept=".txt,.pdf,.csv,.json,.py,.js,.java,.md" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
+  </div>
+</div>
+<style>
+.neural-modal{display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:20px}
+.neural-modal.on{display:flex}
+.neural-panel{background:var(--sidebar);border:1px solid rgba(120,0,255,0.3);border-radius:18px;
+  padding:24px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto}
+.np-title{font-family:"Syne",sans-serif;font-size:1.1rem;font-weight:800;color:#b060ff;margin-bottom:16px}
+.np-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:.8rem}
+.np-label{color:var(--muted)}
+.np-val{color:var(--accent);font-weight:600}
+.np-section{font-size:.7rem;font-weight:600;letter-spacing:.1em;color:var(--muted);padding:12px 0 4px;text-transform:uppercase}
+.np-item{font-size:.75rem;color:var(--text);padding:4px 0;line-height:1.5}
+.np-close{width:100%;padding:10px;margin-top:16px;border-radius:10px;border:1px solid rgba(120,0,255,0.3);
+  background:rgba(120,0,255,0.1);color:#b060ff;cursor:pointer;font-size:.83rem}
+.np-close:hover{background:rgba(120,0,255,0.2)}
+</style>
+<div class="neural-modal" id="neuralModal" onclick="if(event.target===this)closeNeuralPanel()">
+  <div class="neural-panel">
+    <div class="np-title">&#129504; SPACE AI Neural Brain</div>
+    <div class="np-row"><span class="np-label">Richieste totali</span><span class="np-val" id="np-reqs">-</span></div>
+    <div class="np-row"><span class="np-label">Cicli di apprendimento</span><span class="np-val" id="np-cycles">-</span></div>
+    <div class="np-row"><span class="np-label">Nodi knowledge graph</span><span class="np-val" id="np-kg">-</span></div>
+    <div class="np-row"><span class="np-label">Agenti neurali</span><span class="np-val">134 attivi</span></div>
+    <div class="np-row"><span class="np-label">Qubit simulati</span><span class="np-val">32 qubit</span></div>
+    <div class="np-row"><span class="np-label">Modalita</span><span class="np-val">Autonomous + Quantum</span></div>
+    <div class="np-section">Profilo appreso</div>
+    <div id="np-profile" class="np-item" style="color:var(--muted)">Nessun dato ancora...</div>
+    <div class="np-section">Memoria a lungo termine (ultimi 3)</div>
+    <div id="np-ltm" class="np-item" style="color:var(--muted)">Nessuna memoria...</div>
+    <div class="np-section">Knowledge graph (top nodi)</div>
+    <div id="np-kgraph" class="np-item" style="color:var(--muted)">In costruzione...</div>
+    <button class="np-close" onclick="closeNeuralPanel()">Chiudi</button>
   </div>
 </div>
 <script>
@@ -268,9 +306,18 @@ window.addEventListener("load",function(){
 function setMode(m){
   curMode=m;
   if(m!=="spaces")spacesOn=false;
-  var L={auto:"&#129302; Auto",code:"&#128187; Codice",finance:"&#128200; Finanza",search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES"};
+  var L={
+    auto:"&#129302; Auto",code:"&#128187; Codice",finance:"&#128200; Finanza",
+    search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES",
+    security:"&#128737; AEGIS",neural:"&#129504; Neural"
+  };
   document.getElementById("modeLbl").innerHTML=L[m]||"&#129302; Auto";
-  inpEl.placeholder=m==="image"?"Descrivi l'immagine...":m==="spaces"?"Parla con SPACES...":"Chiedi qualsiasi cosa...";
+  var ph={
+    image:"Descrivi l'immagine...",spaces:"Parla con SPACES...",
+    security:"Descrivi il sistema da analizzare...",
+    neural:"Fai una domanda complessa per il Neural Core..."
+  };
+  inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
 
 // SPACES
@@ -411,6 +458,38 @@ function addTyping(){
 function removeTyping(){var t=document.getElementById("typing");if(t)t.remove();}
 
 // SEND - versione pulita e stabile
+// NEURAL PANEL
+function showNeuralPanel(){
+  document.getElementById("neuralModal").classList.add("on");
+  loadNeuralData();
+}
+function closeNeuralPanel(){document.getElementById("neuralModal").classList.remove("on");}
+
+async function loadNeuralData(){
+  try{
+    var r=await fetch("/api/neural/profile/"+SID);
+    var d=await r.json();
+    document.getElementById("np-reqs").textContent=d.totalRequests||0;
+    document.getElementById("np-cycles").textContent=d.learningCycles||0;
+    document.getElementById("np-kg").textContent=d.knowledgeNodes||0;
+    // Profilo
+    var prof=d.profile||{};
+    var profKeys=Object.keys(prof);
+    document.getElementById("np-profile").innerHTML=profKeys.length>0?
+      profKeys.map(function(k){return "<strong style='color:var(--accent)'>"+k+":</strong> "+prof[k];}).join("<br>"):
+      "Inizia a chattare per costruire il profilo";
+    // LTM
+    var ltm=d.ltm||[];
+    document.getElementById("np-ltm").innerHTML=ltm.length>0?
+      ltm.slice(-3).map(function(m){return "&#8226; "+m;}).join("<br>"):
+      "Nessuna memoria a lungo termine ancora";
+    // KG
+    var kgn=d.knowledgeNodes||0;
+    document.getElementById("np-kgraph").innerHTML=kgn>0?
+      kgn+" nodi connessi nel grafo della conoscenza":"In costruzione...";
+  }catch(e){console.log("Neural panel error:",e);}
+}
+
 async function sendMsg(){
   // Leggi testo PRIMA di tutto
   var text=inpEl.value.trim();
@@ -436,6 +515,8 @@ async function sendMsg(){
   else if(curMode==="search")msg="[RICERCA WEB 2026] "+text;
   else if(curMode==="image")msg="Genera immagine di: "+text;
   else if(curMode==="spaces")msg="[SPACES MODE - rispondi conciso per voce] "+text;
+  else if(curMode==="security")msg="[AEGIS SECURITY SCAN - analisi difensiva] "+text;
+  else if(curMode==="neural")msg="[NEURAL CORE - ragionamento autonomo profondo] "+text;
 
   // Blocca UI e svuota input
   inpEl.value="";inpEl.style.height="auto";
