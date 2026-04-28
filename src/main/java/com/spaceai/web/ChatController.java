@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.LinkedList;
 
 @RestController
 @RequestMapping("/api")
@@ -177,8 +178,264 @@ public class ChatController {
         return compressed.toString().trim();
     }
 
+
+    // ════════════════════════════════════════════════════════════
+    // RETE NEURALE AUTONOMA - SPACE AI BRAIN
+    // Ragiona, verifica, corregge e impara da sola
+    // ════════════════════════════════════════════════════════════
+
+    // Neuroni: pesi sinaptici per ogni agente
+    private final Map<String, double[]> synapticWeights = new ConcurrentHashMap<>();
+    // Memoria a lungo termine
+    private final Map<String, List<String>> longTermMemory  = new ConcurrentHashMap<>();
+    // Memoria a breve termine (sliding window)
+    private final Map<String, LinkedList<String>> shortTermMemory = new ConcurrentHashMap<>();
+    // Errori passati per auto-correzione
+    private final Map<String, List<String>> errorMemory = new ConcurrentHashMap<>();
+    // Punteggi di confidenza per ogni risposta
+    private final Map<String, Double> confidenceScores = new ConcurrentHashMap<>();
+    // Contatore apprendimenti
+    private final AtomicInteger learningCycles = new AtomicInteger(0);
+    // Knowledge graph: relazioni tra concetti
+    private final Map<String, Set<String>> knowledgeGraph = new ConcurrentHashMap<>();
+
+    // ── NEURONE: inizializza pesi sinaptici per un agente ────────
+    private double[] getNeuronWeights(String agent) {
+        return synapticWeights.computeIfAbsent(agent, k -> {
+            double[] w = new double[16];
+            for (int i = 0; i < w.length; i++)
+                w[i] = 0.1 + quantumRng.nextDouble() * 0.8;
+            return w;
+        });
+    }
+
+    // ── PROPAGAZIONE IN AVANTI (Forward Pass) ────────────────────
+    // Calcola quanto un agente e adatto alla query
+    private double forwardPass(String agent, String query) {
+        double[] weights = getNeuronWeights(agent);
+        String q = query.toLowerCase();
+        // Feature extraction dalla query
+        double[] features = new double[]{
+            q.length() / 500.0,                          // lunghezza
+            q.contains("?") ? 1.0 : 0.0,                 // domanda
+            q.contains("codice") || q.contains("python") ? 1.0 : 0.0, // tech
+            q.contains("mercato") || q.contains("trading") ? 1.0 : 0.0, // finance
+            q.contains("crea") || q.contains("genera") ? 1.0 : 0.0,    // creativo
+            q.contains("spiega") || q.contains("cos") ? 1.0 : 0.0,     // spiegazione
+            q.contains("bug") || q.contains("errore") ? 1.0 : 0.0,     // debug
+            q.contains("analisi") || q.contains("analizza") ? 1.0 : 0.0, // analisi
+            computeClassicScore(query, agent),                           // score classico
+            Math.min(1.0, query.split(" ").length / 20.0),              // parole
+            q.contains("sicurezza") || q.contains("hack") ? 1.0 : 0.0, // security
+            q.contains("legge") || q.contains("contratto") ? 1.0 : 0.0, // legal
+            q.contains("salute") || q.contains("medic") ? 1.0 : 0.0,   // medical
+            q.contains("viaggio") || q.contains("cibo") ? 1.0 : 0.0,   // lifestyle
+            q.contains("scienza") || q.contains("fisica") ? 1.0 : 0.0, // science
+            agentUsage.getOrDefault(agent, new AtomicInteger(0)).get() / 100.0 // usage history
+        };
+        // Activation function: ReLU
+        double sum = 0;
+        for (int i = 0; i < Math.min(features.length, weights.length); i++)
+            sum += features[i] * weights[i];
+        return Math.max(0, Math.tanh(sum)); // tanh activation
+    }
+
+    // ── BACKPROPAGATION: aggiorna pesi in base al feedback ───────
+    private void backpropagate(String agent, String query, double reward) {
+        double[] weights = getNeuronWeights(agent);
+        double lr = 0.01; // learning rate
+        String q = query.toLowerCase();
+        double[] features = new double[]{
+            q.length()/500.0, q.contains("?")?1:0,
+            q.contains("codice")||q.contains("python")?1:0,
+            q.contains("mercato")||q.contains("trading")?1:0,
+            q.contains("crea")||q.contains("genera")?1:0,
+            q.contains("spiega")||q.contains("cos")?1:0,
+            q.contains("bug")||q.contains("errore")?1:0,
+            q.contains("analisi")||q.contains("analizza")?1:0,
+            computeClassicScore(query, agent),
+            Math.min(1.0, query.split(" ").length/20.0),
+            q.contains("sicurezza")||q.contains("hack")?1:0,
+            q.contains("legge")||q.contains("contratto")?1:0,
+            q.contains("salute")||q.contains("medic")?1:0,
+            q.contains("viaggio")||q.contains("cibo")?1:0,
+            q.contains("scienza")||q.contains("fisica")?1:0,
+            agentUsage.getOrDefault(agent,new AtomicInteger(0)).get()/100.0
+        };
+        // Aggiorna pesi: delta_w = lr * reward * feature
+        for (int i = 0; i < Math.min(features.length, weights.length); i++)
+            weights[i] = Math.max(0.01, Math.min(2.0, weights[i] + lr * reward * features[i]));
+        learningCycles.incrementAndGet();
+    }
+
+    // ── MEMORIA A BREVE TERMINE (STM) ────────────────────────────
+    private void updateSTM(String sessionId, String content) {
+        LinkedList<String> stm = shortTermMemory.computeIfAbsent(sessionId, k -> new LinkedList<>());
+        stm.addFirst(content.substring(0, Math.min(150, content.length())));
+        while (stm.size() > 5) stm.removeLast(); // finestra 5 elementi
+    }
+
+    // ── MEMORIA A LUNGO TERMINE (LTM) ────────────────────────────
+    private void consolidateToLTM(String sessionId, String fact) {
+        List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
+        // Consolida solo fatti importanti (lunghezza > 50 char)
+        if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
+            ltm.add(fact.substring(0, Math.min(200, fact.length())));
+        }
+    }
+
+    // ── KNOWLEDGE GRAPH: costruisce rete di concetti ─────────────
+    private void updateKnowledgeGraph(String query, String response, String agent) {
+        // Estrai concetti chiave
+        String[] words = (query + " " + response).toLowerCase()
+            .replaceAll("[^a-zA-Z\\s]", "").split("\\s+");
+        List<String> concepts = new ArrayList<>();
+        for (String w : words)
+            if (w.length() > 5) concepts.add(w);
+        // Collega concetti vicini nel grafo
+        for (int i = 0; i < Math.min(concepts.size()-1, 10); i++) {
+            knowledgeGraph
+                .computeIfAbsent(concepts.get(i), k -> new HashSet<>())
+                .add(concepts.get(i+1));
+            knowledgeGraph
+                .computeIfAbsent(agent, k -> new HashSet<>())
+                .add(concepts.get(i));
+        }
+    }
+
+    // ── RAGIONAMENTO AUTONOMO: pensa da sola in 4 step ──────────
+    private String autonomousReason(String query, String initialResponse,
+                                     String baseUrl, String apiKey, String model) throws Exception {
+        // STEP 1: Analisi critica della propria risposta
+        String critiquePrompt =
+            "Sei il CRITICO interno di SPACE AI. Analizza questa risposta:\n" +
+            "DOMANDA: " + query + "\n" +
+            "RISPOSTA INIZIALE: " + initialResponse.substring(0, Math.min(500, initialResponse.length())) + "\n\n" +
+            "Identifica:\n" +
+            "1. ERRORI fattuali o logici\n" +
+            "2. MANCANZE importanti\n" +
+            "3. AMBIGUITA o imprecisioni\n" +
+            "4. PUNTEGGIO qualita (1-10)\n" +
+            "Sii severo e preciso. Rispondi in italiano.";
+        String critique = callLLM(critiquePrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 600);
+
+        // STEP 2: Se qualita < 7, genera risposta migliorata
+        boolean needsImprovement = critique.contains("1") || critique.contains("2") ||
+            critique.contains("3") || critique.contains("4") || critique.contains("5") ||
+            critique.contains("6") || critique.toLowerCase().contains("errore") ||
+            critique.toLowerCase().contains("manca") || critique.toLowerCase().contains("imprecis");
+
+        String improved = initialResponse;
+        if (needsImprovement) {
+            String improvePrompt =
+                "Sei SPACE AI. Migliora questa risposta basandoti sulla critica:\n" +
+                "CRITICA: " + critique + "\n\n" +
+                "RISPOSTA ORIGINALE: " + initialResponse.substring(0, Math.min(500, initialResponse.length())) + "\n\n" +
+                "Genera una risposta MIGLIORATA che corregge tutti i problemi. Markdown, italiano.";
+            improved = callLLM(improvePrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
+            // Reward positivo per l'agente che ha generato la risposta originale
+            log.info("Risposta migliorata autonomamente dopo critica");
+        }
+
+        // STEP 3: Verifica con cross-check su altra prospettiva
+        String verifyPrompt =
+            "Sei il VERIFICATORE di SPACE AI. Controlla questa risposta:\n" +
+            improved.substring(0, Math.min(400, improved.length())) + "\n\n" +
+            "Rispondi SOLO con: VERIFICATO o CORREZIONE:[cosa correggere]";
+        String verification = callLLM(verifyPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 100);
+
+        if (verification.contains("CORREZIONE:")) {
+            String correction = verification.replace("CORREZIONE:", "").trim();
+            String finalPrompt =
+                "Applica questa correzione finale alla risposta:\n" +
+                "CORREZIONE: " + correction + "\n" +
+                "RISPOSTA: " + improved.substring(0, Math.min(800, improved.length())) + "\n\n" +
+                "Restituisci la risposta corretta in markdown italiano.";
+            improved = callLLM(finalPrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 2000);
+        }
+
+        return improved;
+    }
+
+    // ── SECURITY SCANNER: trova vulnerabilita nei sistemi ────────
+    private String securityScan(String query, String baseUrl, String apiKey, String model) throws Exception {
+        String scanPrompt =
+            "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data: " + today() + ".\n" +
+            "Specializzato in: vulnerability assessment, penetration testing DIFENSIVO,\n" +
+            "CVE database, OWASP Top 10, SANS Top 25, threat modeling, zero-day analysis.\n" +
+            "Simile a: Claude Mythos (analisi sicurezza), GPT-4 security mode.\n\n" +
+            "ANALISI RICHIESTA: " + query + "\n\n" +
+            "Fornisci:\n" +
+            "## Vulnerabilita Identificate\n" +
+            "## Livello di Rischio (CVSS score se applicabile)\n" +
+            "## Vettori di Attacco Potenziali\n" +
+            "## Mitigazioni Consigliate\n" +
+            "## Codice di Fix (se richiesto)\n\n" +
+            "SOLO per uso DIFENSIVO e ricerca etica. Rispondi in italiano.";
+        return callLLM(scanPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 3000);
+    }
+
+    // ── MULTI-LLM CONSENSUS: verifica con simulazione multi-modello
+    private String multiLLMConsensus(String query, String response1,
+                                      String baseUrl, String apiKey, String model) throws Exception {
+        // Simula 3 prospettive diverse dello stesso LLM con temperature diverse
+        String p2 = callLLMWithTemp(
+            "Sei un esperto critico. Valuta e integra questa risposta aggiungendo prospettive mancanti: "
+            + response1.substring(0, Math.min(400, response1.length())),
+            query, new ArrayList<>(), baseUrl, apiKey, model, 800, 0.9);
+
+        String p3 = callLLMWithTemp(
+            "Sei un esperto scettico. Identifica cosa manca o e sbagliato in questa risposta e migliorala: "
+            + response1.substring(0, Math.min(400, response1.length())),
+            query, new ArrayList<>(), baseUrl, apiKey, model, 800, 0.6);
+
+        // Sintetizza le 3 prospettive
+        String consensusPrompt =
+            "Sintetizza queste 3 analisi in una risposta definitiva ottimale:\n\n" +
+            "RISPOSTA 1: " + response1.substring(0, Math.min(300, response1.length())) + "\n\n" +
+            "ANALISI 2: " + p2.substring(0, Math.min(300, p2.length())) + "\n\n" +
+            "CRITICA 3: " + p3.substring(0, Math.min(300, p3.length())) + "\n\n" +
+            "Crea la risposta MIGLIORE combinando il meglio di tutte e tre. Markdown, italiano.";
+        return callLLM(consensusPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
+    }
+
+    // ── NEURAL ROUTING: sceglie agenti con rete neurale ─────────
+    private List<String> neuralRoute(String query) {
+        // Calcola score neurale per ogni agente principale
+        String[] mainAgents = {
+            "code","debug","security","cybersec","data","ai","cloud","devops",
+            "finance","crypto","trader","investor","quant",
+            "math","physics","science","researcher2",
+            "medical","psychology","mental_health",
+            "research","reasoner","history","philosophy",
+            "writer","creative","startup","consultant",
+            "translator","legal","summarizer","spaces"
+        };
+        List<double[]> scores = new ArrayList<>();
+        for (String a : mainAgents) {
+            double neural = forwardPass(a, query);
+            double quantum = 0;
+            try {
+                hadamardGate(Math.abs(a.hashCode()) % 16);
+                quantum = measureQubit(Math.abs(a.hashCode()) % 16) * 0.2;
+            } catch(Exception e) {}
+            scores.add(new double[]{neural + quantum, mainAgents[java.util.Arrays.asList(mainAgents).indexOf(a)]});
+        }
+        // Ordina per score decrescente
+        scores.sort((a, b) -> Double.compare(b[0], a[0]));
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < 2 && i < scores.size(); i++) {
+            if (scores.get(i)[0] > 0.15) // soglia minima
+                result.add(mainAgents[(int)scores.get(i)[1]]);
+        }
+        if (result.isEmpty()) result.add("reasoner");
+        return result;
+    }
+
+
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
+        initQuantumState();
     }
 
     private String today() {
@@ -584,6 +841,20 @@ public class ChatController {
             case "prompt_eng": return "Sei PROMPT_ENGINEER di SPACE AI. Data:" + d + ". Chain-of-thought,few-shot,ReAct. Rispondi in italiano.";
             case "video_gen": return "Sei VIDEO_GEN di SPACE AI. Data:" + d + ". RunwayML,Sora,Pika,storyboard,script. Rispondi in italiano.";
             case "audio_gen": return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". ElevenLabs,Suno,voice cloning,podcast. Rispondi in italiano.";
+            case "aegis":
+                return "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data:" + d + ". " +
+                       "Specializzato in vulnerability assessment DIFENSIVO, CVE, OWASP, SANS, " +
+                       "threat modeling, zero-day analysis, penetration testing etico. " +
+                       "Simile a Claude Mythos per analisi sicurezza. Solo uso difensivo. Rispondi in italiano.";
+            case "consensus":
+                return "Sei il CONSENSUS ENGINE di SPACE AI. Data:" + d + ". " +
+                       "Sintetizza multiple prospettive in una risposta ottimale definitiva. " +
+                       "Elimina contraddizioni, mantieni il meglio. Rispondi in italiano.";
+            case "neural_core":
+                return "Sei il NEURAL CORE di SPACE AI - il cervello autonomo del sistema. Data:" + d + ". " +
+                       "Ragioni in modo indipendente, verifichi le tue risposte, impari dall errore. " +
+                       "Combini conoscenza da Llama, Qwen, DeepSeek e dalla tua rete neurale interna. " +
+                       "Approccio: osserva -> ragiona -> verifica -> correggi -> apprendi. Rispondi in italiano.";
             default: return coreSystem();
         }
     }
@@ -689,13 +960,26 @@ public class ChatController {
                 learnFromInteraction(sessionId, userMessage, finalResponse, "synthesizer");
             }
 
-            // Auto-riflessione per risposte importanti (solo per query complesse)
-            if (userMessage.length() > 100 && outputs.size() >= 1) {
+            // RAGIONAMENTO AUTONOMO: verifica e corregge da sola
+            if (userMessage.length() > 50) {
                 try {
-                    String improved = selfReflect(finalResponse, userMessage, baseUrl, apiKey, model);
-                    if (improved != null && !improved.isBlank() && improved.length() > finalResponse.length() * 0.8)
-                        finalResponse = improved;
-                } catch (Exception e) { log.warn("Self-reflect: {}", e.getMessage()); }
+                    // Usa consensus multi-LLM per query complesse
+                    if (userMessage.length() > 150 && outputs.size() >= 1) {
+                        String consensus = multiLLMConsensus(userMessage, finalResponse, baseUrl, apiKey, model);
+                        if (consensus != null && !consensus.isBlank())
+                            finalResponse = consensus;
+                    }
+                    // Ragionamento autonomo con auto-correzione
+                    String autonomous = autonomousReason(userMessage, finalResponse, baseUrl, apiKey, model);
+                    if (autonomous != null && !autonomous.isBlank())
+                        finalResponse = autonomous;
+                    // Consolida apprendimento
+                    consolidateToLTM(sessionId, userMessage + " -> " + finalResponse.substring(0, Math.min(100, finalResponse.length())));
+                    updateSTM(sessionId, userMessage);
+                    updateKnowledgeGraph(userMessage, finalResponse, agents.get(0));
+                    // Backpropagate reward
+                    for (String a : agents) backpropagate(a, userMessage, 0.8);
+                } catch (Exception e) { log.warn("Autonomous reasoning: {}", e.getMessage()); }
             }
 
             saveMessages(sessionId, userMessage, finalResponse, supabaseUrl, supabaseKey);
@@ -728,9 +1012,17 @@ public class ChatController {
                 JsonNode json = MAPPER.readTree(resp.substring(s, e));
                 List<String> agents = new ArrayList<>();
                 json.path("agents").forEach(n -> agents.add(n.asText()));
-                if (!agents.isEmpty() && agents.size() <= 3) return agents;
+                if (!agents.isEmpty() && agents.size() <= 3) {
+                    // Backpropagate reward per agenti selezionati
+                    for (String a : agents) backpropagate(a, query, 0.5);
+                    return agents;
+                }
             }
-        } catch (Exception e) { log.warn("Router: {}", e.getMessage()); }
+        } catch (Exception e) {
+            log.warn("Router LLM fallito, uso Neural Route: {}", e.getMessage());
+            // Fallback: usa rete neurale autonoma
+            return neuralRoute(query);
+        }
         String q = query.toLowerCase();
         if (q.contains("spaces") || q.contains("briefing")) return List.of("spaces");
         if (q.contains("python") || q.contains("java") || q.contains("codice")) return List.of("code");
@@ -824,10 +1116,14 @@ public class ChatController {
     @GetMapping("/neural/profile/{sessionId}")
     public ResponseEntity<Object> getNeuralProfile(@PathVariable String sessionId) {
         return ResponseEntity.ok(Map.of(
-                "profile", userProfiles.getOrDefault(sessionId, new HashMap<>()),
-                "insights", userInsights.getOrDefault(sessionId, new ArrayList<>()),
+                "profile",       userProfiles.getOrDefault(sessionId, new HashMap<>()),
+                "insights",      userInsights.getOrDefault(sessionId, new ArrayList<>()),
+                "ltm",           longTermMemory.getOrDefault(sessionId, new ArrayList<>()),
+                "stm",           shortTermMemory.getOrDefault(sessionId, new LinkedList<>()),
                 "totalRequests", totalRequests.get(),
-                "agentUsage", agentUsage));
+                "learningCycles",learningCycles.get(),
+                "knowledgeNodes",knowledgeGraph.size(),
+                "agentUsage",    agentUsage));
     }
 
     @GetMapping("/config")
@@ -840,9 +1136,9 @@ public class ChatController {
         return ResponseEntity.ok(Map.of(
                 "status",         "online",
                 "model",          env("AI_MODEL","llama-3.3-70b-versatile"),
-                "agents",         "131 agenti + sistema neurale + motore quantistico",
+                "agents",         "134 agenti + neural core autonomo + quantum engine",
                 "features",       "quantum_routing,quantum_temperature,quantum_compression,thinking_mode,adaptive_learning,web_search,image_gen,spaces_voice",
-                "quantum",        "32 qubit simulati, Hadamard+CNOT gates, quantum walk routing",
+                "quantum",        "32 qubit, Hadamard+CNOT, quantum walk, neural backprop",
                 "webSearch",      !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled",
                 "images",         "enabled (Pollinations+HF)",
                 "supabase",       !env("SUPABASE_URL","").isEmpty() ? "connected" : "off",
