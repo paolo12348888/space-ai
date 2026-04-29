@@ -542,8 +542,8 @@ public class ChatController {
             "Struttura:\n" +
             "1. Principio comune tra i due domini\n" +
             "2. Analogia strutturale (come X nel dominio A corrisponde a Y nel dominio B)\n" +
-            "3. Insight inedito che emerge dall'analogia\n" +
-            "4. Applicazione pratica dell'insight\n\n" +
+            "3. Insight inedito che emerge dall analogia\n" +
+            "4. Applicazione pratica dell insight\n\n" +
             "Sii creativo e profondo. Rispondi in italiano.";
         return callLLM(analogyPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 1500);
     }
@@ -592,7 +592,7 @@ public class ChatController {
     private String socraticTeach(String query, String baseUrl, String apiKey, String model) throws Exception {
         String socrPrompt =
             "Sei il SOCRATIC ENGINE di SPACE AI.\n" +
-            "Invece di dare la risposta diretta, guida l'utente a scoprirla.\n\n" +
+            "Invece di dare la risposta diretta, guida l utente a scoprirla.\n\n" +
             "DOMANDA DELL'UTENTE: " + query + "\n\n" +
             "1. Fai UNA domanda socratica che aiuti a ragionare\n" +
             "2. Dai un hint (non la soluzione)\n" +
@@ -714,7 +714,7 @@ public class ChatController {
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
 
     // ── SISTEMA NEURALE: APPRENDIMENTO AUTONOMO ───────────────────
-    // Impara dall'utente, costruisce profilo, migliora risposte
+    // Impara dall utente, costruisce profilo, migliora risposte
     private void learnFromInteraction(String sessionId, String userMsg, String response, String agent) {
         totalRequests.incrementAndGet();
         agentUsage.computeIfAbsent(agent, k -> new AtomicInteger(0)).incrementAndGet();
@@ -878,7 +878,7 @@ public class ChatController {
         // Step 1: Ragionamento interno
         String thinkPrompt = "Sei un sistema di ragionamento avanzato. Data: " + today() + ". " +
             "Prima di rispondere, analizza il problema in modo PROFONDO e STRUTTURATO:\n" +
-            "1. COMPRENSIONE: Cosa chiede esattamente l'utente?\n" +
+            "1. COMPRENSIONE: Cosa chiede esattamente l utente?\n" +
             "2. ANALISI: Quali sono i concetti chiave coinvolti?\n" +
             "3. APPROCCI: Quali sono i possibili approcci alla soluzione?\n" +
             "4. RAGIONAMENTO: Valuta pro e contro di ogni approccio\n" +
@@ -903,7 +903,7 @@ public class ChatController {
     // ── ANALISI DOCUMENTO/IMMAGINE (come Claude vision) ──────────
     private String analyzeContent(String userMsg, String fileContent, String baseUrl, String apiKey, String model) throws Exception {
         String analyzePrompt = "Sei SPACE AI con capacita di analisi avanzata. Data: " + today() + ". " +
-            "Analizza il contenuto fornito dall'utente in modo approfondito. " +
+            "Analizza il contenuto fornito dall utente in modo approfondito. " +
             "Estrai insights, pattern, informazioni chiave. " +
             "Se e codice: analizza bugs, miglioramenti, sicurezza. " +
             "Se e testo: analizza struttura, temi, sentimento. " +
@@ -1294,13 +1294,11 @@ public class ChatController {
 
                 // 6. Aggiungi predizione prossima domanda (se disponibile)
                 String prediction = predictNextQuestion(sessionId, userMessage);
-                if (prediction != null) finalResponse += "
-
----
-> " + prediction;
+                if (prediction != null) finalResponse += System.lineSeparator() + System.lineSeparator() + "---" + System.lineSeparator() + "> " + prediction;
 
                 // 7. Aggiorna tutti i sistemi di memoria e apprendimento
-                consolidateToLTM(sessionId, userMessage + " -> " + finalResponse.substring(0, Math.min(100, finalResponse.length())));
+                String ltmEntry = userMessage.substring(0, Math.min(60, userMessage.length())) + " -> done";
+                    consolidateToLTM(sessionId, ltmEntry);
                 updateSTM(sessionId, userMessage);
                 updateKnowledgeGraph(userMessage, finalResponse, agents.isEmpty() ? "reasoner" : agents.get(0));
                 updateNarrative(sessionId, userMessage, finalResponse);
