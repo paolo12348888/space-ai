@@ -1167,10 +1167,14 @@ public class ChatController {
         String supabaseKey = env("SUPABASE_KEY", "");
 
         try {
-            // Memoria contestuale
-            List<Map<String,String>> history = new ArrayList<>();
-            if (!supabaseUrl.isEmpty() && !supabaseKey.isEmpty())
+            // Memoria contestuale: usa neuralMemory (locale, veloce) o Supabase
+            List<Map<String,String>> history = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
+            if (history.isEmpty() && !supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
                 history = loadHistory(sessionId, supabaseUrl, supabaseKey);
+                // Carica in neuralMemory per future richieste
+                if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
+            }
+            log.info("Storia sessione {}: {} messaggi", sessionId, history.size());
 
             // Web search
             String webData = needsSearch(userMessage) ? searchWeb(userMessage) : null;
@@ -1178,12 +1182,30 @@ public class ChatController {
             if (webData != null && !webData.isBlank())
                 enriched = userMessage + "\n\n[DATI WEB - " + today() + "]:\n" + webData;
 
-            // Analisi file se presente
+            // Analisi immagine base64 se presente (multimodale)
+            String imageBase64 = body.getOrDefault("imageBase64","");
+            if (!imageBase64.isEmpty()) {
+                try {
+                    String vision = analyzeImageBase64(imageBase64, userMessage, baseUrl, apiKey, model);
+                    saveMessages(sessionId, userMessage, vision, supabaseUrl, supabaseKey);
+                    Map<String,Object> vResp = new HashMap<>();
+                    vResp.put("response", vision);
+                    vResp.put("responseForVoice", cleanTextForTTS(vision));
+                    vResp.put("status","ok"); vResp.put("mode","vision");
+                    vResp.put("sessionId",sessionId);
+                    return ResponseEntity.ok(vResp);
+                } catch (Exception ve) { log.warn("Vision: {}", ve.getMessage()); }
+            }
+            // Analisi file testo se presente
             if (!fileContent.isEmpty()) {
                 String fileAnalysis = analyzeContent(userMessage, fileContent, baseUrl, apiKey, model);
                 saveMessages(sessionId, userMessage, fileAnalysis, supabaseUrl, supabaseKey);
-                return ResponseEntity.ok(Map.of("response", fileAnalysis, "status", "ok",
-                        "model", model, "sessionId", sessionId, "mode", "file_analysis"));
+                Map<String,Object> fResp = new HashMap<>();
+                fResp.put("response", fileAnalysis);
+                fResp.put("responseForVoice", cleanTextForTTS(fileAnalysis));
+                fResp.put("status","ok"); fResp.put("mode","file_analysis");
+                fResp.put("sessionId",sessionId);
+                return ResponseEntity.ok(fResp);
             }
 
             // Gestione immagini
@@ -1318,19 +1340,26 @@ public class ChatController {
 
             // Stats profilo appreso
             Map<String,Object> profile = userProfiles.getOrDefault(sessionId, new HashMap<>());
-            return ResponseEntity.ok(Map.of(
-                    "response", finalResponse, "status", "ok", "model", model,
-                    "agents", agents.toString(), "webSearch", webData != null ? "true" : "false",
-                    "sessionId", sessionId, "totalRequests", totalRequests.get(),
-                    "learnedProfile", profile.toString()));
+            Map<String,Object> resp = new HashMap<>();
+            resp.put("response",        finalResponse);          // Markdown per UI
+            resp.put("responseForVoice",cleanTextForTTS(finalResponse)); // Pulito per TTS
+            resp.put("status",          "ok");
+            resp.put("model",           model);
+            resp.put("agents",          agents.toString());
+            resp.put("webSearch",       webData != null ? "true" : "false");
+            resp.put("sessionId",       sessionId);
+            resp.put("totalRequests",   totalRequests.get());
+            resp.put("emotion",         emotionState.getOrDefault(sessionId,"neutral"));
+            resp.put("historySize",     neuralMemory.getOrDefault(sessionId,new ArrayList<>()).size());
+            return ResponseEntity.ok(resp);
 
         } catch (Exception e) {
             log.error("Errore: {}", e.getMessage());
             try {
                 String fallback = callLLM(coreSystem(), userMessage, new ArrayList<>(), baseUrl, apiKey, model, 2000);
-                return ResponseEntity.ok(Map.of("response", fallback, "status", "fallback", "sessionId", sessionId));
+                Map<String,Object> fbResp=new HashMap<>();fbResp.put("response",fallback);fbResp.put("responseForVoice",cleanTextForTTS(fallback));fbResp.put("status","fallback");fbResp.put("sessionId",sessionId);return ResponseEntity.ok(fbResp);
             } catch (Exception e2) {
-                return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));
+                Map<String,Object> errResp=new HashMap<>();errResp.put("error",e.getMessage());errResp.put("status","error");return ResponseEntity.status(502).body(errResp);
             }
         }
     }
@@ -1425,7 +1454,100 @@ public class ChatController {
         return history;
     }
 
+    // ── FORMAT HISTORY FOR LLM (come suggerito dall analisi) ────
+    private ArrayNode formatChatHistoryForLLM(String sessionId, String currentQuery, String systemPrompt) {
+        ArrayNode messages = MAPPER.createArrayNode();
+        // System prompt
+        ObjectNode sys = MAPPER.createObjectNode();
+        sys.put("role", "system");
+        sys.put("content", systemPrompt);
+        messages.add(sys);
+        // Cronologia reale
+        List<Map<String,String>> history = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
+        int start = Math.max(0, history.size() - 20); // ultimi 20 messaggi = 10 scambi
+        for (int i = start; i < history.size(); i++) {
+            ObjectNode m = MAPPER.createObjectNode();
+            m.put("role", history.get(i).getOrDefault("role","user"));
+            m.put("content", history.get(i).getOrDefault("content",""));
+            messages.add(m);
+        }
+        // Messaggio attuale
+        ObjectNode usr = MAPPER.createObjectNode();
+        usr.put("role","user");
+        usr.put("content", currentQuery);
+        messages.add(usr);
+        return messages;
+    }
+
+    // ── CLEAN TEXT FOR TTS (rimuove markdown per la voce) ────────
+    private String cleanTextForTTS(String md) {
+        if (md == null) return "";
+        String t = md;
+        t = t.replaceAll("(\*\*|__)(.*?)\1", "$2");   // grassetto
+        t = t.replaceAll("(\*|_)(.*?)\1", "$2");        // corsivo
+        t = t.replaceAll("\[(.*?)\]\(.*?\)", "$1");   // link
+        t = t.replaceAll("```[\s\S]*?```", "codice omesso.");  // code block
+        t = t.replaceAll("`(.*?)`", "$1");                 // inline code
+        t = t.replaceAll("#+\s+", "");                    // header
+        t = t.replaceAll("^-\s+", "", 0);
+        t = t.replaceAll("\n-\s+", "\n");               // bullet
+        t = t.replaceAll("<details>.*?</details>", "", 0);  // details
+        t = t.replaceAll("<[^>]+>", "");                    // tag HTML
+        t = t.replaceAll("\n{3,}", "\n\n");              // newline multipli
+        return t.trim();
+    }
+
+    // ── MULTIMODAL: analizza immagine base64 passata dal frontend ─
+    private String analyzeImageBase64(String base64Image, String userMsg,
+                                       String baseUrl, String apiKey, String model) throws Exception {
+        // Prepara richiesta vision con immagine inline
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("model", model);
+        req.put("max_tokens", 1500);
+        ArrayNode messages = MAPPER.createArrayNode();
+        ObjectNode sys = MAPPER.createObjectNode();
+        sys.put("role","system");
+        sys.put("content","Sei SPACE AI con capacita visive. Analizza l immagine in dettaglio. Italiano, markdown.");
+        messages.add(sys);
+        ObjectNode usr = MAPPER.createObjectNode();
+        usr.put("role","user");
+        ArrayNode content = MAPPER.createArrayNode();
+        // Parte testo
+        ObjectNode textPart = MAPPER.createObjectNode();
+        textPart.put("type","text");
+        textPart.put("text", userMsg.isEmpty() ? "Analizza questa immagine in dettaglio." : userMsg);
+        content.add(textPart);
+        // Parte immagine
+        ObjectNode imgPart = MAPPER.createObjectNode();
+        imgPart.put("type","image_url");
+        ObjectNode imgUrl = MAPPER.createObjectNode();
+        imgUrl.put("url","data:image/jpeg;base64,"+base64Image);
+        imgPart.set("image_url", imgUrl);
+        content.add(imgPart);
+        usr.set("content", content);
+        messages.add(usr);
+        req.set("messages", messages);
+        HttpHeaders h = new HttpHeaders();
+        h.setContentType(MediaType.APPLICATION_JSON);
+        if (!apiKey.isEmpty()) h.setBearerAuth(apiKey);
+        h.set("User-Agent","SPACE-AI/3.0");
+        String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
+        ResponseEntity<String> resp = restTemplate.postForEntity(endpoint,
+                new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+        return MAPPER.readTree(resp.getBody()).path("choices").get(0).path("message").path("content").asText();
+    }
+
     private void saveMessages(String sessionId, String userMsg, String aiResp, String url, String key) {
+        // Salva SEMPRE in neuralMemory (memoria locale veloce)
+        List<Map<String,String>> mem = neuralMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
+        mem.add(Map.of("role","user","content",userMsg));
+        mem.add(Map.of("role","assistant","content",aiResp));
+        // Mantieni solo ultimi 30 messaggi (15 scambi)
+        if (mem.size() > 30) {
+            List<Map<String,String>> trimmed = new ArrayList<>(mem.subList(mem.size()-30, mem.size()));
+            neuralMemory.put(sessionId, trimmed);
+        }
+        // Salva su Supabase se configurato
         if (url.isEmpty()) return;
         try { saveMsg(sessionId,"user",userMsg,url,key); saveMsg(sessionId,"assistant",aiResp,url,key); }
         catch (Exception e) { log.warn("Supabase save: {}", e.getMessage()); }
