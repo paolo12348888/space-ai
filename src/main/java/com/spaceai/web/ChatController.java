@@ -419,7 +419,8 @@ public class ChatController {
                 hadamardGate(Math.abs(a.hashCode()) % 16);
                 quantum = measureQubit(Math.abs(a.hashCode()) % 16) * 0.2;
             } catch(Exception e) {}
-            scores.add(new double[]{neural + quantum, mainAgents[java.util.Arrays.asList(mainAgents).indexOf(a)]});
+            int agentIdx = java.util.Arrays.asList(mainAgents).indexOf(a);
+            scores.add(new double[]{neural + quantum, (double) agentIdx});
         }
         // Ordina per score decrescente
         scores.sort((a, b) -> Double.compare(b[0], a[0]));
@@ -1444,21 +1445,22 @@ public class ChatController {
         return ResponseEntity.ok(Map.of("messages", loadHistory(sessionId, url, key)));
     }
 
-    @GetMapping("/neural/profile/{sessionId}")
+        @GetMapping("/neural/profile/{sessionId}")
     public ResponseEntity<Object> getNeuralProfile(@PathVariable String sessionId) {
-        return ResponseEntity.ok(Map.of(
-                "profile",        userProfiles.getOrDefault(sessionId, new HashMap<>()),
-                "insights",       userInsights.getOrDefault(sessionId, new ArrayList<>()),
-                "ltm",            longTermMemory.getOrDefault(sessionId, new ArrayList<>()),
-                "stm",            shortTermMemory.getOrDefault(sessionId, new LinkedList<>()),
-                "emotion",        emotionState.getOrDefault(sessionId, "neutral"),
-                "narrative",      sessionNarrative.getOrDefault(sessionId, new StringBuilder()).toString(),
-                "totalRequests",  totalRequests.get(),
-                "learningCycles", learningCycles.get(),
-                "metaEpoch",      metaEpoch.get(),
-                "knowledgeNodes", knowledgeGraph.size(),
-                "agentUsage",     agentUsage,
-                "engines",        "emotion,temporal,dream,socratic,adversarial,swarm,meta,narrative,counterfactual,quantum"));
+        Map<String,Object> r = new HashMap<>();
+        r.put("profile",        userProfiles.getOrDefault(sessionId, new HashMap<>()));
+        r.put("insights",       userInsights.getOrDefault(sessionId, new ArrayList<>()));
+        r.put("ltm",            longTermMemory.getOrDefault(sessionId, new ArrayList<>()));
+        r.put("stm",            shortTermMemory.getOrDefault(sessionId, new LinkedList<>()));
+        r.put("emotion",        emotionState.getOrDefault(sessionId, "neutral"));
+        r.put("narrative",      sessionNarrative.getOrDefault(sessionId, new StringBuilder()).toString());
+        r.put("totalRequests",  totalRequests.get());
+        r.put("learningCycles", learningCycles.get());
+        r.put("metaEpoch",      metaEpoch.get());
+        r.put("knowledgeNodes", knowledgeGraph.size());
+        r.put("agentUsage",     agentUsage);
+        r.put("engines",        "emotion,temporal,dream,socratic,adversarial,quantum");
+        return ResponseEntity.ok(r);
     }
 
     @GetMapping("/config")
@@ -1466,18 +1468,18 @@ public class ChatController {
         return ResponseEntity.ok(Map.of("supabaseUrl", env("SUPABASE_URL",""), "supabaseKey", env("SUPABASE_KEY","")));
     }
 
-    @GetMapping("/health")
+        @GetMapping("/health")
     public ResponseEntity<Map<String,String>> health() {
-        return ResponseEntity.ok(Map.of(
-                "status",         "online",
-                "model",          env("AI_MODEL","llama-3.3-70b-versatile"),
-                "agents",         "139 agenti + 12 motori esclusivi",
-                "features",       "emotion_engine,temporal_reason,dream_synthesis,socratic,adversarial_check,swarm_vote,meta_learning,narrative_memory,counterfactual,quantum,neural_backprop,knowledge_graph",
-                "quantum",        "32 qubit, Hadamard+CNOT, quantum walk, neural backprop",
-                "webSearch",      !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled",
-                "images",         "enabled (Pollinations+HF)",
-                "supabase",       !env("SUPABASE_URL","").isEmpty() ? "connected" : "off",
-                "totalRequests",  String.valueOf(totalRequests.get()),
-                "date",           today()));
+        Map<String,String> r = new java.util.LinkedHashMap<>();
+        r.put("status",    "online");
+        r.put("model",     env("AI_MODEL","llama-3.3-70b-versatile"));
+        r.put("agents",    "148 agenti + 12 motori esclusivi");
+        r.put("features",  "quantum,neural,emotion,temporal,dream,socratic,adversarial");
+        r.put("webSearch", !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled");
+        r.put("images",    "enabled (Pollinations+HF)");
+        r.put("supabase",  !env("SUPABASE_URL","").isEmpty() ? "connected" : "off");
+        r.put("quantum",   "32 qubit, Hadamard+CNOT");
+        r.put("date",      today());
+        return ResponseEntity.ok(r);
     }
 }
