@@ -164,7 +164,7 @@ public class ChatController {
     private String quantumCompressContext(String context) {
         if (context.length() < 500) return context;
         // Divide in blocchi e seleziona con probabilita quantistica
-        String[] sentences = context.split("(?<=[.!?])\s+");
+        String[] sentences = context.split("(?<=[.!?])\\s+");
         StringBuilder compressed = new StringBuilder();
         initQuantumState();
         for (int i = 0; i < sentences.length; i++) {
@@ -1483,17 +1483,18 @@ public class ChatController {
     private String cleanTextForTTS(String md) {
         if (md == null) return "";
         String t = md;
-        t = t.replaceAll("(\*\*|__)(.*?)\1", "$2");   // grassetto
-        t = t.replaceAll("(\*|_)(.*?)\1", "$2");        // corsivo
-        t = t.replaceAll("\[(.*?)\]\(.*?\)", "$1");   // link
-        t = t.replaceAll("```[\s\S]*?```", "codice omesso.");  // code block
-        t = t.replaceAll("`(.*?)`", "$1");                 // inline code
-        t = t.replaceAll("#+\s+", "");                    // header
-        t = t.replaceAll("^-\s+", "", 0);
-        t = t.replaceAll("\n-\s+", "\n");               // bullet
-        t = t.replaceAll("<details>.*?</details>", "", 0);  // details
-        t = t.replaceAll("<[^>]+>", "");                    // tag HTML
-        t = t.replaceAll("\n{3,}", "\n\n");              // newline multipli
+        t = t.replaceAll("\\*\\*(.*?)\\*\\*", "$1");
+        t = t.replaceAll("__(.*?)__", "$1");
+        t = t.replaceAll("\\*(.*?)\\*", "$1");
+        t = t.replaceAll("_(.*?)_", "$1");
+        t = t.replaceAll("\\[(.*?)\\]\\(.*?\\)", "$1");
+        t = t.replaceAll("(?s)```.*?```", "codice omesso.");
+        t = t.replaceAll("`(.*?)`", "$1");
+        t = t.replaceAll("#{1,6}\\s+", "");
+        t = t.replaceAll("(?m)^[-*]\\s+", "");
+        t = t.replaceAll("(?s)<details>.*?</details>", "");
+        t = t.replaceAll("<[^>]+>", "");
+        t = t.replaceAll("\\n{3,}", "\n\n");
         return t.trim();
     }
 
