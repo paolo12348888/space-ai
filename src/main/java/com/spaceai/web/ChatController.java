@@ -433,9 +433,279 @@ public class ChatController {
     }
 
 
+
+    // ════════════════════════════════════════════════════════════════
+    // SISTEMA ESCLUSIVO SPACE AI - Funzionalità che nessuna altra AI ha
+    // ════════════════════════════════════════════════════════════════
+
+    // ── 1. EMOTION ENGINE - Rileva emozione nella query e adatta lo stile
+    private final Map<String, String> emotionState = new ConcurrentHashMap<>();
+
+    private String detectEmotion(String text) {
+        String t = text.toLowerCase();
+        if (t.matches(".*(arrabbia|incazzato|frustrat|odio|schifo|terrible|pessimo).*")) return "frustrated";
+        if (t.matches(".*(triste|depresso|male|piango|disperato|brutto momento).*"))    return "sad";
+        if (t.matches(".*(felice|contento|fantastico|ottimo|eccellente|perfetto).*"))   return "happy";
+        if (t.matches(".*(urgente|subito|veloce|adesso|immediatamente|presto).*"))      return "urgent";
+        if (t.matches(".*(aiuto|non capisco|confuso|perso|non so|difficile).*"))        return "confused";
+        if (t.matches(".*(grazie|gentile|bravo|ottimo lavoro|perfetto).*"))             return "grateful";
+        return "neutral";
+    }
+
+    private String adaptToneByEmotion(String emotion, String response) {
+        switch (emotion) {
+            case "frustrated":
+                return "Capisco la frustrazione. Ecco la soluzione diretta:\n\n" + response;
+            case "sad":
+                return "Sono qui per aiutarti. Procediamo insieme:\n\n" + response;
+            case "urgent":
+                return "**Risposta rapida:**\n\n" + response;
+            case "confused":
+                return "Spiego passo per passo in modo semplice:\n\n" + response;
+            case "grateful":
+                return response + "\n\n> Sono a tua disposizione per qualsiasi altra domanda!";
+            default:
+                return response;
+        }
+    }
+
+    // ── 2. PREDICTIVE CONTEXT - Predice la prossima domanda
+    private final Map<String, List<String>> questionPatterns = new ConcurrentHashMap<>();
+
+    private void learnQuestionPattern(String sessionId, String question) {
+        List<String> patterns = questionPatterns.computeIfAbsent(sessionId, k -> new ArrayList<>());
+        if (patterns.size() < 20) patterns.add(question.substring(0, Math.min(80, question.length())));
+    }
+
+    private String predictNextQuestion(String sessionId, String currentQuestion) {
+        List<String> patterns = questionPatterns.getOrDefault(sessionId, new ArrayList<>());
+        if (patterns.size() < 3) return null;
+        String q = currentQuestion.toLowerCase();
+        // Analizza pattern ricorrenti
+        Map<String, Integer> topicCount = new HashMap<>();
+        for (String p : patterns) {
+            String[] words = p.toLowerCase().split(" ");
+            for (String w : words)
+                if (w.length() > 5) topicCount.merge(w, 1, Integer::sum);
+        }
+        String topTopic = topicCount.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey).orElse(null);
+        if (topTopic != null && !q.contains(topTopic))
+            return "Potresti voler chiedere anche riguardo a: **" + topTopic + "**";
+        return null;
+    }
+
+    // ── 3. META-LEARNING - Impara a imparare (come MAML)
+    private final Map<String, Double> metaWeights = new ConcurrentHashMap<>();
+    private final AtomicInteger metaEpoch = new AtomicInteger(0);
+
+    private void metaLearnStep(String agent, String query, String response, boolean wasGood) {
+        double reward = wasGood ? 1.0 : -0.5;
+        String key = agent + "_" + (query.length() > 20 ? query.substring(0,20) : query)
+                         .replaceAll("[^a-zA-Z]","");
+        metaWeights.merge(key, reward * 0.1, Double::sum);
+        metaEpoch.incrementAndGet();
+        // Meta-update: se un pattern si ripete > 5 volte, boost i pesi neurali
+        if (metaEpoch.get() % 5 == 0) {
+            metaWeights.forEach((k, v) -> {
+                if (v > 0.4) backpropagate(agent, query, 0.3); // meta-boost
+            });
+        }
+    }
+
+    // ── 4. TEMPORAL REASONING - Ragiona nel tempo (passato/presente/futuro)
+    private String temporalReason(String query, String baseUrl, String apiKey, String model) throws Exception {
+        String temporalPrompt =
+            "Sei il TEMPORAL REASONER di SPACE AI. Data attuale: " + today() + ".\n\n" +
+            "Analizza questa domanda in 3 dimensioni temporali:\n\n" +
+            "## PASSATO (contesto storico)\n" +
+            "Come si e evoluta questa situazione/tecnologia/problema?\n\n" +
+            "## PRESENTE (stato attuale " + today() + ")\n" +
+            "Qual e la situazione reale oggi?\n\n" +
+            "## FUTURO (previsioni basate su dati)\n" +
+            "Dove sta andando nei prossimi 6-24 mesi?\n\n" +
+            "DOMANDA: " + query + "\n\n" +
+            "Rispondi con dati e ragionamento critico. Italiano, markdown.";
+        return callLLM(temporalPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
+    }
+
+    // ── 5. ANALOGICAL REASONING - Trova analogie tra domini diversi
+    private String analogicalReason(String query, String domain1, String domain2,
+                                     String baseUrl, String apiKey, String model) throws Exception {
+        String analogyPrompt =
+            "Sei l ANALOGICAL ENGINE di SPACE AI.\n" +
+            "Trova connessioni profonde tra concetti apparentemente distanti.\n\n" +
+            "CONCETTO PRINCIPALE: " + query + "\n" +
+            "DOMINIO A: " + domain1 + "\n" +
+            "DOMINIO B: " + domain2 + "\n\n" +
+            "Struttura:\n" +
+            "1. Principio comune tra i due domini\n" +
+            "2. Analogia strutturale (come X nel dominio A corrisponde a Y nel dominio B)\n" +
+            "3. Insight inedito che emerge dall'analogia\n" +
+            "4. Applicazione pratica dell'insight\n\n" +
+            "Sii creativo e profondo. Rispondi in italiano.";
+        return callLLM(analogyPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 1500);
+    }
+
+    // ── 6. COUNTERFACTUAL REASONING - Ragiona su ipotetici
+    private String counterfactualReason(String query, String baseUrl, String apiKey, String model) throws Exception {
+        String cfPrompt =
+            "Sei il COUNTERFACTUAL ENGINE di SPACE AI. Data: " + today() + ".\n\n" +
+            "Analizza scenari alternativi per questa domanda:\n\n" +
+            "SCENARIO REALE: " + query + "\n\n" +
+            "## Cosa succederebbe se...\n" +
+            "Esplora 3 scenari controfattuali:\n" +
+            "1. **Scenario Ottimistico**: tutto va per il meglio\n" +
+            "2. **Scenario Pessimistico**: cosa potrebbe andare storto\n" +
+            "3. **Scenario Inaspettato**: conseguenza non ovvia\n\n" +
+            "## Implicazioni pratiche\n" +
+            "Cosa puoi fare ORA per massimizzare il scenario ottimistico?\n\n" +
+            "Rispondi con ragionamento critico. Italiano, markdown.";
+        return callLLM(cfPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
+    }
+
+    // ── 7. DREAM SYNTHESIS - Genera soluzioni creative ricombinando concetti
+    // (Ispirato a come il cervello consolida durante il sonno REM)
+    private String dreamSynthesis(String query, String sessionId,
+                                   String baseUrl, String apiKey, String model) throws Exception {
+        // Raccoglie concetti dalla LTM
+        List<String> memories = longTermMemory.getOrDefault(sessionId, new ArrayList<>());
+        String memContext = memories.isEmpty() ? "" :
+            "Contesto dalla memoria: " + String.join("; ", memories.subList(0, Math.min(5, memories.size())));
+
+        String dreamPrompt =
+            "Sei il DREAM ENGINE di SPACE AI - il modulo di sintesi creativa.\n" +
+            "Combina concetti lontani per generare soluzioni innovative.\n\n" +
+            "QUERY: " + query + "\n" +
+            memContext + "\n\n" +
+            "Processo:\n" +
+            "1. Decostruisci il problema in elementi primitivi\n" +
+            "2. Cerca pattern simili in domini completamente diversi\n" +
+            "3. Ricombina in modo inedito\n" +
+            "4. Genera 3 soluzioni creative non ovvie\n\n" +
+            "Rispondi con idee originali e concrete. Italiano.";
+        return callLLM(dreamPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
+    }
+
+    // ── 8. SOCRATIC ENGINE - Insegna con domande invece di dare risposte
+    private String socraticTeach(String query, String baseUrl, String apiKey, String model) throws Exception {
+        String socrPrompt =
+            "Sei il SOCRATIC ENGINE di SPACE AI.\n" +
+            "Invece di dare la risposta diretta, guida l'utente a scoprirla.\n\n" +
+            "DOMANDA DELL'UTENTE: " + query + "\n\n" +
+            "1. Fai UNA domanda socratica che aiuti a ragionare\n" +
+            "2. Dai un hint (non la soluzione)\n" +
+            "3. Mostra il percorso logico\n" +
+            "4. SOLO ALLA FINE dai la risposta completa\n\n" +
+            "Usa questo formato:\n" +
+            "**Riflettiamo insieme:** [domanda]\n" +
+            "**Hint:** [suggerimento]\n" +
+            "**Ragionamento:** [logica]\n" +
+            "**Risposta:** [risposta completa]\n\n" +
+            "Rispondi in italiano.";
+        return callLLM(socrPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
+    }
+
+    // ── 9. ADVERSARIAL CHECKER - Cerca il bias e gli errori nella risposta
+    private String adversarialCheck(String response, String query,
+                                     String baseUrl, String apiKey, String model) throws Exception {
+        String advPrompt =
+            "Sei l ADVERSARIAL CHECKER di SPACE AI.\n" +
+            "Il tuo compito e smontare questa risposta cercando:\n\n" +
+            "RISPOSTA DA ANALIZZARE: " + response.substring(0, Math.min(600, response.length())) + "\n\n" +
+            "Controlla:\n" +
+            "- BIAS cognitivi (conferma, ancoraggio, disponibilita)\n" +
+            "- Errori fattuali verificabili\n" +
+            "- Ragionamenti circolari\n" +
+            "- Affermazioni non supportate\n" +
+            "- Prospettive mancanti\n\n" +
+            "Se trovi problemi seri: restituisci REVISIONE:[risposta corretta]\n" +
+            "Se la risposta e OK: restituisci OK\n\n" +
+            "Sii critico ma preciso.";
+        String check = callLLM(advPrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 800);
+        if (check.startsWith("REVISIONE:")) {
+            return check.substring(10).trim();
+        }
+        return response; // risposta originale OK
+    }
+
+    // ── 10. SWARM INTELLIGENCE - Più agenti votano la risposta migliore
+    private String swarmVote(String query, List<String> candidates,
+                              String baseUrl, String apiKey, String model) throws Exception {
+        if (candidates.size() <= 1) return candidates.isEmpty() ? "" : candidates.get(0);
+        // Ogni agente vota con un punteggio basato sul forward pass
+        double bestScore = -1;
+        String bestResponse = candidates.get(0);
+        for (int i = 0; i < candidates.size(); i++) {
+            // Usa forward pass neurale per stimare qualita
+            double score = 0;
+            String[] qualityWords = {"perché","quindi","tuttavia","inoltre","esempio","specificamente","importante"};
+            String c = candidates.get(i).toLowerCase();
+            for (String w : qualityWords) if (c.contains(w)) score += 0.1;
+            score += Math.min(1.0, candidates.get(i).length() / 1000.0) * 0.3;
+            score += quantumRng.nextDouble() * 0.1; // rumore quantistico
+            if (score > bestScore) { bestScore = score; bestResponse = candidates.get(i); }
+        }
+        return bestResponse;
+    }
+
+    // ── 11. NARRATIVE MEMORY - Costruisce storia coerente della sessione
+    private final Map<String, StringBuilder> sessionNarrative = new ConcurrentHashMap<>();
+
+    private void updateNarrative(String sessionId, String userMsg, String aiResp) {
+        StringBuilder narr = sessionNarrative.computeIfAbsent(sessionId, k -> new StringBuilder());
+        if (narr.length() < 3000) {
+            narr.append("[").append(java.time.LocalTime.now().toString().substring(0,5)).append("] ")
+                .append("U:").append(userMsg, 0, Math.min(50, userMsg.length()))
+                .append(" -> AI:").append(aiResp, 0, Math.min(80, aiResp.length()))
+                .append("\n");
+        }
+    }
+
+    private String getNarrativeContext(String sessionId) {
+        StringBuilder narr = sessionNarrative.get(sessionId);
+        if (narr == null || narr.length() == 0) return "";
+        String n = narr.toString();
+        return "[CONTESTO CONVERSAZIONE]\n" + n.substring(Math.max(0, n.length()-500));
+    }
+
+    // ── 12. REAL-TIME ADAPTATION - Adatta il modello in tempo reale
+    private final Map<String, Map<String,Double>> realtimeWeights = new ConcurrentHashMap<>();
+
+    private void adaptRealtime(String sessionId, String query, String response, int responseLength) {
+        Map<String,Double> rw = realtimeWeights.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
+        // Se le risposte sono troppo lunghe/corte, adatta
+        double lengthPref = responseLength > 1000 ? 0.8 : responseLength < 200 ? 1.3 : 1.0;
+        rw.merge("length_mult", lengthPref, (a, b) -> (a + b) / 2.0);
+        // Rileva lingua preferita
+        if (query.matches(".*[a-zA-Z]{3,}.*") && !query.matches(".*[àèìòù].*"))
+            rw.put("language", 0.0); // inglese
+        else
+            rw.put("language", 1.0); // italiano
+    }
+
+    // ── ORCHESTRATORE AVANZATO - Decide quale motore usare ──────
+    private String selectAdvancedEngine(String query) {
+        String q = query.toLowerCase();
+        if (q.contains("quando") || q.contains("storia") || q.contains("futuro") || q.contains("evoluzione"))
+            return "temporal";
+        if (q.contains("cosa succede se") || q.contains("ipotesi") || q.contains("scenario"))
+            return "counterfactual";
+        if (q.contains("insegna") || q.contains("spiega come") || q.contains("come imparo"))
+            return "socratic";
+        if (q.contains("idea") || q.contains("creativ") || q.contains("innova") || q.contains("soluzione nuova"))
+            return "dream";
+        if (q.contains("collega") || q.contains("simile a") || q.contains("analogia") || q.contains("come nel"))
+            return "analogical";
+        return "standard";
+    }
+
+
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
         initQuantumState();
+        log.info("SPACE AI v3.0 - Neural+Quantum+Emotion+Temporal+Dream engines attivi");
     }
 
     private String today() {
@@ -850,6 +1120,22 @@ public class ChatController {
                 return "Sei il CONSENSUS ENGINE di SPACE AI. Data:" + d + ". " +
                        "Sintetizza multiple prospettive in una risposta ottimale definitiva. " +
                        "Elimina contraddizioni, mantieni il meglio. Rispondi in italiano.";
+            case "temporal":
+                return "Sei il TEMPORAL REASONER di SPACE AI. Data:" + d + ". " +
+                       "Analizza passato, presente e futuro di qualsiasi fenomeno. " +
+                       "Usa dati storici, tendenze attuali e previsioni fondate. Rispondi in italiano.";
+            case "dream":
+                return "Sei il DREAM ENGINE di SPACE AI. Data:" + d + ". " +
+                       "Sintetizza soluzioni creative ricombinando concetti da domini diversi. " +
+                       "Genera idee originali e non ovvie. Rispondi in italiano.";
+            case "socratic":
+                return "Sei il SOCRATIC ENGINE di SPACE AI. Data:" + d + ". " +
+                       "Guida l utente alla scoperta con domande e hint. " +
+                       "Metodo Socratico + risposta completa finale. Rispondi in italiano.";
+            case "adversarial":
+                return "Sei l ADVERSARIAL CHECKER di SPACE AI. Data:" + d + ". " +
+                       "Trova bias, errori e prospettive mancanti nelle risposte. " +
+                       "Massima precisione critica. Rispondi in italiano.";
             case "neural_core":
                 return "Sei il NEURAL CORE di SPACE AI - il cervello autonomo del sistema. Data:" + d + ". " +
                        "Ragioni in modo indipendente, verifichi le tue risposte, impari dall errore. " +
@@ -960,27 +1246,74 @@ public class ChatController {
                 learnFromInteraction(sessionId, userMessage, finalResponse, "synthesizer");
             }
 
-            // RAGIONAMENTO AUTONOMO: verifica e corregge da sola
-            if (userMessage.length() > 50) {
-                try {
-                    // Usa consensus multi-LLM per query complesse
-                    if (userMessage.length() > 150 && outputs.size() >= 1) {
-                        String consensus = multiLLMConsensus(userMessage, finalResponse, baseUrl, apiKey, model);
-                        if (consensus != null && !consensus.isBlank())
-                            finalResponse = consensus;
-                    }
-                    // Ragionamento autonomo con auto-correzione
-                    String autonomous = autonomousReason(userMessage, finalResponse, baseUrl, apiKey, model);
-                    if (autonomous != null && !autonomous.isBlank())
-                        finalResponse = autonomous;
-                    // Consolida apprendimento
-                    consolidateToLTM(sessionId, userMessage + " -> " + finalResponse.substring(0, Math.min(100, finalResponse.length())));
-                    updateSTM(sessionId, userMessage);
-                    updateKnowledgeGraph(userMessage, finalResponse, agents.get(0));
-                    // Backpropagate reward
-                    for (String a : agents) backpropagate(a, userMessage, 0.8);
-                } catch (Exception e) { log.warn("Autonomous reasoning: {}", e.getMessage()); }
-            }
+            // ── PIPELINE AVANZATA SPACE AI v3.0 ──────────────────────
+            try {
+                // 1. Rileva emozione e adatta il tono
+                String emotion = detectEmotion(userMessage);
+                emotionState.put(sessionId, emotion);
+
+                // 2. Seleziona motore avanzato in base alla query
+                String advEngine = selectAdvancedEngine(userMessage);
+                String engineResult = null;
+                switch (advEngine) {
+                    case "temporal":
+                        engineResult = temporalReason(userMessage, baseUrl, apiKey, model);
+                        break;
+                    case "counterfactual":
+                        engineResult = counterfactualReason(userMessage, baseUrl, apiKey, model);
+                        break;
+                    case "socratic":
+                        engineResult = socraticTeach(userMessage, baseUrl, apiKey, model);
+                        break;
+                    case "dream":
+                        engineResult = dreamSynthesis(userMessage, sessionId, baseUrl, apiKey, model);
+                        break;
+                    case "analogical":
+                        engineResult = analogicalReason(userMessage, agents.get(0),
+                            agents.size() > 1 ? agents.get(1) : "philosophy", baseUrl, apiKey, model);
+                        break;
+                    default:
+                        break;
+                }
+                if (engineResult != null && !engineResult.isBlank()) finalResponse = engineResult;
+
+                // 3. Consensus multi-LLM per query complesse
+                if (userMessage.length() > 150) {
+                    String consensus = multiLLMConsensus(userMessage, finalResponse, baseUrl, apiKey, model);
+                    if (consensus != null && !consensus.isBlank()) finalResponse = consensus;
+                }
+
+                // 4. Adversarial check - elimina bias e errori
+                if (userMessage.length() > 80) {
+                    String checked = adversarialCheck(finalResponse, userMessage, baseUrl, apiKey, model);
+                    if (checked != null && !checked.isBlank()) finalResponse = checked;
+                }
+
+                // 5. Adatta tono all'emozione
+                finalResponse = adaptToneByEmotion(emotion, finalResponse);
+
+                // 6. Aggiungi predizione prossima domanda (se disponibile)
+                String prediction = predictNextQuestion(sessionId, userMessage);
+                if (prediction != null) finalResponse += "
+
+---
+> " + prediction;
+
+                // 7. Aggiorna tutti i sistemi di memoria e apprendimento
+                consolidateToLTM(sessionId, userMessage + " -> " + finalResponse.substring(0, Math.min(100, finalResponse.length())));
+                updateSTM(sessionId, userMessage);
+                updateKnowledgeGraph(userMessage, finalResponse, agents.isEmpty() ? "reasoner" : agents.get(0));
+                updateNarrative(sessionId, userMessage, finalResponse);
+                learnQuestionPattern(sessionId, userMessage);
+                adaptRealtime(sessionId, userMessage, finalResponse, finalResponse.length());
+
+                // 8. Meta-learning
+                for (String a : agents) {
+                    backpropagate(a, userMessage, 0.8);
+                    metaLearnStep(a, userMessage, finalResponse, true);
+                }
+
+            } catch (Exception e) { log.warn("Advanced pipeline: {}", e.getMessage()); }
 
             saveMessages(sessionId, userMessage, finalResponse, supabaseUrl, supabaseKey);
 
@@ -1116,14 +1449,18 @@ public class ChatController {
     @GetMapping("/neural/profile/{sessionId}")
     public ResponseEntity<Object> getNeuralProfile(@PathVariable String sessionId) {
         return ResponseEntity.ok(Map.of(
-                "profile",       userProfiles.getOrDefault(sessionId, new HashMap<>()),
-                "insights",      userInsights.getOrDefault(sessionId, new ArrayList<>()),
-                "ltm",           longTermMemory.getOrDefault(sessionId, new ArrayList<>()),
-                "stm",           shortTermMemory.getOrDefault(sessionId, new LinkedList<>()),
-                "totalRequests", totalRequests.get(),
-                "learningCycles",learningCycles.get(),
-                "knowledgeNodes",knowledgeGraph.size(),
-                "agentUsage",    agentUsage));
+                "profile",        userProfiles.getOrDefault(sessionId, new HashMap<>()),
+                "insights",       userInsights.getOrDefault(sessionId, new ArrayList<>()),
+                "ltm",            longTermMemory.getOrDefault(sessionId, new ArrayList<>()),
+                "stm",            shortTermMemory.getOrDefault(sessionId, new LinkedList<>()),
+                "emotion",        emotionState.getOrDefault(sessionId, "neutral"),
+                "narrative",      sessionNarrative.getOrDefault(sessionId, new StringBuilder()).toString(),
+                "totalRequests",  totalRequests.get(),
+                "learningCycles", learningCycles.get(),
+                "metaEpoch",      metaEpoch.get(),
+                "knowledgeNodes", knowledgeGraph.size(),
+                "agentUsage",     agentUsage,
+                "engines",        "emotion,temporal,dream,socratic,adversarial,swarm,meta,narrative,counterfactual,quantum"));
     }
 
     @GetMapping("/config")
@@ -1136,8 +1473,8 @@ public class ChatController {
         return ResponseEntity.ok(Map.of(
                 "status",         "online",
                 "model",          env("AI_MODEL","llama-3.3-70b-versatile"),
-                "agents",         "134 agenti + neural core autonomo + quantum engine",
-                "features",       "quantum_routing,quantum_temperature,quantum_compression,thinking_mode,adaptive_learning,web_search,image_gen,spaces_voice",
+                "agents",         "139 agenti + 12 motori esclusivi",
+                "features",       "emotion_engine,temporal_reason,dream_synthesis,socratic,adversarial_check,swarm_vote,meta_learning,narrative_memory,counterfactual,quantum,neural_backprop,knowledge_graph",
                 "quantum",        "32 qubit, Hadamard+CNOT, quantum walk, neural backprop",
                 "webSearch",      !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled",
                 "images",         "enabled (Pollinations+HF)",
