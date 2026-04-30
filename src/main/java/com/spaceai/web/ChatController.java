@@ -37,6 +37,29 @@ public class ChatController {
     private final AtomicInteger totalRequests = new AtomicInteger(0);
     private final Map<String, AtomicInteger> agentUsage = new ConcurrentHashMap<>();
 
+    // ── CACHING INTELLIGENTE ──────────────────────────────────────
+    // Evita chiamate duplicate alla LLM per domande identiche
+    private final Map<String, String> responseCache = new ConcurrentHashMap<>();
+    private final Map<String, Long> cacheTimestamps = new ConcurrentHashMap<>();
+    private static final long CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti
+    private final AtomicInteger cacheHits = new AtomicInteger(0);
+
+    // ── RATE LIMITING ─────────────────────────────────────────────
+    private final Map<String, AtomicInteger> sessionRequests = new ConcurrentHashMap<>();
+    private final Map<String, Long> sessionWindows = new ConcurrentHashMap<>();
+    private static final int MAX_REQUESTS_PER_MINUTE = 30;
+
+    // ── CIRCUIT BREAKER ───────────────────────────────────────────
+    private final AtomicInteger failureCount = new AtomicInteger(0);
+    private volatile long circuitOpenTime = 0;
+    private static final int FAILURE_THRESHOLD = 5;
+    private static final long CIRCUIT_RESET_MS = 30000; // 30 secondi
+
+    // ── METRICHE INTERNE ──────────────────────────────────────────
+    private final AtomicInteger totalTokensEstimate = new AtomicInteger(0);
+    private final Map<String, Long> responseTimings = new ConcurrentHashMap<>();
+    private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
+
     // ── MOTORE QUANTISTICO (Quantum-Inspired Computing) ───────
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
@@ -706,7 +729,83 @@ public class ChatController {
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
         initQuantumState();
-        log.info("SPACE AI v3.0 - Neural+Quantum+Emotion+Temporal+Dream engines attivi");
+        log.info("SPACE AI v4.0 - Neural+Quantum+Cache+RateLimit+CircuitBreaker attivi");
+        // Pulizia cache ogni 10 minuti
+        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
+            this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
+    }
+
+    // ── CACHE: get/set/clean ──────────────────────────────────────
+    private String getCached(String key) {
+        String cached = responseCache.get(key);
+        if (cached == null) return null;
+        Long ts = cacheTimestamps.get(key);
+        if (ts == null || System.currentTimeMillis() - ts > CACHE_TTL_MS) {
+            responseCache.remove(key);
+            cacheTimestamps.remove(key);
+            return null;
+        }
+        cacheHits.incrementAndGet();
+        log.info("Cache HIT: {}", key.substring(0, Math.min(40, key.length())));
+        return cached;
+    }
+
+    private void putCache(String key, String value) {
+        if (value == null || value.length() > 10000) return; // non cachare risposte enormi
+        responseCache.put(key, value);
+        cacheTimestamps.put(key, System.currentTimeMillis());
+        // Limite max 500 entry
+        if (responseCache.size() > 500) cleanExpiredCache();
+    }
+
+    private void cleanExpiredCache() {
+        long now = System.currentTimeMillis();
+        cacheTimestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_TTL_MS);
+        responseCache.keySet().retainAll(cacheTimestamps.keySet());
+        log.info("Cache pulita: {} entry rimanenti", responseCache.size());
+    }
+
+    private String cacheKey(String msg, String agent) {
+        return (agent + ":" + msg).substring(0, Math.min(120, (agent + ":" + msg).length()));
+    }
+
+    // ── RATE LIMITING ─────────────────────────────────────────────
+    private boolean isRateLimited(String sessionId) {
+        long now = System.currentTimeMillis();
+        Long window = sessionWindows.get(sessionId);
+        if (window == null || now - window > 60000) {
+            sessionWindows.put(sessionId, now);
+            sessionRequests.put(sessionId, new AtomicInteger(0));
+        }
+        int reqs = sessionRequests.computeIfAbsent(sessionId, k -> new AtomicInteger(0)).incrementAndGet();
+        return reqs > MAX_REQUESTS_PER_MINUTE;
+    }
+
+    // ── CIRCUIT BREAKER ───────────────────────────────────────────
+    private boolean isCircuitOpen() {
+        if (failureCount.get() < FAILURE_THRESHOLD) return false;
+        long now = System.currentTimeMillis();
+        if (now - circuitOpenTime > CIRCUIT_RESET_MS) {
+            failureCount.set(0); // reset dopo timeout
+            log.info("Circuit breaker reset");
+            return false;
+        }
+        return true;
+    }
+
+    private void recordSuccess() { failureCount.set(0); }
+
+    private void recordFailure() {
+        int failures = failureCount.incrementAndGet();
+        if (failures >= FAILURE_THRESHOLD) {
+            circuitOpenTime = System.currentTimeMillis();
+            log.warn("Circuit breaker APERTO dopo {} fallimenti", failures);
+        }
+    }
+
+    // ── STIMA TOKEN ───────────────────────────────────────────────
+    private int estimateTokens(String text) {
+        return text == null ? 0 : text.split("\\s+").length * 4 / 3;
     }
 
     private String today() {
@@ -1166,7 +1265,23 @@ public class ChatController {
         String supabaseUrl = env("SUPABASE_URL", "");
         String supabaseKey = env("SUPABASE_KEY", "");
 
+        // Rate limiting
+            if (isRateLimited(sessionId)) {
+                return ResponseEntity.status(429).body(Map.of(
+                    "error", "Troppe richieste. Attendi un minuto.",
+                    "status", "rate_limited"));
+            }
+
+            // Circuit breaker
+            if (isCircuitOpen()) {
+                return ResponseEntity.status(503).body(Map.of(
+                    "error", "Servizio temporaneamente non disponibile. Riprova tra 30 secondi.",
+                    "status", "circuit_open"));
+            }
+
         try {
+            long startTime = System.currentTimeMillis();
+            String cacheK = "default:" + userMessage.substring(0, Math.min(80, userMessage.length()));
             // Memoria contestuale: usa neuralMemory (locale, veloce) o Supabase
             List<Map<String,String>> history = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
             if (history.isEmpty() && !supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
@@ -1246,6 +1361,21 @@ public class ChatController {
             // Router
             List<String> agents = routeQuery(userMessage, baseUrl, apiKey, model);
             log.info("Agenti: {} | Web: {} | Session: {}", agents, webData != null, sessionId);
+
+            // Check cache per risposta identica
+            cacheK = cacheKey(userMessage, agents.isEmpty() ? "auto" : agents.get(0));
+            String cachedResp = getCached(cacheK);
+            if (cachedResp != null) {
+                log.info("Risposta dalla cache per: {}", userMessage.substring(0, Math.min(40, userMessage.length())));
+                saveMessages(sessionId, userMessage, cachedResp, supabaseUrl, supabaseKey);
+                Map<String,Object> cResp = new HashMap<>();
+                cResp.put("response", cachedResp);
+                cResp.put("responseForVoice", cleanTextForTTS(cachedResp));
+                cResp.put("status", "ok_cached");
+                cResp.put("sessionId", sessionId);
+                cResp.put("cacheHit", true);
+                return ResponseEntity.ok(cResp);
+            }
 
             // Esecuzione agenti con apprendimento adattivo + ottimizzazione quantistica
             List<String> outputs = new ArrayList<>();
@@ -1336,6 +1466,17 @@ public class ChatController {
 
             } catch (Exception e) { log.warn("Advanced pipeline: {}", e.getMessage()); }
 
+            // Salva in cache
+            putCache(cacheK, finalResponse);
+
+            // Registra metriche
+            long elapsed = System.currentTimeMillis() - startTime;
+            totalResponseTimeMs.addAndGet(elapsed);
+            totalTokensEstimate.addAndGet(estimateTokens(userMessage) + estimateTokens(finalResponse));
+            recordSuccess();
+            log.info("Risposta generata in {}ms | tokens stimati: {} | cache: {}/{}",
+                elapsed, estimateTokens(finalResponse), cacheHits.get(), totalRequests.get());
+
             saveMessages(sessionId, userMessage, finalResponse, supabaseUrl, supabaseKey);
 
             // Stats profilo appreso
@@ -1355,6 +1496,7 @@ public class ChatController {
 
         } catch (Exception e) {
             log.error("Errore: {}", e.getMessage());
+            recordFailure();
             try {
                 String fallback = callLLM(coreSystem(), userMessage, new ArrayList<>(), baseUrl, apiKey, model, 2000);
                 Map<String,Object> fbResp=new HashMap<>();fbResp.put("response",fallback);fbResp.put("responseForVoice",cleanTextForTTS(fallback));fbResp.put("status","fallback");fbResp.put("sessionId",sessionId);return ResponseEntity.ok(fbResp);
@@ -1591,18 +1733,49 @@ public class ChatController {
         return ResponseEntity.ok(Map.of("supabaseUrl", env("SUPABASE_URL",""), "supabaseKey", env("SUPABASE_KEY","")));
     }
 
+    @GetMapping("/metrics")
+    public ResponseEntity<Object> metrics() {
+        long avgMs = totalRequests.get() > 0 ?
+            totalResponseTimeMs.get() / Math.max(1, totalRequests.get()) : 0;
+        double cacheHitRate = totalRequests.get() > 0 ?
+            (double)cacheHits.get() / totalRequests.get() * 100 : 0;
+        Map<String,Object> m = new HashMap<>();
+        m.put("totalRequests",   totalRequests.get());
+        m.put("cacheHits",       cacheHits.get());
+        m.put("cacheHitRate",    String.format("%.1f%%", cacheHitRate));
+        m.put("cacheSize",       responseCache.size());
+        m.put("avgResponseMs",   avgMs);
+        m.put("tokensEstimate",  totalTokensEstimate.get());
+        m.put("learningCycles",  learningCycles.get());
+        m.put("metaEpoch",       metaEpoch.get());
+        m.put("knowledgeNodes",  knowledgeGraph.size());
+        m.put("circuitBreaker",  isCircuitOpen() ? "OPEN" : "closed");
+        m.put("failureCount",    failureCount.get());
+        m.put("agentUsage",      agentUsage);
+        m.put("date",            today());
+        return ResponseEntity.ok(m);
+    }
+
         @GetMapping("/health")
     public ResponseEntity<Map<String,String>> health() {
+        long avgMs = totalRequests.get() > 0 ?
+            totalResponseTimeMs.get() / totalRequests.get() : 0;
         Map<String,String> r = new java.util.LinkedHashMap<>();
-        r.put("status",    "online");
-        r.put("model",     env("AI_MODEL","llama-3.3-70b-versatile"));
-        r.put("agents",    "148 agenti + 12 motori esclusivi");
-        r.put("features",  "quantum,neural,emotion,temporal,dream,socratic,adversarial");
-        r.put("webSearch", !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled");
-        r.put("images",    "enabled (Pollinations+HF)");
-        r.put("supabase",  !env("SUPABASE_URL","").isEmpty() ? "connected" : "off");
-        r.put("quantum",   "32 qubit, Hadamard+CNOT");
-        r.put("date",      today());
+        r.put("status",        "online");
+        r.put("version",       "4.0");
+        r.put("model",         env("AI_MODEL","llama-3.3-70b-versatile"));
+        r.put("agents",        "148 agenti + 12 motori esclusivi");
+        r.put("features",      "cache,rateLimit,circuitBreaker,quantum,neural,emotion,temporal,dream");
+        r.put("webSearch",     !env("TAVILY_API_KEY","").isEmpty() ? "enabled" : "disabled");
+        r.put("images",        "enabled (Pollinations+HF)");
+        r.put("supabase",      !env("SUPABASE_URL","").isEmpty() ? "connected" : "off");
+        r.put("totalRequests", String.valueOf(totalRequests.get()));
+        r.put("cacheHits",     String.valueOf(cacheHits.get()));
+        r.put("cacheSize",     String.valueOf(responseCache.size()));
+        r.put("avgResponseMs", String.valueOf(avgMs));
+        r.put("tokensEstimate",String.valueOf(totalTokensEstimate.get()));
+        r.put("circuitBreaker",isCircuitOpen() ? "OPEN" : "closed");
+        r.put("date",          today());
         return ResponseEntity.ok(r);
     }
 }
