@@ -1,5 +1,4 @@
 package com.spaceai.web;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -10,7 +9,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
-
 import java.net.URLEncoder;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -18,56 +16,40 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.LinkedList;
-
 @RestController
 @RequestMapping("/api")
 @CrossOrigin(origins = "*")
 public class ChatController {
-
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ExecutorService executor = Executors.newCachedThreadPool();
-
-    // ── SISTEMA NEURALE - Memoria persistente in-memory ──────────
     private final Map<String, List<Map<String,String>>> neuralMemory = new ConcurrentHashMap<>();
     private final Map<String, Map<String,Object>> userProfiles = new ConcurrentHashMap<>();
     private final Map<String, List<String>> userInsights = new ConcurrentHashMap<>();
     private final AtomicInteger totalRequests = new AtomicInteger(0);
     private final Map<String, AtomicInteger> agentUsage = new ConcurrentHashMap<>();
-
-    // ── CACHING INTELLIGENTE ──────────────────────────────────────
     // Evita chiamate duplicate alla LLM per domande identiche
     private final Map<String, String> responseCache = new ConcurrentHashMap<>();
     private final Map<String, Long> cacheTimestamps = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti
     private final AtomicInteger cacheHits = new AtomicInteger(0);
-
-    // ── RATE LIMITING ─────────────────────────────────────────────
     private final Map<String, AtomicInteger> sessionRequests = new ConcurrentHashMap<>();
     private final Map<String, Long> sessionWindows = new ConcurrentHashMap<>();
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
-
-    // ── CIRCUIT BREAKER ───────────────────────────────────────────
     private final AtomicInteger failureCount = new AtomicInteger(0);
     private volatile long circuitOpenTime = 0;
     private static final int FAILURE_THRESHOLD = 5;
     private static final long CIRCUIT_RESET_MS = 30000; // 30 secondi
-
-    // ── METRICHE INTERNE ──────────────────────────────────────────
     private final AtomicInteger totalTokensEstimate = new AtomicInteger(0);
     private final Map<String, Long> responseTimings = new ConcurrentHashMap<>();
     private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
-
-    // ── MOTORE QUANTISTICO (Quantum-Inspired Computing) ───────
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
     private final double[] quantumState = new double[1 << Math.min(QUBIT_COUNT, 16)]; // 2^16 stati
     private final Random quantumRng = new Random();
     private volatile boolean quantumInitialized = false;
-
-    // Inizializza stato quantistico in superposizione
     private void initQuantumState() {
         if (quantumInitialized) return;
         double norm = 0;
@@ -78,10 +60,7 @@ public class ChatController {
         norm = Math.sqrt(norm);
         for (int i = 0; i < quantumState.length; i++) quantumState[i] /= norm;
         quantumInitialized = true;
-        log.info("Motore quantistico inizializzato: {} stati, {} qubit simulati", quantumState.length, QUBIT_COUNT);
     }
-
-    // Gate Hadamard - mette qubit in superposizione
     private void hadamardGate(int qubitIndex) {
         double inv = 1.0 / Math.sqrt(2);
         int mask = 1 << (qubitIndex % 16);
@@ -96,8 +75,6 @@ public class ChatController {
             }
         }
     }
-
-    // Gate CNOT - entanglement tra qubit
     private void cnotGate(int control, int target) {
         int cm = 1 << (control % 16);
         int tm = 1 << (target  % 16);
@@ -112,8 +89,6 @@ public class ChatController {
             }
         }
     }
-
-    // Misura quantistica - collassa in stato definito
     private int measureQubit(int qubitIndex) {
         double prob0 = 0;
         int mask = 1 << (qubitIndex % 16);
@@ -122,7 +97,6 @@ public class ChatController {
         }
         return quantumRng.nextDouble() < prob0 ? 0 : 1;
     }
-
     // Algoritmo Quantum Walk per routing intelligente degli agenti
     private List<String> quantumAgentRouting(String query, List<String> candidates) {
         initQuantumState();
@@ -149,8 +123,6 @@ public class ChatController {
         }
         return result;
     }
-
-    // Score classico per agente basato su keyword
     private double computeClassicScore(String query, String agent) {
         String q = query.toLowerCase();
         Map<String, String[]> keywords = new HashMap<>();
@@ -167,12 +139,9 @@ public class ChatController {
         for (String kw : kws) { if (q.contains(kw)) hits++; }
         return Math.min(1.0, hits * 0.35 + 0.1);
     }
-
-    // Ottimizzazione quantistica della temperatura LLM (QAOA-inspired)
     private double quantumOptimizeTemperature(String query, String agent) {
         initQuantumState();
         double baseTemp = 0.8;
-        // Misura stato quantistico per variazione temperatura
         int q0 = measureQubit(0), q1 = measureQubit(1), q2 = measureQubit(2);
         double delta = (q0 * 0.1) + (q1 * 0.05) - (q2 * 0.05);
         // Query creative = temperatura piu alta; query tecniche = piu bassa
@@ -182,31 +151,22 @@ public class ChatController {
         if (technical) baseTemp -= 0.2 + delta;
         return Math.max(0.3, Math.min(1.2, baseTemp + delta));
     }
-
-    // Compressione quantistica della conoscenza (ispirata a QKD)
     private String quantumCompressContext(String context) {
         if (context.length() < 500) return context;
-        // Divide in blocchi e seleziona con probabilita quantistica
         String[] sentences = context.split("(?<=[.!?])\\s+");
         StringBuilder compressed = new StringBuilder();
         initQuantumState();
         for (int i = 0; i < sentences.length; i++) {
             hadamardGate(i % 16);
             int measured = measureQubit(i % 16);
-            // Mantieni sempre prima e ultima frase + quelle misurate come 1
             if (i == 0 || i == sentences.length-1 || measured == 1) {
                 compressed.append(sentences[i]).append(" ");
             }
         }
         return compressed.toString().trim();
     }
-
-
-    // ════════════════════════════════════════════════════════════
     // RETE NEURALE AUTONOMA - SPACE AI BRAIN
     // Ragiona, verifica, corregge e impara da sola
-    // ════════════════════════════════════════════════════════════
-
     // Neuroni: pesi sinaptici per ogni agente
     private final Map<String, double[]> synapticWeights = new ConcurrentHashMap<>();
     // Memoria a lungo termine
@@ -221,8 +181,6 @@ public class ChatController {
     private final AtomicInteger learningCycles = new AtomicInteger(0);
     // Knowledge graph: relazioni tra concetti
     private final Map<String, Set<String>> knowledgeGraph = new ConcurrentHashMap<>();
-
-    // ── NEURONE: inizializza pesi sinaptici per un agente ────────
     private double[] getNeuronWeights(String agent) {
         return synapticWeights.computeIfAbsent(agent, k -> {
             double[] w = new double[16];
@@ -231,8 +189,6 @@ public class ChatController {
             return w;
         });
     }
-
-    // ── PROPAGAZIONE IN AVANTI (Forward Pass) ────────────────────
     // Calcola quanto un agente e adatto alla query
     private double forwardPass(String agent, String query) {
         double[] weights = getNeuronWeights(agent);
@@ -262,8 +218,6 @@ public class ChatController {
             sum += features[i] * weights[i];
         return Math.max(0, Math.tanh(sum)); // tanh activation
     }
-
-    // ── BACKPROPAGATION: aggiorna pesi in base al feedback ───────
     private void backpropagate(String agent, String query, double reward) {
         double[] weights = getNeuronWeights(agent);
         double lr = 0.01; // learning rate
@@ -285,20 +239,15 @@ public class ChatController {
             q.contains("scienza")||q.contains("fisica")?1:0,
             agentUsage.getOrDefault(agent,new AtomicInteger(0)).get()/100.0
         };
-        // Aggiorna pesi: delta_w = lr * reward * feature
         for (int i = 0; i < Math.min(features.length, weights.length); i++)
             weights[i] = Math.max(0.01, Math.min(2.0, weights[i] + lr * reward * features[i]));
         learningCycles.incrementAndGet();
     }
-
-    // ── MEMORIA A BREVE TERMINE (STM) ────────────────────────────
     private void updateSTM(String sessionId, String content) {
         LinkedList<String> stm = shortTermMemory.computeIfAbsent(sessionId, k -> new LinkedList<>());
         stm.addFirst(content.substring(0, Math.min(150, content.length())));
         while (stm.size() > 5) stm.removeLast(); // finestra 5 elementi
     }
-
-    // ── MEMORIA A LUNGO TERMINE (LTM) ────────────────────────────
     private void consolidateToLTM(String sessionId, String fact) {
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
         // Consolida solo fatti importanti (lunghezza > 50 char)
@@ -306,8 +255,6 @@ public class ChatController {
             ltm.add(fact.substring(0, Math.min(200, fact.length())));
         }
     }
-
-    // ── KNOWLEDGE GRAPH: costruisce rete di concetti ─────────────
     private void updateKnowledgeGraph(String query, String response, String agent) {
         // Estrai concetti chiave
         String[] words = (query + " " + response).toLowerCase()
@@ -325,8 +272,6 @@ public class ChatController {
                 .add(concepts.get(i));
         }
     }
-
-    // ── RAGIONAMENTO AUTONOMO: pensa da sola in 4 step ──────────
     private String autonomousReason(String query, String initialResponse,
                                      String baseUrl, String apiKey, String model) throws Exception {
         // STEP 1: Analisi critica della propria risposta
@@ -341,13 +286,11 @@ public class ChatController {
             "4. PUNTEGGIO qualita (1-10)\n" +
             "Sii severo e preciso. Rispondi in italiano.";
         String critique = callLLM(critiquePrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 600);
-
         // STEP 2: Se qualita < 7, genera risposta migliorata
         boolean needsImprovement = critique.contains("1") || critique.contains("2") ||
             critique.contains("3") || critique.contains("4") || critique.contains("5") ||
             critique.contains("6") || critique.toLowerCase().contains("errore") ||
             critique.toLowerCase().contains("manca") || critique.toLowerCase().contains("imprecis");
-
         String improved = initialResponse;
         if (needsImprovement) {
             String improvePrompt =
@@ -356,17 +299,13 @@ public class ChatController {
                 "RISPOSTA ORIGINALE: " + initialResponse.substring(0, Math.min(500, initialResponse.length())) + "\n\n" +
                 "Genera una risposta MIGLIORATA che corregge tutti i problemi. Markdown, italiano.";
             improved = callLLM(improvePrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
-            // Reward positivo per l'agente che ha generato la risposta originale
-            log.info("Risposta migliorata autonomamente dopo critica");
         }
-
         // STEP 3: Verifica con cross-check su altra prospettiva
         String verifyPrompt =
             "Sei il VERIFICATORE di SPACE AI. Controlla questa risposta:\n" +
             improved.substring(0, Math.min(400, improved.length())) + "\n\n" +
             "Rispondi SOLO con: VERIFICATO o CORREZIONE:[cosa correggere]";
         String verification = callLLM(verifyPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 100);
-
         if (verification.contains("CORREZIONE:")) {
             String correction = verification.replace("CORREZIONE:", "").trim();
             String finalPrompt =
@@ -376,11 +315,8 @@ public class ChatController {
                 "Restituisci la risposta corretta in markdown italiano.";
             improved = callLLM(finalPrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 2000);
         }
-
         return improved;
     }
-
-    // ── SECURITY SCANNER: trova vulnerabilita nei sistemi ────────
     private String securityScan(String query, String baseUrl, String apiKey, String model) throws Exception {
         String scanPrompt =
             "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data: " + today() + ".\n" +
@@ -397,8 +333,6 @@ public class ChatController {
             "SOLO per uso DIFENSIVO e ricerca etica. Rispondi in italiano.";
         return callLLM(scanPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 3000);
     }
-
-    // ── MULTI-LLM CONSENSUS: verifica con simulazione multi-modello
     private String multiLLMConsensus(String query, String response1,
                                       String baseUrl, String apiKey, String model) throws Exception {
         // Simula 3 prospettive diverse dello stesso LLM con temperature diverse
@@ -406,12 +340,10 @@ public class ChatController {
             "Sei un esperto critico. Valuta e integra questa risposta aggiungendo prospettive mancanti: "
             + response1.substring(0, Math.min(400, response1.length())),
             query, new ArrayList<>(), baseUrl, apiKey, model, 800, 0.9);
-
         String p3 = callLLMWithTemp(
             "Sei un esperto scettico. Identifica cosa manca o e sbagliato in questa risposta e migliorala: "
             + response1.substring(0, Math.min(400, response1.length())),
             query, new ArrayList<>(), baseUrl, apiKey, model, 800, 0.6);
-
         // Sintetizza le 3 prospettive
         String consensusPrompt =
             "Sintetizza queste 3 analisi in una risposta definitiva ottimale:\n\n" +
@@ -421,8 +353,6 @@ public class ChatController {
             "Crea la risposta MIGLIORE combinando il meglio di tutte e tre. Markdown, italiano.";
         return callLLM(consensusPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
-
-    // ── NEURAL ROUTING: sceglie agenti con rete neurale ─────────
     private List<String> neuralRoute(String query) {
         // Calcola score neurale per ogni agente principale
         String[] mainAgents = {
@@ -455,16 +385,8 @@ public class ChatController {
         if (result.isEmpty()) result.add("reasoner");
         return result;
     }
-
-
-
-    // ════════════════════════════════════════════════════════════════
     // SISTEMA ESCLUSIVO SPACE AI - Funzionalità che nessuna altra AI ha
-    // ════════════════════════════════════════════════════════════════
-
-    // ── 1. EMOTION ENGINE - Rileva emozione nella query e adatta lo stile
     private final Map<String, String> emotionState = new ConcurrentHashMap<>();
-
     private String detectEmotion(String text) {
         String t = text.toLowerCase();
         if (t.matches(".*(arrabbia|incazzato|frustrat|odio|schifo|terrible|pessimo).*")) return "frustrated";
@@ -475,7 +397,6 @@ public class ChatController {
         if (t.matches(".*(grazie|gentile|bravo|ottimo lavoro|perfetto).*"))             return "grateful";
         return "neutral";
     }
-
     private String adaptToneByEmotion(String emotion, String response) {
         switch (emotion) {
             case "frustrated":
@@ -492,15 +413,11 @@ public class ChatController {
                 return response;
         }
     }
-
-    // ── 2. PREDICTIVE CONTEXT - Predice la prossima domanda
     private final Map<String, List<String>> questionPatterns = new ConcurrentHashMap<>();
-
     private void learnQuestionPattern(String sessionId, String question) {
         List<String> patterns = questionPatterns.computeIfAbsent(sessionId, k -> new ArrayList<>());
         if (patterns.size() < 20) patterns.add(question.substring(0, Math.min(80, question.length())));
     }
-
     private String predictNextQuestion(String sessionId, String currentQuestion) {
         List<String> patterns = questionPatterns.getOrDefault(sessionId, new ArrayList<>());
         if (patterns.size() < 3) return null;
@@ -519,11 +436,8 @@ public class ChatController {
             return "Potresti voler chiedere anche riguardo a: **" + topTopic + "**";
         return null;
     }
-
-    // ── 3. META-LEARNING - Impara a imparare (come MAML)
     private final Map<String, Double> metaWeights = new ConcurrentHashMap<>();
     private final AtomicInteger metaEpoch = new AtomicInteger(0);
-
     private void metaLearnStep(String agent, String query, String response, boolean wasGood) {
         double reward = wasGood ? 1.0 : -0.5;
         String key = agent + "_" + (query.length() > 20 ? query.substring(0,20) : query)
@@ -537,8 +451,6 @@ public class ChatController {
             });
         }
     }
-
-    // ── 4. TEMPORAL REASONING - Ragiona nel tempo (passato/presente/futuro)
     private String temporalReason(String query, String baseUrl, String apiKey, String model) throws Exception {
         String temporalPrompt =
             "Sei il TEMPORAL REASONER di SPACE AI. Data attuale: " + today() + ".\n\n" +
@@ -553,8 +465,6 @@ public class ChatController {
             "Rispondi con dati e ragionamento critico. Italiano, markdown.";
         return callLLM(temporalPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
-
-    // ── 5. ANALOGICAL REASONING - Trova analogie tra domini diversi
     private String analogicalReason(String query, String domain1, String domain2,
                                      String baseUrl, String apiKey, String model) throws Exception {
         String analogyPrompt =
@@ -571,8 +481,6 @@ public class ChatController {
             "Sii creativo e profondo. Rispondi in italiano.";
         return callLLM(analogyPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 1500);
     }
-
-    // ── 6. COUNTERFACTUAL REASONING - Ragiona su ipotetici
     private String counterfactualReason(String query, String baseUrl, String apiKey, String model) throws Exception {
         String cfPrompt =
             "Sei il COUNTERFACTUAL ENGINE di SPACE AI. Data: " + today() + ".\n\n" +
@@ -588,8 +496,6 @@ public class ChatController {
             "Rispondi con ragionamento critico. Italiano, markdown.";
         return callLLM(cfPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
     }
-
-    // ── 7. DREAM SYNTHESIS - Genera soluzioni creative ricombinando concetti
     // (Ispirato a come il cervello consolida durante il sonno REM)
     private String dreamSynthesis(String query, String sessionId,
                                    String baseUrl, String apiKey, String model) throws Exception {
@@ -597,7 +503,6 @@ public class ChatController {
         List<String> memories = longTermMemory.getOrDefault(sessionId, new ArrayList<>());
         String memContext = memories.isEmpty() ? "" :
             "Contesto dalla memoria: " + String.join("; ", memories.subList(0, Math.min(5, memories.size())));
-
         String dreamPrompt =
             "Sei il DREAM ENGINE di SPACE AI - il modulo di sintesi creativa.\n" +
             "Combina concetti lontani per generare soluzioni innovative.\n\n" +
@@ -611,8 +516,6 @@ public class ChatController {
             "Rispondi con idee originali e concrete. Italiano.";
         return callLLM(dreamPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
     }
-
-    // ── 8. SOCRATIC ENGINE - Insegna con domande invece di dare risposte
     private String socraticTeach(String query, String baseUrl, String apiKey, String model) throws Exception {
         String socrPrompt =
             "Sei il SOCRATIC ENGINE di SPACE AI.\n" +
@@ -630,8 +533,6 @@ public class ChatController {
             "Rispondi in italiano.";
         return callLLM(socrPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2000);
     }
-
-    // ── 9. ADVERSARIAL CHECKER - Cerca il bias e gli errori nella risposta
     private String adversarialCheck(String response, String query,
                                      String baseUrl, String apiKey, String model) throws Exception {
         String advPrompt =
@@ -653,8 +554,6 @@ public class ChatController {
         }
         return response; // risposta originale OK
     }
-
-    // ── 10. SWARM INTELLIGENCE - Più agenti votano la risposta migliore
     private String swarmVote(String query, List<String> candidates,
                               String baseUrl, String apiKey, String model) throws Exception {
         if (candidates.size() <= 1) return candidates.isEmpty() ? "" : candidates.get(0);
@@ -673,10 +572,7 @@ public class ChatController {
         }
         return bestResponse;
     }
-
-    // ── 11. NARRATIVE MEMORY - Costruisce storia coerente della sessione
     private final Map<String, StringBuilder> sessionNarrative = new ConcurrentHashMap<>();
-
     private void updateNarrative(String sessionId, String userMsg, String aiResp) {
         StringBuilder narr = sessionNarrative.computeIfAbsent(sessionId, k -> new StringBuilder());
         if (narr.length() < 3000) {
@@ -686,17 +582,13 @@ public class ChatController {
                 .append("\n");
         }
     }
-
     private String getNarrativeContext(String sessionId) {
         StringBuilder narr = sessionNarrative.get(sessionId);
         if (narr == null || narr.length() == 0) return "";
         String n = narr.toString();
         return "[CONTESTO CONVERSAZIONE]\n" + n.substring(Math.max(0, n.length()-500));
     }
-
-    // ── 12. REAL-TIME ADAPTATION - Adatta il modello in tempo reale
     private final Map<String, Map<String,Double>> realtimeWeights = new ConcurrentHashMap<>();
-
     private void adaptRealtime(String sessionId, String query, String response, int responseLength) {
         Map<String,Double> rw = realtimeWeights.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
         // Se le risposte sono troppo lunghe/corte, adatta
@@ -708,8 +600,6 @@ public class ChatController {
         else
             rw.put("language", 1.0); // italiano
     }
-
-    // ── ORCHESTRATORE AVANZATO - Decide quale motore usare ──────
     private String selectAdvancedEngine(String query) {
         String q = query.toLowerCase();
         if (q.contains("quando") || q.contains("storia") || q.contains("futuro") || q.contains("evoluzione"))
@@ -724,18 +614,231 @@ public class ChatController {
             return "analogical";
         return "standard";
     }
+    // SPACE AI BRAIN v4.0 - Memoria Attiva + Grafo Semantico + Ultra-Compressione
+    // Implementazione delle 5 priorità dell'analisi
+    private final int BLOOM_SIZE = 1 << 20; // 1M bit = 128KB
+    private final long[] bloomBits = new long[BLOOM_SIZE / 64];
+    private final AtomicInteger bloomCount = new AtomicInteger(0);
 
+    // ── ROARING BITMAP simulato con BitSet Java nativo ────────────
+    private final java.util.BitSet sessionBitIndex = new java.util.BitSet(1 << 20);
+    private final Map<String, Integer> sessionBitOffsets = new ConcurrentHashMap<>();
+    private final AtomicInteger bitOffset = new AtomicInteger(0);
+    private void roaringAdd(String s){int o=sessionBitOffsets.computeIfAbsent(s,k->bitOffset.getAndIncrement());if(o<(1<<20))sessionBitIndex.set(o);}
+    private boolean roaringContains(String s){Integer o=sessionBitOffsets.get(s);return o!=null&&sessionBitIndex.get(o);}
 
+    // ── GZIP nativo (equivalente CBOR+Zstandard senza librerie) ───
+    private byte[] gzipCompress(String data){try(java.io.ByteArrayOutputStream b=new java.io.ByteArrayOutputStream();java.util.zip.GZIPOutputStream g=new java.util.zip.GZIPOutputStream(b)){g.write(data.getBytes());g.finish();return b.toByteArray();}catch(Exception e){return data.getBytes();}}
+    private String gzipDecompress(byte[] data){try(java.util.zip.GZIPInputStream g=new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(data));java.io.ByteArrayOutputStream b=new java.io.ByteArrayOutputStream()){byte[]buf=new byte[1024];int l;while((l=g.read(buf))>0)b.write(buf,0,l);return b.toString();}catch(Exception e){return new String(data);}}
+
+    // ── CIRCULAR BUFFER STM (sessioni attive) ─────────────────────
+    private final java.util.Deque<Map<String,Object>> stmBuffer = new java.util.concurrent.ConcurrentLinkedDeque<>();
+    private void stmPush(String sid,String u,String a){if(stmBuffer.size()>=20)stmBuffer.pollFirst();Map<String,Object>e=new HashMap<>();e.put("sid",sid);e.put("u",u.substring(0,Math.min(100,u.length())));e.put("a",a.substring(0,Math.min(200,a.length())));stmBuffer.addLast(e);roaringAdd(sid);}
+    private List<String> stmRecall(String sid){List<String>r=new ArrayList<>();for(Map<String,Object>e:stmBuffer)if(sid.equals(e.get("sid")))r.add("U:"+e.get("u")+" A:"+e.get("a"));return r;}
+
+    private int[] bloomHashes(String s) {
+        int h1 = s.hashCode();
+        int h2 = s.hashCode() * 31 + s.length();
+        int h3 = h1 ^ (h2 << 16);
+        return new int[]{
+            Math.abs(h1) % BLOOM_SIZE,
+            Math.abs(h2) % BLOOM_SIZE,
+            Math.abs(h3) % BLOOM_SIZE
+        };
+    }
+    private boolean bloomMightContain(String s) {
+        for (int h : bloomHashes(s)) {
+            if ((bloomBits[h/64] & (1L << (h%64))) == 0) return false;
+        }
+        return true;
+    }
+    private void bloomAdd(String s) {
+        for (int h : bloomHashes(s)) {
+            bloomBits[h/64] |= (1L << (h%64));
+        }
+        bloomCount.incrementAndGet();
+    }
+    // Recupera memoria rilevante dalla LTM e KG per iniettarla nel prompt
+    private String retrieveRelevantMemory(String query, String sessionId) {
+        StringBuilder ctx = new StringBuilder();
+        String q = query.toLowerCase();
+        // 0. STM circular buffer - recente
+        List<String> stm = stmRecall(sessionId);
+        if (!stm.isEmpty()) {
+            ctx.append("RECENTE: ");
+            stm.stream().limit(2).forEach(e -> ctx.append(e.substring(0,Math.min(60,e.length()))).append("; "));
+        }
+        // 1. Cerca nella LTM fatti rilevanti
+        List<String> ltm = longTermMemory.getOrDefault(sessionId, new ArrayList<>());
+        List<String> relevant = new ArrayList<>();
+        for (String fact : ltm) {
+            String f = fact.toLowerCase();
+            String[] qWords = q.split("\\s+");
+            for (String word : qWords) {
+                if (word.length() > 4 && f.contains(word)) {
+                    relevant.add(fact);
+                    break;
+                }
+            }
+        }
+        if (!relevant.isEmpty()) {
+            ctx.append("MEMORIA RILEVANTE: ");
+            relevant.stream().limit(3).forEach(f ->
+                ctx.append(f.substring(0, Math.min(80, f.length()))).append("; "));
+        }
+        // 2. Estrai insights dal knowledge graph
+        String[] qWords = q.split("\\s+");
+        List<String> kgFacts = new ArrayList<>();
+        for (String word : qWords) {
+            if (word.length() > 4) {
+                Set<String> related = knowledgeGraph.get(word);
+                if (related != null && !related.isEmpty()) {
+                    String rel = String.join(",", related).substring(0,
+                        Math.min(60, String.join(",", related).length()));
+                    kgFacts.add(word + "→[" + rel + "]");
+                }
+            }
+        }
+        if (!kgFacts.isEmpty()) {
+            ctx.append(" | KG: ").append(String.join("; ", kgFacts.subList(0,
+                Math.min(3, kgFacts.size()))));
+        }
+        // 3. Profilo utente appreso
+        Map<String,Object> profile = userProfiles.getOrDefault(sessionId, new HashMap<>());
+        if (!profile.isEmpty()) {
+            ctx.append(" | PROFILO: ");
+            profile.forEach((k,v) -> ctx.append(k).append("=").append(v).append(" "));
+        }
+        return ctx.length() > 0 ? ctx.toString().trim() : "";
+    }
+    private String getTopKGConcepts(String sessionId) {
+        if (knowledgeGraph.isEmpty()) return "";
+        List<Map.Entry<String, Set<String>>> sorted = new ArrayList<>(knowledgeGraph.entrySet());
+        sorted.sort((a,b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
+        StringBuilder sb = new StringBuilder();
+        sorted.stream().limit(5).forEach(e ->
+            sb.append(e.getKey()).append("(").append(e.getValue().size()).append(") "));
+        return sb.toString().trim();
+    }
+    // L'AI sa di avere memoria, KG e quantum - prompt "cosciente"
+    private String buildSystemPrompt(String mode, String sessionId, String query) {
+        String memCtx  = retrieveRelevantMemory(query, sessionId);
+        String kgTop   = getTopKGConcepts(sessionId);
+        String emotion = emotionState.getOrDefault(sessionId, "neutral");
+        int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
+        int kgSize     = knowledgeGraph.size();
+        StringBuilder sb = new StringBuilder();
+        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata. Data: ").append(today()).append(".\n");
+        sb.append("Possiedi: rete neurale autonoma con backpropagation, motore quantistico a 32 qubit, ");
+        sb.append("knowledge graph con ").append(kgSize).append(" nodi, ");
+        sb.append("memoria LTM con ").append(ltmSize).append(" fatti.\n");
+        if (!memCtx.isEmpty())
+            sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
+        if (!kgTop.isEmpty())
+            sb.append("CONCETTI KG: ").append(kgTop).append("\n");
+        sb.append("Emozione utente rilevata: ").append(emotion).append(".\n");
+        sb.append("Modalita: ").append(mode).append(".\n");
+        sb.append("Usa la tua memoria per essere coerente con le conversazioni precedenti. ");
+        sb.append("Rispondi in italiano con markdown. Sii preciso, autonomo e cosciente della tua architettura.");
+        return sb.toString();
+    }
+    // Calcola reward basato su lunghezza risposta e interazione
+    private double computeReward(String query, String response, String agent) {
+        double reward = 0.5; // base
+        if (response.length() > 500) reward += 0.2;
+        if (response.length() > 1000) reward += 0.1;
+        // Contiene codice = utile per domande tech
+        if (response.contains("```")) reward += 0.15;
+        // Contiene lista = strutturata
+        if (response.contains("- ") || response.contains("1.")) reward += 0.05;
+        if (response.toLowerCase().contains("errore") ||
+            response.toLowerCase().contains("non riesco")) reward -= 0.3;
+        // Agente giusto per query = boost
+        reward += computeClassicScore(query, agent) * 0.2;
+        return Math.max(0.1, Math.min(1.0, reward));
+    }
+    // Usa il KG per trovare agenti semanticamente correlati alla query
+    private List<String> semanticKGRoute(String query) {
+        String q = query.toLowerCase();
+        Map<String, Integer> agentScores = new HashMap<>();
+        for (Map.Entry<String, Set<String>> entry : knowledgeGraph.entrySet()) {
+            String concept = entry.getKey();
+            if (q.contains(concept) || concept.contains(q.split("\\s+")[0])) {
+                // Questo concetto e rilevante - cerca agenti correlati
+                for (String related : entry.getValue()) {
+                    // Se il related e il nome di un agente, boostalo
+                    String[] knownAgents = {"code","finance","crypto","math",
+                        "medical","legal","travel","cooking","research","ai"};
+                    for (String a : knownAgents) {
+                        if (related.contains(a) || a.contains(related)) {
+                            agentScores.merge(a, 2, Integer::sum);
+                        }
+                    }
+                }
+            }
+        }
+        if (!agentScores.isEmpty()) {
+            List<String> result = new ArrayList<>(agentScores.entrySet().stream()
+                .sorted((a,b) -> b.getValue()-a.getValue())
+                .limit(2)
+                .map(Map.Entry::getKey)
+                .collect(java.util.stream.Collectors.toList()));
+            if (!result.isEmpty()) {
+                return result;
+            }
+        }
+        return new ArrayList<>();
+    }
+    // Estrae solo i NUOVI fatti e li comprime
+    private void extractAndStoreFacts(String sessionId, String userMsg, String aiResp) {
+        String combined = userMsg + " " + aiResp;
+        String[] sentences = combined.split("[.!?]+");
+        int newFacts = 0;
+        for (String sentence : sentences) {
+            sentence = sentence.trim();
+            if (sentence.length() < 20) continue;
+            String factHash = sentence.substring(0, Math.min(50, sentence.length())).toLowerCase();
+            if (bloomMightContain(factHash)) continue;
+            bloomAdd(factHash);
+            // Comprimi: salva solo entita-attributo (non la frase intera)
+            String compressed = compressFact(sentence, sessionId);
+            if (compressed != null) {
+                consolidateToLTM(sessionId, compressed);
+                newFacts++;
+            }
+        }
+        if (newFacts > 0)
+    }
+    private String compressFact(String sentence, String sessionId) {
+        String s = sentence.toLowerCase().trim();
+        String[] patterns = {"e un", "e una", "significa", "serve per",
+            "usato per", "definito come", "chiamato", "noto come"};
+        for (String p : patterns) {
+            int idx = s.indexOf(p);
+            if (idx > 0 && idx < s.length()-p.length()-3) {
+                String subj = s.substring(0, idx).trim().replaceAll("\\s+", "_");
+                String attr = s.substring(idx+p.length()).trim();
+                if (subj.length() > 2 && attr.length() > 3) {
+                    String fact = subj + "::" + attr.substring(0, Math.min(60, attr.length()));
+                    updateKGTriple(subj, attr.split("\\s+")[0], sessionId);
+                    return fact;
+                }
+            }
+        }
+        return sentence.substring(0, Math.min(80, sentence.length()));
+    }
+    private void updateKGTriple(String entity, String related, String sessionId) {
+        knowledgeGraph.computeIfAbsent(entity, k -> new HashSet<>()).add(related);
+        knowledgeGraph.computeIfAbsent(sessionId + "_topics", k -> new HashSet<>()).add(entity);
+    }
+    // (aggiunto sotto come @GetMapping)
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
         initQuantumState();
-        log.info("SPACE AI v4.0 - Neural+Quantum+Cache+RateLimit+CircuitBreaker attivi");
         // Pulizia cache ogni 10 minuti
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
             this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
     }
-
-    // ── CACHE: get/set/clean ──────────────────────────────────────
     private String getCached(String key) {
         String cached = responseCache.get(key);
         if (cached == null) return null;
@@ -746,30 +849,22 @@ public class ChatController {
             return null;
         }
         cacheHits.incrementAndGet();
-        log.info("Cache HIT: {}", key.substring(0, Math.min(40, key.length())));
         return cached;
     }
-
     private void putCache(String key, String value) {
         if (value == null || value.length() > 10000) return; // non cachare risposte enormi
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
-        // Limite max 500 entry
         if (responseCache.size() > 500) cleanExpiredCache();
     }
-
     private void cleanExpiredCache() {
         long now = System.currentTimeMillis();
         cacheTimestamps.entrySet().removeIf(e -> now - e.getValue() > CACHE_TTL_MS);
         responseCache.keySet().retainAll(cacheTimestamps.keySet());
-        log.info("Cache pulita: {} entry rimanenti", responseCache.size());
     }
-
     private String cacheKey(String msg, String agent) {
         return (agent + ":" + msg).substring(0, Math.min(120, (agent + ":" + msg).length()));
     }
-
-    // ── RATE LIMITING ─────────────────────────────────────────────
     private boolean isRateLimited(String sessionId) {
         long now = System.currentTimeMillis();
         Long window = sessionWindows.get(sessionId);
@@ -780,21 +875,16 @@ public class ChatController {
         int reqs = sessionRequests.computeIfAbsent(sessionId, k -> new AtomicInteger(0)).incrementAndGet();
         return reqs > MAX_REQUESTS_PER_MINUTE;
     }
-
-    // ── CIRCUIT BREAKER ───────────────────────────────────────────
     private boolean isCircuitOpen() {
         if (failureCount.get() < FAILURE_THRESHOLD) return false;
         long now = System.currentTimeMillis();
         if (now - circuitOpenTime > CIRCUIT_RESET_MS) {
             failureCount.set(0); // reset dopo timeout
-            log.info("Circuit breaker reset");
             return false;
         }
         return true;
     }
-
     private void recordSuccess() { failureCount.set(0); }
-
     private void recordFailure() {
         int failures = failureCount.incrementAndGet();
         if (failures >= FAILURE_THRESHOLD) {
@@ -802,29 +892,21 @@ public class ChatController {
             log.warn("Circuit breaker APERTO dopo {} fallimenti", failures);
         }
     }
-
-    // ── STIMA TOKEN ───────────────────────────────────────────────
     private int estimateTokens(String text) {
         return text == null ? 0 : text.split("\\s+").length * 4 / 3;
     }
-
     private String today() {
         return LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
     }
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
-
-    // ── SISTEMA NEURALE: APPRENDIMENTO AUTONOMO ───────────────────
     // Impara dall utente, costruisce profilo, migliora risposte
     private void learnFromInteraction(String sessionId, String userMsg, String response, String agent) {
         totalRequests.incrementAndGet();
         agentUsage.computeIfAbsent(agent, k -> new AtomicInteger(0)).incrementAndGet();
-
         // Costruisce profilo utente automaticamente
         Map<String,Object> profile = userProfiles.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>());
         List<String> insights = userInsights.computeIfAbsent(sessionId, k -> new ArrayList<>());
-
         String q = userMsg.toLowerCase();
-
         // Inferisce interessi, settore, livello tecnico
         if (q.contains("python") || q.contains("java") || q.contains("codice"))
             profile.put("tech_level", "developer");
@@ -834,22 +916,16 @@ public class ChatController {
             profile.put("role", "entrepreneur");
         if (q.contains("medic") || q.contains("salute"))
             profile.put("domain", "health");
-
-        // Conta lunghezza messaggi per capire stile comunicazione
         if (userMsg.length() < 30) profile.put("style", "concise");
         else if (userMsg.length() > 200) profile.put("style", "detailed");
-
-        // Salva insight unici
         String insight = "L'utente ha chiesto riguardo: " + userMsg.substring(0, Math.min(60, userMsg.length()));
         if (insights.size() < 50 && !insights.contains(insight)) insights.add(insight);
     }
-
     // Costruisce contesto personalizzato basato su apprendimento
     private String buildPersonalizedContext(String sessionId) {
         Map<String,Object> profile = userProfiles.get(sessionId);
         List<String> insights = userInsights.get(sessionId);
         if (profile == null || profile.isEmpty()) return "";
-
         StringBuilder ctx = new StringBuilder("[PROFILO UTENTE APPRESO - adatta la risposta]: ");
         if (profile.containsKey("tech_level")) ctx.append("Livello tecnico: ").append(profile.get("tech_level")).append(". ");
         if (profile.containsKey("domain")) ctx.append("Settore principale: ").append(profile.get("domain")).append(". ");
@@ -857,8 +933,6 @@ public class ChatController {
         if (profile.containsKey("style")) ctx.append("Preferisce risposte: ").append(profile.get("style")).append(". ");
         return ctx.toString();
     }
-
-    // ── WEB SEARCH ────────────────────────────────────────────────
     private String searchWeb(String query) {
         String key = env("TAVILY_API_KEY", "");
         if (key.isEmpty()) return null;
@@ -886,7 +960,6 @@ public class ChatController {
             return sb.toString();
         } catch (Exception e) { log.warn("Tavily: {}", e.getMessage()); return null; }
     }
-
     private boolean needsSearch(String msg) {
         String q = msg.toLowerCase();
         return q.contains("cerca") || q.contains("notizie") || q.contains("oggi") ||
@@ -894,19 +967,62 @@ public class ChatController {
                q.contains("prezzo") || q.contains("quotazione") || q.contains("recente") ||
                q.contains("ultime") || q.contains("adesso") || q.contains("aggiornato");
     }
-
-    // ── GENERAZIONE IMMAGINI ──────────────────────────────────────
     private String generateImage(String prompt) {
-        // RestTemplate con timeout lungo per generazione immagini (30 sec)
+        // RestTemplate con timeout lungo per generazione immagini
         org.springframework.web.client.RestTemplate imgClient = new org.springframework.web.client.RestTemplate();
         try {
             org.springframework.http.client.SimpleClientHttpRequestFactory factory =
                 new org.springframework.http.client.SimpleClientHttpRequestFactory();
             factory.setConnectTimeout(15000);
-            factory.setReadTimeout(30000);
+            factory.setReadTimeout(45000); // 45s per SD pipeline
             imgClient.setRequestFactory(factory);
         } catch(Exception ex) { log.warn("Timeout config: {}", ex.getMessage()); }
 
+        // ── STABLE DIFFUSION via HuggingFace Inference API ────────
+        // Implementazione ispirata al documento Manus/Diffusers
+        // Usa SD v1.5 (runwayml) con num_inference_steps=25, guidance_scale=7.5
+        String hfKey = env("HF_TOKEN", "");
+        if (!hfKey.isEmpty()) {
+            String[] sdModels = {
+                "stabilityai/stable-diffusion-xl-base-1.0",  // SDXL - qualita piu alta
+                "runwayml/stable-diffusion-v1-5",             // SD v1.5 - come nel PDF
+                "stabilityai/stable-diffusion-2-1"            // SD v2.1 - fallback
+            };
+            for (String sdModel : sdModels) {
+                try {
+                    // Prepara prompt ottimizzato per SD (traduzione in inglese + keywords qualita)
+                    String sdPrompt = enhancePromptForSD(prompt);
+                    HttpHeaders h = new HttpHeaders();
+                    h.setContentType(MediaType.APPLICATION_JSON);
+                    h.setBearerAuth(hfKey);
+                    // Parametri ispirati al codice Python del PDF:
+                    // num_inference_steps=25 (bilanciamento qualita/velocita)
+                    // guidance_scale=7.5 (fedele al prompt, come nel codice Python)
+                    ObjectNode req = MAPPER.createObjectNode();
+                    req.put("inputs", sdPrompt);
+                    ObjectNode params = MAPPER.createObjectNode();
+                    params.put("num_inference_steps", 25);
+                    params.put("guidance_scale", 7.5);
+                    params.put("width", 512);
+                    params.put("height", 512);
+                    params.put("wait_for_model", true);
+                    params.put("use_cache", false);
+                    req.set("parameters", params);
+                    ResponseEntity<byte[]> resp = imgClient.postForEntity(
+                        "https://api-inference.huggingface.co/models/" + sdModel,
+                        new HttpEntity<>(MAPPER.writeValueAsString(req), h),
+                        byte[].class);
+                    if (resp.getStatusCode().is2xxSuccessful()
+                            && resp.getBody() != null
+                            && resp.getBody().length > 5000) {
+                        log.info("SD image OK: {} - {} bytes", sdModel, resp.getBody().length);
+                        return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
+                    }
+                } catch (Exception e) {
+                    log.warn("SD model {} fallito: {}", sdModel, e.getMessage());
+                }
+            }
+        }
         // Tentativo 1: Pollinations.ai FLUX (gratis, no key)
         try {
             String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
@@ -914,12 +1030,10 @@ public class ChatController {
             String url = "https://image.pollinations.ai/prompt/" + encoded
                        + "?width=1024&height=1024&nologo=true&enhance=true&model=flux&seed="
                        + System.currentTimeMillis() % 9999;
-            log.info("Pollinations FLUX: {}", prompt.substring(0, Math.min(60, prompt.length())));
             ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
             if (resp.getStatusCode().is2xxSuccessful()
                     && resp.getBody() != null
                     && resp.getBody().length > 5000) {
-                log.info("Immagine OK: {} bytes", resp.getBody().length);
                 return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
             }
             log.warn("Pollinations risposta vuota o piccola: {} bytes",
@@ -927,24 +1041,20 @@ public class ChatController {
         } catch (Exception e) {
             log.warn("Pollinations FLUX fallito: {}", e.getMessage());
         }
-
         // Tentativo 2: Pollinations con modello turbo
         try {
             String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
             String url = "https://image.pollinations.ai/prompt/" + encoded
                        + "?width=768&height=768&nologo=true&model=turbo";
-            log.info("Pollinations turbo fallback...");
             ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
             if (resp.getStatusCode().is2xxSuccessful()
                     && resp.getBody() != null
                     && resp.getBody().length > 3000) {
-                log.info("Immagine turbo OK: {} bytes", resp.getBody().length);
                 return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
             }
         } catch (Exception e) {
             log.warn("Pollinations turbo fallito: {}", e.getMessage());
         }
-
         // Tentativo 3: HuggingFace se HF_TOKEN disponibile
         String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
@@ -964,16 +1074,12 @@ public class ChatController {
                 if (resp.getStatusCode().is2xxSuccessful()
                         && resp.getBody() != null
                         && resp.getBody().length > 1000) {
-                    log.info("HF FLUX OK: {} bytes", resp.getBody().length);
                     return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
                 }
             } catch (Exception e) { log.warn("HF: {}", e.getMessage()); }
         }
-
         return "ERRORE_IMMAGINE: Generazione non riuscita. Riprova tra 30 secondi.";
     }
-
-    // ── THINKING MODE (come Claude extended thinking) ─────────────
     private String thinkingMode(String userMsg, String context, String baseUrl, String apiKey, String model) throws Exception {
         // Step 1: Ragionamento interno
         String thinkPrompt = "Sei un sistema di ragionamento avanzato. Data: " + today() + ". " +
@@ -984,23 +1090,17 @@ public class ChatController {
             "4. RAGIONAMENTO: Valuta pro e contro di ogni approccio\n" +
             "5. CONCLUSIONE: Qual e la risposta migliore?\n\n" +
             "Struttura il tuo pensiero in modo chiaro con questi 5 step.";
-
         String thinking = callLLM(thinkPrompt, userMsg, new ArrayList<>(), baseUrl, apiKey, model, 1500);
-
         // Step 2: Risposta finale basata sul ragionamento
         String finalPrompt = "Sei SPACE AI. Data: " + today() + ". " +
             "Basandoti su questo ragionamento interno:\n\n" + thinking + "\n\n" +
             "Fornisci ora una risposta FINALE ottimale, chiara e completa. " +
             "Includi un riepilogo del ragionamento in un blocco collassabile se rilevante. " +
             "Rispondi in italiano con markdown.";
-
         String finalResp = callLLM(finalPrompt, userMsg, new ArrayList<>(), baseUrl, apiKey, model, 2000);
-
         return "<details><summary>🧠 Ragionamento interno (thinking mode)</summary>\n\n" +
                thinking + "\n\n</details>\n\n---\n\n" + finalResp;
     }
-
-    // ── ANALISI DOCUMENTO/IMMAGINE (come Claude vision) ──────────
     private String analyzeContent(String userMsg, String fileContent, String baseUrl, String apiKey, String model) throws Exception {
         String analyzePrompt = "Sei SPACE AI con capacita di analisi avanzata. Data: " + today() + ". " +
             "Analizza il contenuto fornito dall utente in modo approfondito. " +
@@ -1009,35 +1109,35 @@ public class ChatController {
             "Se e testo: analizza struttura, temi, sentimento. " +
             "Se sono dati: trova pattern, anomalie, tendenze. " +
             "Rispondi in italiano con markdown.";
-
         String combined = userMsg + "\n\n[CONTENUTO FILE]:\n" + fileContent;
         return callLLM(analyzePrompt, combined, new ArrayList<>(), baseUrl, apiKey, model, 3000);
     }
-
-    // ── SISTEMA NEURALE: RISPOSTA ADATTIVA ────────────────────────
     private String adaptiveResponse(String agent, String userMsg, String enriched,
                                     List<Map<String,String>> history, String sessionId,
                                     String baseUrl, String apiKey, String model) throws Exception {
         return adaptiveResponseWithTemp(agent, userMsg, enriched, history, sessionId, baseUrl, apiKey, model, 0.8);
     }
-
-    // Risposta adattiva con temperatura quantistica
     private String adaptiveResponseWithTemp(String agent, String userMsg, String enriched,
                                     List<Map<String,String>> history, String sessionId,
                                     String baseUrl, String apiKey, String model,
                                     double temperature) throws Exception {
-        String personalCtx = buildPersonalizedContext(sessionId);
-        // Comprimi contesto con algoritmo quantistico se troppo lungo
+        // PRIORITY 1: inietta memoria attiva nel prompt
+        String memCtx = retrieveRelevantMemory(userMsg, sessionId);
+        String livingPrompt = buildSystemPrompt(agent, sessionId, userMsg);
         String finalMsg = enriched;
         if (finalMsg.length() > 2000) finalMsg = quantumCompressContext(finalMsg);
-        if (!personalCtx.isEmpty()) finalMsg = personalCtx + "\n\n" + finalMsg;
-
-        String response = callLLMWithTemp(agentPrompt(agent), finalMsg, history, baseUrl, apiKey, model, 2500, temperature);
+        // Prompt agente + memoria attiva
+        String agentWithMemory = agentPrompt(agent);
+        if (!memCtx.isEmpty())
+            agentWithMemory += "\n\n[MEMORIA ATTIVA]: " + memCtx;
+        String response = callLLMWithTemp(agentWithMemory, finalMsg, history, baseUrl, apiKey, model, 2500, temperature);
         learnFromInteraction(sessionId, userMsg, response, agent);
+        // PRIORITY 2: backpropagate con reward dinamico
+        double reward = computeReward(userMsg, response, agent);
+        backpropagate(agent, userMsg, reward);
+        metaLearnStep(agent, userMsg, response, reward > 0.5);
         return response;
     }
-
-    // ── SISTEMA NEURALE: AUTO-RIFLESSIONE ─────────────────────────
     // Valuta e migliora la propria risposta (come RLHF interno)
     private String selfReflect(String initialResponse, String userMsg, String baseUrl, String apiKey, String model) throws Exception {
         String reflectPrompt = "Sei un sistema di auto-valutazione. Valuta questa risposta:\n\n" +
@@ -1046,18 +1146,14 @@ public class ChatController {
             "Se il punteggio totale e < 28/40, migliora la risposta. " +
             "Altrimenti restituisci la risposta originale migliorata di almeno il 20%. " +
             "Output: SOLO la risposta migliorata, senza meta-commenti.";
-
         return callLLM(reflectPrompt, "", new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
-
-    // ── SYSTEM PROMPT BASE ────────────────────────────────────────
     private String coreSystem() {
-        return "Sei SPACE AI, assistente AI avanzato con sistema neurale adattivo creato da Paolo. Data: " + today() + ". " +
-               "Hai 131 agenti specializzati, memoria contestuale, thinking mode e apprendimento adattivo. " +
-               "Se ci sono [DATI WEB] usali. Rispondi in italiano con markdown. Sii preciso e completo.";
+        return buildSystemPrompt("auto", "global", "");
     }
-
-    // ── AGENTI ────────────────────────────────────────────────────
+    private String coreSystemForSession(String sessionId, String query) {
+        return buildSystemPrompt("auto", sessionId, query);
+    }
     private String agentPrompt(String agent) {
         String d = today();
         switch (agent) {
@@ -1244,13 +1340,10 @@ public class ChatController {
             default: return coreSystem();
         }
     }
-
     private String synthesizerPrompt() {
         return "Sei SYNTHESIZER di SPACE AI. Data:" + today() + ". " +
                "Unifica in UNA risposta finale perfetta. Elimina ridondanze. Markdown. Italiano.";
     }
-
-    // ── ENDPOINT PRINCIPALE ───────────────────────────────────────
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
         String userMessage  = body.getOrDefault("message", "").trim();
@@ -1258,27 +1351,23 @@ public class ChatController {
         String fileContent  = body.getOrDefault("fileContent", "");
         String thinkingFlag = body.getOrDefault("thinking", "false");
         if (userMessage.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error", "Messaggio vuoto"));
-
         String baseUrl     = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey      = env("AI_API_KEY", "");
         String model       = env("AI_MODEL", "llama-3.3-70b-versatile");
         String supabaseUrl = env("SUPABASE_URL", "");
         String supabaseKey = env("SUPABASE_KEY", "");
-
         // Rate limiting
             if (isRateLimited(sessionId)) {
                 return ResponseEntity.status(429).body(Map.of(
                     "error", "Troppe richieste. Attendi un minuto.",
                     "status", "rate_limited"));
             }
-
             // Circuit breaker
             if (isCircuitOpen()) {
                 return ResponseEntity.status(503).body(Map.of(
                     "error", "Servizio temporaneamente non disponibile. Riprova tra 30 secondi.",
                     "status", "circuit_open"));
             }
-
         try {
             long startTime = System.currentTimeMillis();
             String cacheK = "default:" + userMessage.substring(0, Math.min(80, userMessage.length()));
@@ -1289,14 +1378,11 @@ public class ChatController {
                 // Carica in neuralMemory per future richieste
                 if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
             }
-            log.info("Storia sessione {}: {} messaggi", sessionId, history.size());
-
             // Web search
             String webData = needsSearch(userMessage) ? searchWeb(userMessage) : null;
             String enriched = userMessage;
             if (webData != null && !webData.isBlank())
                 enriched = userMessage + "\n\n[DATI WEB - " + today() + "]:\n" + webData;
-
             // Analisi immagine base64 se presente (multimodale)
             String imageBase64 = body.getOrDefault("imageBase64","");
             if (!imageBase64.isEmpty()) {
@@ -1322,12 +1408,10 @@ public class ChatController {
                 fResp.put("sessionId",sessionId);
                 return ResponseEntity.ok(fResp);
             }
-
             // Gestione immagini
             String q = userMessage.toLowerCase();
             boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
                     q.contains("disegna") || (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
-
             if (isImg) {
                 String imgAgent = callLLM(agentPrompt("image_gen"), enriched, history, baseUrl, apiKey, model, 400);
                 String hfPrompt = userMessage;
@@ -1345,11 +1429,9 @@ public class ChatController {
                             "imageType", "image/jpeg", "status", "ok", "model", model, "sessionId", sessionId));
                 return ResponseEntity.ok(Map.of("response", imgResult, "status", "ok", "model", model, "sessionId", sessionId));
             }
-
             // Thinking mode (come Claude extended thinking)
             boolean useThinking = "true".equals(thinkingFlag) ||
                     q.contains("[thinking mode") || q.contains("ragiona") || q.contains("analizza in profondita");
-
             if (useThinking) {
                 String thinkResp = thinkingMode(userMessage, enriched, baseUrl, apiKey, model);
                 saveMessages(sessionId, userMessage, thinkResp, supabaseUrl, supabaseKey);
@@ -1357,16 +1439,12 @@ public class ChatController {
                 return ResponseEntity.ok(Map.of("response", thinkResp, "status", "ok", "model", model,
                         "sessionId", sessionId, "mode", "thinking"));
             }
-
             // Router
             List<String> agents = routeQuery(userMessage, baseUrl, apiKey, model);
-            log.info("Agenti: {} | Web: {} | Session: {}", agents, webData != null, sessionId);
-
             // Check cache per risposta identica
             cacheK = cacheKey(userMessage, agents.isEmpty() ? "auto" : agents.get(0));
             String cachedResp = getCached(cacheK);
             if (cachedResp != null) {
-                log.info("Risposta dalla cache per: {}", userMessage.substring(0, Math.min(40, userMessage.length())));
                 saveMessages(sessionId, userMessage, cachedResp, supabaseUrl, supabaseKey);
                 Map<String,Object> cResp = new HashMap<>();
                 cResp.put("response", cachedResp);
@@ -1376,7 +1454,6 @@ public class ChatController {
                 cResp.put("cacheHit", true);
                 return ResponseEntity.ok(cResp);
             }
-
             // Esecuzione agenti con apprendimento adattivo + ottimizzazione quantistica
             List<String> outputs = new ArrayList<>();
             for (String agent : agents) {
@@ -1385,11 +1462,10 @@ public class ChatController {
                 String out = adaptiveResponseWithTemp(agent, userMessage, enriched, history, sessionId, baseUrl, apiKey, model, qTemp);
                 if (out != null && !out.isBlank()) outputs.add("[" + agent.toUpperCase() + "]\n" + out);
             }
-
             // Sintesi
             String finalResponse;
             if (outputs.isEmpty())
-                finalResponse = adaptiveResponse("reasoner", userMessage, enriched, history, sessionId, baseUrl, apiKey, model);
+                finalResponse = adaptiveResponseWithTemp("reasoner", userMessage, enriched, history, sessionId, baseUrl, apiKey, model, quantumOptimizeTemperature(userMessage,"reasoner"));
             else if (outputs.size() == 1)
                 finalResponse = outputs.get(0).replaceFirst("\\[\\w+\\]\\n", "");
             else {
@@ -1398,13 +1474,10 @@ public class ChatController {
                         new ArrayList<>(), baseUrl, apiKey, model, 3000);
                 learnFromInteraction(sessionId, userMessage, finalResponse, "synthesizer");
             }
-
-            // ── PIPELINE AVANZATA SPACE AI v3.0 ──────────────────────
             try {
                 // 1. Rileva emozione e adatta il tono
                 String emotion = detectEmotion(userMessage);
                 emotionState.put(sessionId, emotion);
-
                 // 2. Seleziona motore avanzato in base alla query
                 String advEngine = selectAdvancedEngine(userMessage);
                 String engineResult = null;
@@ -1429,26 +1502,21 @@ public class ChatController {
                         break;
                 }
                 if (engineResult != null && !engineResult.isBlank()) finalResponse = engineResult;
-
                 // 3. Consensus multi-LLM per query complesse
                 if (userMessage.length() > 150) {
                     String consensus = multiLLMConsensus(userMessage, finalResponse, baseUrl, apiKey, model);
                     if (consensus != null && !consensus.isBlank()) finalResponse = consensus;
                 }
-
                 // 4. Adversarial check - elimina bias e errori
                 if (userMessage.length() > 80) {
                     String checked = adversarialCheck(finalResponse, userMessage, baseUrl, apiKey, model);
                     if (checked != null && !checked.isBlank()) finalResponse = checked;
                 }
-
                 // 5. Adatta tono all'emozione
                 finalResponse = adaptToneByEmotion(emotion, finalResponse);
-
                 // 6. Aggiungi predizione prossima domanda (se disponibile)
                 String prediction = predictNextQuestion(sessionId, userMessage);
                 if (prediction != null) finalResponse += System.lineSeparator() + System.lineSeparator() + "---" + System.lineSeparator() + "> " + prediction;
-
                 // 7. Aggiorna tutti i sistemi di memoria e apprendimento
                 String ltmEntry = userMessage.substring(0, Math.min(60, userMessage.length())) + " -> done";
                     consolidateToLTM(sessionId, ltmEntry);
@@ -1457,18 +1525,13 @@ public class ChatController {
                 updateNarrative(sessionId, userMessage, finalResponse);
                 learnQuestionPattern(sessionId, userMessage);
                 adaptRealtime(sessionId, userMessage, finalResponse, finalResponse.length());
-
                 // 8. Meta-learning
                 for (String a : agents) {
                     backpropagate(a, userMessage, 0.8);
                     metaLearnStep(a, userMessage, finalResponse, true);
                 }
-
             } catch (Exception e) { log.warn("Advanced pipeline: {}", e.getMessage()); }
-
-            // Salva in cache
             putCache(cacheK, finalResponse);
-
             // Registra metriche
             long elapsed = System.currentTimeMillis() - startTime;
             totalResponseTimeMs.addAndGet(elapsed);
@@ -1476,9 +1539,7 @@ public class ChatController {
             recordSuccess();
             log.info("Risposta generata in {}ms | tokens stimati: {} | cache: {}/{}",
                 elapsed, estimateTokens(finalResponse), cacheHits.get(), totalRequests.get());
-
             saveMessages(sessionId, userMessage, finalResponse, supabaseUrl, supabaseKey);
-
             // Stats profilo appreso
             Map<String,Object> profile = userProfiles.getOrDefault(sessionId, new HashMap<>());
             Map<String,Object> resp = new HashMap<>();
@@ -1493,20 +1554,17 @@ public class ChatController {
             resp.put("emotion",         emotionState.getOrDefault(sessionId,"neutral"));
             resp.put("historySize",     neuralMemory.getOrDefault(sessionId,new ArrayList<>()).size());
             return ResponseEntity.ok(resp);
-
         } catch (Exception e) {
             log.error("Errore: {}", e.getMessage());
             recordFailure();
             try {
-                String fallback = callLLM(coreSystem(), userMessage, new ArrayList<>(), baseUrl, apiKey, model, 2000);
+                String fallback = callLLM(coreSystemForSession(sessionId, userMessage), userMessage, new ArrayList<>(), baseUrl, apiKey, model, 2000);
                 Map<String,Object> fbResp=new HashMap<>();fbResp.put("response",fallback);fbResp.put("responseForVoice",cleanTextForTTS(fallback));fbResp.put("status","fallback");fbResp.put("sessionId",sessionId);return ResponseEntity.ok(fbResp);
             } catch (Exception e2) {
                 Map<String,Object> errResp=new HashMap<>();errResp.put("error",e.getMessage());errResp.put("status","error");return ResponseEntity.status(502).body(errResp);
             }
         }
     }
-
-    // ── ROUTER ────────────────────────────────────────────────────
     private List<String> routeQuery(String query, String baseUrl, String apiKey, String model) {
         try {
             String resp = callLLM(agentPrompt("router"), "DOMANDA: " + query, new ArrayList<>(), baseUrl, apiKey, model, 80);
@@ -1522,8 +1580,10 @@ public class ChatController {
                 }
             }
         } catch (Exception e) {
-            log.warn("Router LLM fallito, uso Neural Route: {}", e.getMessage());
-            // Fallback: usa rete neurale autonoma
+            log.warn("Router LLM fallito, uso Neural+KG Route: {}", e.getMessage());
+            // Prova prima semantic KG route, poi neural route
+            List<String> kgRoute = semanticKGRoute(query);
+            if (!kgRoute.isEmpty()) return kgRoute;
             return neuralRoute(query);
         }
         String q = query.toLowerCase();
@@ -1550,13 +1610,10 @@ public class ChatController {
         if (q.contains("strategia")) return List.of("strategist");
         return List.of("reasoner");
     }
-
-    // ── LLM CALL ─────────────────────────────────────────────────
     private String callLLM(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
         return callLLMWithTemp(system, userMsg, history, baseUrl, apiKey, model, maxTokens, 0.8);
     }
-
     private String callLLMWithTemp(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens, double temperature) throws Exception {
         ObjectNode req = MAPPER.createObjectNode();
@@ -1581,8 +1638,6 @@ public class ChatController {
         ResponseEntity<String> response = restTemplate.postForEntity(endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
         return MAPPER.readTree(response.getBody()).path("choices").get(0).path("message").path("content").asText();
     }
-
-    // ── SUPABASE ─────────────────────────────────────────────────
     private List<Map<String,String>> loadHistory(String sessionId, String url, String key) {
         List<Map<String,String>> history = new ArrayList<>();
         try {
@@ -1595,8 +1650,6 @@ public class ChatController {
         } catch (Exception e) { log.warn("Supabase load: {}", e.getMessage()); }
         return history;
     }
-
-    // ── FORMAT HISTORY FOR LLM (come suggerito dall analisi) ────
     private ArrayNode formatChatHistoryForLLM(String sessionId, String currentQuery, String systemPrompt) {
         ArrayNode messages = MAPPER.createArrayNode();
         // System prompt
@@ -1620,8 +1673,6 @@ public class ChatController {
         messages.add(usr);
         return messages;
     }
-
-    // ── CLEAN TEXT FOR TTS (rimuove markdown per la voce) ────────
     private String cleanTextForTTS(String md) {
         if (md == null) return "";
         String t = md;
@@ -1639,8 +1690,6 @@ public class ChatController {
         t = t.replaceAll("\\n{3,}", "\n\n");
         return t.trim();
     }
-
-    // ── MULTIMODAL: analizza immagine base64 passata dal frontend ─
     private String analyzeImageBase64(String base64Image, String userMsg,
                                        String baseUrl, String apiKey, String model) throws Exception {
         // Prepara richiesta vision con immagine inline
@@ -1679,37 +1728,35 @@ public class ChatController {
                 new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
         return MAPPER.readTree(resp.getBody()).path("choices").get(0).path("message").path("content").asText();
     }
-
     private void saveMessages(String sessionId, String userMsg, String aiResp, String url, String key) {
-        // Salva SEMPRE in neuralMemory (memoria locale veloce)
         List<Map<String,String>> mem = neuralMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
         mem.add(Map.of("role","user","content",userMsg));
         mem.add(Map.of("role","assistant","content",aiResp));
-        // Mantieni solo ultimi 30 messaggi (15 scambi)
         if (mem.size() > 30) {
             List<Map<String,String>> trimmed = new ArrayList<>(mem.subList(mem.size()-30, mem.size()));
             neuralMemory.put(sessionId, trimmed);
         }
-        // Salva su Supabase se configurato
+        // PRIORITY 4: estrai e comprimi fatti nuovi con bloom filter
+        extractAndStoreFacts(sessionId, userMsg, aiResp);
+        // STM circular buffer + Roaring index
+        stmPush(sessionId, userMsg, aiResp);
+        updateNarrative(sessionId, userMsg, aiResp);
         if (url.isEmpty()) return;
         try { saveMsg(sessionId,"user",userMsg,url,key); saveMsg(sessionId,"assistant",aiResp,url,key); }
         catch (Exception e) { log.warn("Supabase save: {}", e.getMessage()); }
     }
-
     private void saveMsg(String sessionId, String role, String content, String url, String key) throws Exception {
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         h.set("apikey",key); h.set("Authorization","Bearer "+key); h.set("Prefer","return=minimal");
         ObjectNode b = MAPPER.createObjectNode(); b.put("session_id",sessionId); b.put("role",role); b.put("content",content);
         restTemplate.postForEntity(url+"/rest/v1/messages", new HttpEntity<>(MAPPER.writeValueAsString(b),h), String.class);
     }
-
     @GetMapping("/history/{sessionId}")
     public ResponseEntity<Object> getHistory(@PathVariable String sessionId) {
         String url = env("SUPABASE_URL",""); String key = env("SUPABASE_KEY","");
         if (url.isEmpty()) return ResponseEntity.ok(Map.of("messages", List.of()));
         return ResponseEntity.ok(Map.of("messages", loadHistory(sessionId, url, key)));
     }
-
         @GetMapping("/neural/profile/{sessionId}")
     public ResponseEntity<Object> getNeuralProfile(@PathVariable String sessionId) {
         Map<String,Object> r = new HashMap<>();
@@ -1727,12 +1774,76 @@ public class ChatController {
         r.put("engines",        "emotion,temporal,dream,socratic,adversarial,quantum");
         return ResponseEntity.ok(r);
     }
-
     @GetMapping("/config")
     public ResponseEntity<Map<String,String>> config() {
         return ResponseEntity.ok(Map.of("supabaseUrl", env("SUPABASE_URL",""), "supabaseKey", env("SUPABASE_KEY","")));
     }
-
+    @GetMapping("/brain/quantum/status")
+    public ResponseEntity<Object> quantumStatus() {
+        initQuantumState();
+        Map<String,Object> q = new HashMap<>();
+        List<Map<String,Object>> qubitStates = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            Map<String,Object> qs = new HashMap<>();
+            qs.put("qubit", i);
+            qs.put("measured", measureQubit(i));
+            qs.put("prob0", computeProb0(i));
+            qubitStates.add(qs);
+        }
+        q.put("qubits",       qubitStates);
+        q.put("totalQubits",  QUBIT_COUNT);
+        q.put("stateVector",  quantumState.length);
+        q.put("initialized",  quantumInitialized);
+        q.put("bloomSize",    BLOOM_SIZE);
+        q.put("bloomCount",   bloomCount.get());
+        q.put("kgNodes",      knowledgeGraph.size());
+        q.put("learningCycles", learningCycles.get());
+        q.put("date",         today());
+        return ResponseEntity.ok(q);
+    }
+    private double computeProb0(int qubitIndex) {
+        double prob0 = 0;
+        int mask = 1 << (qubitIndex % 16);
+        for (int i = 0; i < quantumState.length; i++)
+            if ((i & mask) == 0) prob0 += quantumState[i] * quantumState[i];
+        return Math.round(prob0 * 1000.0) / 1000.0;
+    }
+    @GetMapping("/brain/memory/stats")
+    public ResponseEntity<Object> memoryStats() {
+        Map<String,Object> stats = new HashMap<>();
+        stats.put("bloomCount",     bloomCount.get());
+        stats.put("bloomSizeBits",  BLOOM_SIZE);
+        stats.put("bloomSizeKB",    BLOOM_SIZE / 8 / 1024);
+        stats.put("kgNodes",        knowledgeGraph.size());
+        stats.put("ltmSessions",    longTermMemory.size());
+        int totalFacts = longTermMemory.values().stream().mapToInt(List::size).sum();
+        stats.put("totalFacts",     totalFacts);
+        stats.put("activeSessions", neuralMemory.size());
+        stats.put("cacheEntries",   responseCache.size());
+        stats.put("estimatedMemKB",  (bloomBits.length * 8 / 1024) + (totalFacts * 80 / 1024));
+        stats.put("stmEntries",       stmBuffer.size());
+        stats.put("roaringIndexed",   sessionBitOffsets.size());
+        stats.put("compressionType",  "GZIP-native");
+        if (!longTermMemory.isEmpty()) {
+            try {
+                String sample = longTermMemory.values().iterator().next().stream().limit(3).reduce("",(a,b)->a+" "+b);
+                byte[] comp = gzipCompress(sample);
+                stats.put("gzipRatio", String.format("%.1fx", sample.isEmpty()?1.0:(double)sample.length()/Math.max(1,comp.length)));
+            } catch(Exception ignored) {}
+        }
+        stats.put("stmEntries",       activeSTMBuffer.size());
+        stats.put("roaringIndexed",   sessionBitOffsets.size());
+        stats.put("compressionType",  "GZIP-native (CBOR+Zstd equivalent)");
+        // Dimostra compressione: calcola ratio su un sample
+        if (!longTermMemory.isEmpty()) {
+            String sample = longTermMemory.values().iterator().next().stream()
+                .limit(3).reduce("", (a,b) -> a + " " + b);
+            byte[] compressed = gzipCompress(sample);
+            double ratio = sample.isEmpty() ? 1.0 : (double)sample.length() / Math.max(1, compressed.length);
+            stats.put("gzipRatio", String.format("%.1fx", ratio));
+        }
+        return ResponseEntity.ok(stats);
+    }
     @GetMapping("/metrics")
     public ResponseEntity<Object> metrics() {
         long avgMs = totalRequests.get() > 0 ?
@@ -1755,7 +1866,6 @@ public class ChatController {
         m.put("date",            today());
         return ResponseEntity.ok(m);
     }
-
         @GetMapping("/health")
     public ResponseEntity<Map<String,String>> health() {
         long avgMs = totalRequests.get() > 0 ?
