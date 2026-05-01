@@ -347,9 +347,9 @@ public class ChatController {
         // Sintetizza le 3 prospettive
         String consensusPrompt =
             "Sintetizza queste 3 analisi in una risposta definitiva ottimale:\n\n" +
-            "RISPOSTA 1: " + response1.substring(0, Math.min(300, response1.length())) + "\n\n" +
-            "ANALISI 2: " + p2.substring(0, Math.min(300, p2.length())) + "\n\n" +
-            "CRITICA 3: " + p3.substring(0, Math.min(300, p3.length())) + "\n\n" +
+            "RISPOSTA 1: " + response1.substring(0, Math.min(800, response1.length())) + "\n\n" +
+            "ANALISI 2: " + p2.substring(0, Math.min(800, p2.length())) + "\n\n" +
+            "CRITICA 3: " + p3.substring(0, Math.min(800, p3.length())) + "\n\n" +
             "Crea la risposta MIGLIORE combinando il meglio di tutte e tre. Markdown, italiano.";
         return callLLM(consensusPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
@@ -835,9 +835,12 @@ public class ChatController {
         knowledgeGraph.computeIfAbsent(sessionId + "_topics", k -> new HashSet<>()).add(entity);
     }
     // (aggiunto sotto come @GetMapping)
+    private static final String BRAIN_FILE = "spaceai_brain.json.gz";
+
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
         initQuantumState();
+        loadBrainState();
         // Pulizia cache ogni 10 minuti
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
             this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
@@ -902,6 +905,76 @@ public class ChatController {
         return LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
     }
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
+
+    // ── PERSISTENZA BRAIN STATE ───────────────────────────────────
+    @javax.annotation.PreDestroy
+    public void saveBrainState() {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode wNode = MAPPER.createObjectNode();
+            synapticWeights.forEach((agent, w) -> {
+                com.fasterxml.jackson.databind.node.ArrayNode arr = MAPPER.createArrayNode();
+                for (double v : w) arr.add(v);
+                wNode.set(agent, arr);
+            });
+            state.set("weights", wNode);
+            com.fasterxml.jackson.databind.node.ObjectNode ltmNode = MAPPER.createObjectNode();
+            longTermMemory.entrySet().stream().limit(100).forEach(e -> {
+                com.fasterxml.jackson.databind.node.ArrayNode arr = MAPPER.createArrayNode();
+                e.getValue().stream().limit(20).forEach(arr::add);
+                ltmNode.set(e.getKey(), arr);
+            });
+            state.set("ltm", ltmNode);
+            com.fasterxml.jackson.databind.node.ObjectNode kgNode = MAPPER.createObjectNode();
+            knowledgeGraph.entrySet().stream().limit(500).forEach(e -> {
+                com.fasterxml.jackson.databind.node.ArrayNode arr = MAPPER.createArrayNode();
+                e.getValue().stream().limit(10).forEach(arr::add);
+                kgNode.set(e.getKey(), arr);
+            });
+            state.set("kg", kgNode);
+            state.put("requests", totalRequests.get());
+            state.put("cycles", learningCycles.get());
+            state.put("epoch", metaEpoch.get());
+            state.put("savedAt", today());
+            byte[] compressed = gzipCompress(MAPPER.writeValueAsString(state));
+            java.nio.file.Files.write(java.nio.file.Paths.get(BRAIN_FILE), compressed);
+            log.info("Brain salvato: {} bytes", compressed.length);
+        } catch (Exception e) { log.warn("Save brain: {}", e.getMessage()); }
+    }
+
+    private void loadBrainState() {
+        try {
+            java.nio.file.Path p = java.nio.file.Paths.get(BRAIN_FILE);
+            if (!java.nio.file.Files.exists(p)) { log.info("Nuovo brain - parto da zero"); return; }
+            String json = gzipDecompress(java.nio.file.Files.readAllBytes(p));
+            com.fasterxml.jackson.databind.JsonNode state = MAPPER.readTree(json);
+            state.path("weights").fields().forEachRemaining(e -> {
+                double[] w = new double[16]; int i = 0;
+                for (com.fasterxml.jackson.databind.JsonNode v : e.getValue()) if (i < 16) w[i++] = v.asDouble();
+                synapticWeights.put(e.getKey(), w);
+            });
+            state.path("ltm").fields().forEachRemaining(e -> {
+                List<String> facts = new ArrayList<>();
+                e.getValue().forEach(v -> facts.add(v.asText()));
+                longTermMemory.put(e.getKey(), facts);
+            });
+            state.path("kg").fields().forEachRemaining(e -> {
+                Set<String> rel = new HashSet<>();
+                e.getValue().forEach(v -> rel.add(v.asText()));
+                knowledgeGraph.put(e.getKey(), rel);
+            });
+            if (state.has("requests")) totalRequests.set(state.path("requests").asInt());
+            if (state.has("cycles")) learningCycles.set(state.path("cycles").asInt());
+            if (state.has("epoch")) metaEpoch.set(state.path("epoch").asInt());
+            log.info("Brain ricaricato: {} agenti, {} sessioni LTM, {} nodi KG",
+                synapticWeights.size(), longTermMemory.size(), knowledgeGraph.size());
+        } catch (Exception e) { log.warn("Load brain: {}", e.getMessage()); }
+    }
+
+    private void checkPeriodicSave() {
+        if (totalRequests.get() > 0 && totalRequests.get() % 50 == 0)
+            executor.submit(this::saveBrainState);
+    }
     // Impara dall utente, costruisce profilo, migliora risposte
     private void learnFromInteraction(String sessionId, String userMsg, String response, String agent) {
         totalRequests.incrementAndGet();
@@ -1628,6 +1701,7 @@ public class ChatController {
             totalResponseTimeMs.addAndGet(elapsed);
             totalTokensEstimate.addAndGet(estimateTokens(userMessage) + estimateTokens(finalResponse));
             recordSuccess();
+            checkPeriodicSave();
             log.info("Risposta generata in {}ms | tokens stimati: {} | cache: {}/{}",
                 elapsed, estimateTokens(finalResponse), cacheHits.get(), totalRequests.get());
             saveMessages(sessionId, userMessage, finalResponse, supabaseUrl, supabaseKey);
@@ -1935,6 +2009,29 @@ public class ChatController {
         }
         return ResponseEntity.ok(stats);
     }
+    @PostMapping("/feedback")
+    public ResponseEntity<Object> userFeedback(@RequestBody Map<String,String> body) {
+        String sessionId = body.getOrDefault("sessionId","default");
+        String agentUsed = body.getOrDefault("agent","reasoner");
+        String query     = body.getOrDefault("query","");
+        String thumbs    = body.getOrDefault("thumbs",""); // "up" o "down"
+        double reward    = "up".equals(thumbs) ? 0.9 : "down".equals(thumbs) ? 0.1 : 0.5;
+        // Applica backpropagation con feedback esplicito utente
+        backpropagate(agentUsed, query, reward);
+        metaLearnStep(agentUsed, query, "", "up".equals(thumbs));
+        // Aggiorna profilo utente
+        Map<String,Object> profile = userProfiles.computeIfAbsent(sessionId, k -> new java.util.concurrent.ConcurrentHashMap<>());
+        profile.merge("totalFeedback", 1, (a, b) -> (Integer)a + 1);
+        if ("up".equals(thumbs)) profile.merge("positiveCount", 1, (a, b) -> (Integer)a + 1);
+        Map<String,Object> r = new HashMap<>();
+        r.put("status", "ok");
+        r.put("agent", agentUsed);
+        r.put("reward", reward);
+        r.put("message", "up".equals(thumbs) ? "Grazie! SPACE AI ha imparato." : "Capito. Migliorero.");
+        log.info("Feedback {}: agente={}, reward={}", thumbs, agentUsed, reward);
+        return ResponseEntity.ok(r);
+    }
+
     @PostMapping("/search/live")
     public ResponseEntity<Object> searchLive(@RequestBody Map<String,String> body) {
         String query = body.getOrDefault("query","");
@@ -1948,6 +2045,39 @@ public class ChatController {
         r.put("date",    today());
         r.put("note",    "Dati in tempo reale - cutoff LLM base: " + KNOWLEDGE_CUTOFF);
         return ResponseEntity.ok(r);
+    }
+
+    @GetMapping("/brain/metrics")
+    public ResponseEntity<Object> brainMetrics() {
+        long avgMs = totalRequests.get() > 0 ?
+            totalResponseTimeMs.get() / Math.max(1, totalRequests.get()) : 0;
+        double cacheHitRate = totalRequests.get() > 0 ?
+            (double)cacheHits.get() / totalRequests.get() * 100 : 0;
+        double avgReward = 0;
+        for (Map.Entry<String, double[]> e : synapticWeights.entrySet()) {
+            double sum = 0; for (double w : e.getValue()) sum += w;
+            avgReward += sum / e.getValue().length;
+        }
+        if (!synapticWeights.isEmpty()) avgReward /= synapticWeights.size();
+        Map<String,Object> m = new HashMap<>();
+        m.put("totalRequests",   totalRequests.get());
+        m.put("cacheHitRate",    String.format("%.1f%%", cacheHitRate));
+        m.put("avgResponseMs",   avgMs);
+        m.put("learningCycles",  learningCycles.get());
+        m.put("metaEpoch",       metaEpoch.get());
+        m.put("kgNodes",         knowledgeGraph.size());
+        m.put("avgSynapticWeight", String.format("%.3f", avgReward));
+        m.put("bloomCount",      bloomCount.get());
+        m.put("stmSize",         stmBuffer.size());
+        m.put("ltmSessions",     longTermMemory.size());
+        m.put("circuitBreaker",  isCircuitOpen() ? "OPEN" : "closed");
+        m.put("brainFileSaved",  java.nio.file.Files.exists(java.nio.file.Paths.get(BRAIN_FILE)));
+        m.put("date",            today());
+        // Suggerimento auto-ottimizzazione
+        if (avgMs > 5000) m.put("suggestion", "Risposte lente: riduci maxTokens o abilita fast mode");
+        else if (cacheHitRate > 30) m.put("suggestion", "Ottimo hit rate! Cache ben utilizzata");
+        else m.put("suggestion", "Sistema operativo normalmente");
+        return ResponseEntity.ok(m);
     }
 
     @GetMapping("/metrics")
