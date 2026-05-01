@@ -267,6 +267,8 @@ var isRec=false,recog=null,curSpeech=null;
 var curMode="auto";
 var spacesOn=false;
 var SID="s"+Math.random().toString(36).slice(2,10)+Date.now();
+var lastAgent="reasoner";
+var lastQuery="";
 var SUPABASE_URL="";
 function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");}
 function closeSB(){document.getElementById("sidebar").classList.remove("open");document.getElementById("sbOv").classList.remove("on");}
@@ -430,6 +432,22 @@ function addRow(text,type){
     cb.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copia';
     (function(t,b){cb.onclick=function(){navigator.clipboard.writeText(t).then(function(){b.innerHTML=b.innerHTML.replace("Copia","OK");setTimeout(function(){b.innerHTML=b.innerHTML.replace("OK","Copia");},1500);});};})(text,cb);
     acts.appendChild(cb);
+    // 👍 👎 Feedback per backpropagation
+    var tu=document.createElement("button");tu.className="abtn";tu.innerHTML="&#128077;";tu.title="Risposta utile";
+    var td=document.createElement("button");td.className="abtn";td.innerHTML="&#128078;";td.title="Risposta da migliorare";
+    (function(b1,b2){
+      b1.onclick=function(){
+        b1.style.color="var(--accent)";b1.disabled=true;b2.disabled=true;
+        fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"up"})});
+      };
+      b2.onclick=function(){
+        b2.style.color="#ff4444";b1.disabled=true;b2.disabled=true;
+        fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"down"})});
+      };
+    })(tu,td);
+    acts.appendChild(tu);acts.appendChild(td);
     bub.appendChild(acts);
   }
   row.appendChild(av);row.appendChild(bub);msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
@@ -557,6 +575,8 @@ async function sendMsg(){
       var data=await res.json();
       if(data.error){addRow("Errore: "+data.error,"err");}
       else{
+        if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+        lastQuery=text;
         if(data.response){
           if(data.response.startsWith("ERRORE_IMMAGINE:")){
             addRow("Generazione immagine non riuscita. Riprova tra 30 secondi.","err");
