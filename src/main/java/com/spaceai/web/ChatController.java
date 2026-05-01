@@ -728,10 +728,13 @@ public class ChatController {
         int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
         int kgSize     = knowledgeGraph.size();
         StringBuilder sb = new StringBuilder();
-        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata. Data: ").append(today()).append(".\n");
-        sb.append("Possiedi: rete neurale autonoma con backpropagation, motore quantistico a 32 qubit, ");
-        sb.append("knowledge graph con ").append(kgSize).append(" nodi, ");
-        sb.append("memoria LTM con ").append(ltmSize).append(" fatti.\n");
+        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata al mondo. Data OGGI: ").append(today()).append(".\n");
+        sb.append("IMPORTANTE - La tua conoscenza base (da Llama) arriva fino a ").append(KNOWLEDGE_CUTOFF).append(". ");
+        sb.append("Per tutto cio che riguarda il ").append(CURRENT_DATE_CONTEXT).append(" e eventi recenti, ");
+        sb.append("hai gia eseguito una ricerca web aggiornata - usa quei dati come fonte primaria.\n");
+        sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ");
+        sb.append("knowledge graph ").append(kgSize).append(" nodi, LTM ").append(ltmSize).append(" fatti, ");
+        sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
         if (!memCtx.isEmpty())
             sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
         if (!kgTop.isEmpty())
@@ -960,12 +963,92 @@ public class ChatController {
             return sb.toString();
         } catch (Exception e) { log.warn("Tavily: {}", e.getMessage()); return null; }
     }
+    // Cutoff della LLM base (Llama): dicembre 2023
+    private static final String KNOWLEDGE_CUTOFF = "dicembre 2023";
+    private static final String CURRENT_DATE_CONTEXT = "2026";
+
     private boolean needsSearch(String msg) {
         String q = msg.toLowerCase();
-        return q.contains("cerca") || q.contains("notizie") || q.contains("oggi") ||
-               q.contains("attuale") || q.contains("2025") || q.contains("2026") ||
-               q.contains("prezzo") || q.contains("quotazione") || q.contains("recente") ||
-               q.contains("ultime") || q.contains("adesso") || q.contains("aggiornato");
+        // Cerca SEMPRE per: eventi recenti, persone, prezzi, notizie, sport
+        if (q.contains("oggi") || q.contains("adesso") || q.contains("ora") ||
+            q.contains("2024") || q.contains("2025") || q.contains("2026") ||
+            q.contains("recente") || q.contains("ultime") || q.contains("ultimo") ||
+            q.contains("aggiornato") || q.contains("attuale") || q.contains("corrente") ||
+            q.contains("notizie") || q.contains("news") || q.contains("cerca")) return true;
+        // Prezzi e mercati - sempre aggiornati
+        if (q.contains("prezzo") || q.contains("quotazione") || q.contains("borsa") ||
+            q.contains("bitcoin") || q.contains("crypto") || q.contains("azioni") ||
+            q.contains("euro") || q.contains("dollaro") || q.contains("mercato")) return true;
+        // Sport e eventi
+        if (q.contains("partita") || q.contains("risultato") || q.contains("campionato") ||
+            q.contains("serie a") || q.contains("champions") || q.contains("formula 1") ||
+            q.contains("gara") || q.contains("torneo")) return true;
+        // Meteo
+        if (q.contains("meteo") || q.contains("temperatura") || q.contains("previsioni") ||
+            q.contains("piove") || q.contains("sole")) return true;
+        // Persone famose e aziende (potrebbero avere news recenti)
+        if (q.contains("chi e") || q.contains("chi è") || q.contains("cosa ha fatto") ||
+            q.contains("quando e morto") || q.contains("elezioni") || q.contains("governo")) return true;
+        // Tecnologia recente
+        if (q.contains("gpt") || q.contains("claude") || q.contains("gemini") ||
+            q.contains("llm") || q.contains("intelligenza artificiale") && q.contains("nuov")) return true;
+        return false;
+    }
+
+    // Cerca sempre su web - versione potenziata con fallback Google
+    private String searchWebEnhanced(String query, String sessionId) {
+        // Prima prova Tavily (risultati migliori)
+        String tavily = searchWeb(query);
+        if (tavily != null && !tavily.isBlank()) return tavily;
+        // Fallback: DuckDuckGo Instant Answer API (gratuita, no key)
+        return searchDuckDuckGo(query);
+    }
+
+    private String searchDuckDuckGo(String query) {
+        try {
+            String encoded = URLEncoder.encode(query, "UTF-8");
+            String url = "https://api.duckduckgo.com/?q=" + encoded +
+                         "&format=json&no_html=1&skip_disambig=1&no_redirect=1";
+            HttpHeaders h = new HttpHeaders();
+            h.set("User-Agent", "SPACE-AI/4.0");
+            ResponseEntity<String> resp = restTemplate.exchange(url,
+                HttpMethod.GET, new HttpEntity<>(h), String.class);
+            if (!resp.getStatusCode().is2xxSuccessful()) return null;
+            com.fasterxml.jackson.databind.JsonNode json = MAPPER.readTree(resp.getBody());
+            StringBuilder sb = new StringBuilder();
+            // Abstract (risposta diretta)
+            String abs = json.path("Abstract").asText();
+            if (!abs.isBlank()) sb.append("RISPOSTA DIRETTA: ").append(abs).append("
+");
+            // AbstractText
+            String absText = json.path("AbstractText").asText();
+            if (!absText.isBlank() && !absText.equals(abs))
+                sb.append(absText).append("
+");
+            // RelatedTopics
+            com.fasterxml.jackson.databind.JsonNode topics = json.path("RelatedTopics");
+            if (topics.isArray()) {
+                int i = 0;
+                for (com.fasterxml.jackson.databind.JsonNode t : topics) {
+                    if (i++ >= 3) break;
+                    String text = t.path("Text").asText();
+                    if (!text.isBlank()) sb.append("- ").append(text).append("
+");
+                }
+            }
+            // Answer (calcoli diretti, conversioni, etc)
+            String answer = json.path("Answer").asText();
+            if (!answer.isBlank()) sb.append("RISPOSTA: ").append(answer).append("
+");
+            String result = sb.toString().trim();
+            if (!result.isBlank()) {
+                log.info("DuckDuckGo search OK per: {}", query.substring(0, Math.min(40, query.length())));
+                return "FONTE: DuckDuckGo\n" + result;
+            }
+        } catch (Exception e) {
+            log.warn("DuckDuckGo: {}", e.getMessage());
+        }
+        return null;
     }
     private String generateImage(String prompt) {
         // RestTemplate con timeout lungo per generazione immagini
@@ -1379,10 +1462,18 @@ public class ChatController {
                 if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
             }
             // Web search
-            String webData = needsSearch(userMessage) ? searchWeb(userMessage) : null;
+            // Cerca su web se necessario - usa enhanced search (Tavily + DuckDuckGo fallback)
+            String webData = needsSearch(userMessage) ? searchWebEnhanced(userMessage, sessionId) : null;
+            // Forza ricerca per domande che riguardano post-2023
+            if (webData == null && userMessage.matches(".*\\b(202[4-9]|chi e|cosa e successo|quando|dove ora)\\b.*")) {
+                webData = searchWebEnhanced(userMessage, sessionId);
+            }
             String enriched = userMessage;
-            if (webData != null && !webData.isBlank())
-                enriched = userMessage + "\n\n[DATI WEB - " + today() + "]:\n" + webData;
+            if (webData != null && !webData.isBlank()) {
+                enriched = userMessage + "\n\n[DATI WEB AGGIORNATI - " + today() + "]:\n" +
+                           "NOTA: Questi dati sono piu recenti della tua conoscenza base. Usali come fonte primaria.\n" +
+                           webData;
+            }
             // Analisi immagine base64 se presente (multimodale)
             String imageBase64 = body.getOrDefault("imageBase64","");
             if (!imageBase64.isEmpty()) {
@@ -1844,6 +1935,21 @@ public class ChatController {
         }
         return ResponseEntity.ok(stats);
     }
+    @PostMapping("/search/live")
+    public ResponseEntity<Object> searchLive(@RequestBody Map<String,String> body) {
+        String query = body.getOrDefault("query","");
+        if (query.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Query vuota"));
+        String tavilyResult = searchWeb(query);
+        String ddgResult    = searchDuckDuckGo(query);
+        Map<String,Object> r = new HashMap<>();
+        r.put("query",   query);
+        r.put("tavily",  tavilyResult  != null ? tavilyResult  : "Non disponibile");
+        r.put("duckduckgo", ddgResult  != null ? ddgResult     : "Non disponibile");
+        r.put("date",    today());
+        r.put("note",    "Dati in tempo reale - cutoff LLM base: " + KNOWLEDGE_CUTOFF);
+        return ResponseEntity.ok(r);
+    }
+
     @GetMapping("/metrics")
     public ResponseEntity<Object> metrics() {
         long avgMs = totalRequests.get() > 0 ?
