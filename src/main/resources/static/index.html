@@ -185,6 +185,8 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
           <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
           <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
+          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
+          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
           <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
           <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
         </div>
@@ -555,6 +557,7 @@ async function sendMsg(){
   else if(curMode==="spaces")msg="[SPACES MODE - rispondi conciso per voce] "+text;
   else if(curMode==="security")msg="[AEGIS SECURITY SCAN - analisi difensiva] "+text;
   else if(curMode==="neural")msg="[NEURAL CORE - ragionamento autonomo profondo] "+text;
+  else if(curMode==="visual_creative")msg="[VISUAL CREATIVE - genera SVG per: ] "+text;
   else if(curMode==="temporal")msg="[TEMPORAL REASONING - analizza passato presente futuro di:] "+text;
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
@@ -577,7 +580,10 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
-        if(data.response){
+        if(data.svgImage){
+          // SVG generato da Visual Creative
+          addSVGRow(data.svgImage, data.response||"Immagine SVG generata!");
+        } else if(data.response){
           if(data.response.startsWith("ERRORE_IMMAGINE:")){
             addRow("Generazione immagine non riuscita. Riprova tra 30 secondi.","err");
           } else {
