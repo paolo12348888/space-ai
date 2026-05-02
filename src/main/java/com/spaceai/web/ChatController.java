@@ -1539,135 +1539,145 @@ public class ChatController {
         }
         return null;
     }
+    /**
+     * Traduce e ottimizza il prompt IT→EN per Stable Diffusion / Pollinations.
+     * Usa un dizionario esteso + LLM fallback per scene complesse.
+     */
     private String enhancePromptForSD(String prompt) {
-        if (prompt == null || prompt.isBlank()) return "a beautiful space scene";
-        String p = prompt
-            .replaceAll("(?i)\\bcrea\\b", "create")
-            .replaceAll("(?i)\\bun\\b", "a")
-            .replaceAll("(?i)\\buna\\b", "a")
-            .replaceAll("(?i)\\bgatto\\b", "cat")
-            .replaceAll("(?i)\\bcane\\b", "dog")
-            .replaceAll("(?i)\\bcielo\\b", "sky")
-            .replaceAll("(?i)\\bmare\\b", "sea")
-            .replaceAll("(?i)\\bmontagna\\b", "mountain")
-            .replaceAll("(?i)\\bcittà\\b", "city")
-            .replaceAll("(?i)\\bforesta\\b", "forest")
-            .replaceAll("(?i)\\bnotte\\b", "night")
-            .replaceAll("(?i)\\bgiorno\\b", "day");
-        return p + ", highly detailed, photorealistic, 4k, masterpiece, best quality";
+        if (prompt == null || prompt.isBlank()) return "a beautiful space scene, highly detailed, 4k";
+        // Dizionario IT->EN per termini visivi comuni
+        String eng = prompt.toLowerCase()
+            .replaceAll("(?i)\bcrea(re)?\b", "").replaceAll("(?i)\bgenera(re)?\b", "")
+            .replaceAll("(?i)\bdisegna(re)?\b", "").replaceAll("(?i)\bmostrar?e?\b", "show")
+            .replaceAll("(?i)\bimmagine di\b", "").replaceAll("(?i)\bimmagine del\b", "")
+            .replaceAll("(?i)\bimmagine della\b", "").replaceAll("(?i)\bimmagine\b", "")
+            .replaceAll("(?i)\bun uomo\b", "a man").replaceAll("(?i)\buna donna\b", "a woman")
+            .replaceAll("(?i)\bun bambino\b", "a child").replaceAll("(?i)\buna persona\b", "a person")
+            .replaceAll("(?i)\bseduto\b", "sitting").replaceAll("(?i)\bin piedi\b", "standing")
+            .replaceAll("(?i)\bche vola\b", "flying").replaceAll("(?i)\bche corre\b", "running")
+            .replaceAll("(?i)\bsu un\b", "on a").replaceAll("(?i)\bsu una\b", "on a")
+            .replaceAll("(?i)\bsu dei\b", "on some").replaceAll("(?i)\bsopra un\b", "above a")
+            .replaceAll("(?i)\bmissile\b", "missile").replaceAll("(?i)\brazzo\b", "rocket")
+            .replaceAll("(?i)\baereo\b", "airplane").replaceAll("(?i)\belicottero\b", "helicopter")
+            .replaceAll("(?i)\bmacchina\b", "car").replaceAll("(?i)\bmoto\b", "motorcycle")
+            .replaceAll("(?i)\bbarca\b", "boat").replaceAll("(?i)\bcarro armato\b", "tank")
+            .replaceAll("(?i)\bgatto\b", "cat").replaceAll("(?i)\bcane\b", "dog")
+            .replaceAll("(?i)\bcavallo\b", "horse").replaceAll("(?i)\borso\b", "bear")
+            .replaceAll("(?i)\bcielo\b", "sky").replaceAll("(?i)\bmare\b", "sea")
+            .replaceAll("(?i)\bmontagna\b", "mountain").replaceAll("(?i)\bcittà\b", "city")
+            .replaceAll("(?i)\bforesta\b", "forest").replaceAll("(?i)\bdeserto\b", "desert")
+            .replaceAll("(?i)\bnotte\b", "night").replaceAll("(?i)\bgiorno\b", "daytime")
+            .replaceAll("(?i)\btramonto\b", "sunset").replaceAll("(?i)\balba\b", "sunrise")
+            .replaceAll("(?i)\besplosione\b", "explosion").replaceAll("(?i)\bfuoco\b", "fire")
+            .replaceAll("(?i)\bbandiera\b", "flag").replaceAll("(?i)\bguerra\b", "war scene")
+            .replaceAll("(?i)\biraniano\b", "iranian").replaceAll("(?i)\bitaliano\b", "italian")
+            .replaceAll("(?i)\bamericano\b", "american").replaceAll("(?i)\brusso\b", "russian")
+            .replaceAll("(?i)\bcinese\b", "chinese").replaceAll("(?i)\bfrancese\b", "french")
+            .replaceAll("(?i)\bpresidente\b", "president").replaceAll("(?i)\bguarriero\b", "warrior")
+            .replaceAll("(?i)\bsoldato\b", "soldier").replaceAll("(?i)\bastronauta\b", "astronaut")
+            .replaceAll("(?i)\brobot\b", "robot").replaceAll("(?i)\balieno\b", "alien")
+            .replaceAll("(?i)\bvestito\b", "wearing").replaceAll("(?i)\babito\b", "suit")
+            .replaceAll("(?i)\bcravatta\b", "tie").replaceAll("(?i)\bcappello\b", "hat")
+            .replaceAll("(?i)\bocchiali\b", "glasses").replaceAll("(?i)\buniforme\b", "uniform")
+            .replaceAll("(?i)\bsullo sfondo\b", "in the background")
+            .replaceAll("(?i)\bdavanti a\b", "in front of")
+            .replaceAll("(?i)\bcon\b", "with").replaceAll("(?i)\be\b", "and")
+            .replaceAll("(?i)\bil\b", "").replaceAll("(?i)\bla\b", "")
+            .replaceAll("(?i)\blo\b", "").replaceAll("(?i)\bles?\b", "")
+            .replaceAll("(?i)\bdel\b", "of the").replaceAll("(?i)\bdella\b", "of the")
+            .replaceAll("(?i)\bdei\b", "of").replaceAll("(?i)\bdi\b", "of")
+            .replaceAll("\\s{2,}", " ").trim();
+        if (eng.isBlank() || eng.length() < 5) eng = prompt; // fallback al testo originale
+        return eng + ", highly detailed, photorealistic, cinematic lighting, 4k, sharp focus, masterpiece";
     }
 
     private String generateImage(String prompt) {
-        // RestTemplate con timeout lungo per generazione immagini
-        org.springframework.web.client.RestTemplate imgClient = new org.springframework.web.client.RestTemplate();
-        try {
-            org.springframework.http.client.SimpleClientHttpRequestFactory factory =
-                new org.springframework.http.client.SimpleClientHttpRequestFactory();
-            factory.setConnectTimeout(15000);
-            factory.setReadTimeout(45000); // 45s per SD pipeline
-            imgClient.setRequestFactory(factory);
-        } catch(Exception ex) { log.warn("Timeout config: {}", ex.getMessage()); }
+        // ── STEP 1: Traduci sempre il prompt in inglese prima di inviarlo ─────
+        // Questo è il bug principale: prima si passava il prompt italiano grezzo
+        String engPrompt = enhancePromptForSD(prompt);
+        log.info("Image prompt IT: [{}] -> EN: [{}]", prompt, engPrompt);
 
-        // ── STABLE DIFFUSION via HuggingFace Inference API ────────
-        // Implementazione ispirata al documento Manus/Diffusers
-        // Usa SD v1.5 (runwayml) con num_inference_steps=25, guidance_scale=7.5
+        // ── RestTemplate con timeout ottimizzati ────────────────────────────
+        org.springframework.web.client.RestTemplate imgClient =
+            new org.springframework.web.client.RestTemplate();
+        try {
+            org.springframework.http.client.SimpleClientHttpRequestFactory f =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            f.setConnectTimeout(10000);  // 10s connect
+            f.setReadTimeout(30000);     // 30s read (Pollinations risponde in ~5-15s)
+            imgClient.setRequestFactory(f);
+        } catch (Exception ex) { log.warn("Timeout config: {}", ex.getMessage()); }
+
+        // ── PRIORITÀ 1: Pollinations FLUX (gratis, no key, ottima qualità) ──
+        // Usa SEMPRE il prompt in inglese tradotto
+        String[] pollinationModels = {"flux", "turbo", "flux-realism"};
+        for (String pModel : pollinationModels) {
+            try {
+                // Seed fisso per coerenza, basato sull hash del prompt (non sul tempo!)
+                long seed = Math.abs(engPrompt.hashCode()) % 99999;
+                String encoded = java.net.URLEncoder.encode(engPrompt, "UTF-8")
+                    .replace("+", "%20").replace("%2C", ",");
+                String url = "https://image.pollinations.ai/prompt/" + encoded
+                    + "?width=1024&height=1024&nologo=true&enhance=true"
+                    + "&model=" + pModel + "&seed=" + seed;
+                log.info("Pollinations {} request: {}", pModel, url.substring(0, Math.min(120, url.length())));
+                ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
+                if (resp.getStatusCode().is2xxSuccessful()
+                        && resp.getBody() != null
+                        && resp.getBody().length > 5000) {
+                    log.info("Pollinations {} OK: {} bytes", pModel, resp.getBody().length);
+                    return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
+                }
+                log.warn("Pollinations {} risposta insufficiente: {} bytes",
+                    pModel, resp.getBody() == null ? 0 : resp.getBody().length);
+            } catch (Exception e) {
+                log.warn("Pollinations {} fallito: {}", pModel, e.getMessage());
+            }
+        }
+
+        // ── PRIORITÀ 2: HuggingFace SD (se HF_TOKEN disponibile) ─────────
         String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
-            String[] sdModels = {
-                "stabilityai/stable-diffusion-xl-base-1.0",  // SDXL - qualita piu alta
-                "runwayml/stable-diffusion-v1-5",             // SD v1.5 - come nel PDF
-                "stabilityai/stable-diffusion-2-1"            // SD v2.1 - fallback
+            String[] hfModels = {
+                "black-forest-labs/FLUX.1-schnell",        // FLUX schnell - veloce
+                "stabilityai/stable-diffusion-xl-base-1.0", // SDXL
+                "runwayml/stable-diffusion-v1-5"            // SD 1.5 fallback
             };
-            for (String sdModel : sdModels) {
+            for (String hfModel : hfModels) {
                 try {
-                    // Prepara prompt ottimizzato per SD (traduzione in inglese + keywords qualita)
-                    String sdPrompt = enhancePromptForSD(prompt);
                     HttpHeaders h = new HttpHeaders();
                     h.setContentType(MediaType.APPLICATION_JSON);
                     h.setBearerAuth(hfKey);
-                    // Parametri ispirati al codice Python del PDF:
-                    // num_inference_steps=25 (bilanciamento qualita/velocita)
-                    // guidance_scale=7.5 (fedele al prompt, come nel codice Python)
                     ObjectNode req = MAPPER.createObjectNode();
-                    req.put("inputs", sdPrompt);
+                    req.put("inputs", engPrompt); // SEMPRE il prompt in inglese
                     ObjectNode params = MAPPER.createObjectNode();
-                    params.put("num_inference_steps", 25);
+                    params.put("num_inference_steps", 20);
                     params.put("guidance_scale", 7.5);
-                    params.put("width", 512);
-                    params.put("height", 512);
+                    params.put("width", 768);
+                    params.put("height", 768);
                     params.put("wait_for_model", true);
                     params.put("use_cache", false);
                     req.set("parameters", params);
                     ResponseEntity<byte[]> resp = imgClient.postForEntity(
-                        "https://api-inference.huggingface.co/models/" + sdModel,
+                        "https://api-inference.huggingface.co/models/" + hfModel,
                         new HttpEntity<>(MAPPER.writeValueAsString(req), h),
                         byte[].class);
                     if (resp.getStatusCode().is2xxSuccessful()
                             && resp.getBody() != null
-                            && resp.getBody().length > 5000) {
-                        log.info("SD image OK: {} - {} bytes", sdModel, resp.getBody().length);
-                        return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
+                            && resp.getBody().length > 3000) {
+                        log.info("HF {} OK: {} bytes", hfModel, resp.getBody().length);
+                        return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
                     }
                 } catch (Exception e) {
-                    log.warn("SD model {} fallito: {}", sdModel, e.getMessage());
+                    log.warn("HF model {} fallito: {}", hfModel, e.getMessage());
                 }
             }
         }
-        // Tentativo 1: Pollinations.ai FLUX (gratis, no key)
-        try {
-            String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
-            // Modello flux-realism - qualita alta
-            String url = "https://image.pollinations.ai/prompt/" + encoded
-                       + "?width=1024&height=1024&nologo=true&enhance=true&model=flux&seed="
-                       + System.currentTimeMillis() % 9999;
-            ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
-            if (resp.getStatusCode().is2xxSuccessful()
-                    && resp.getBody() != null
-                    && resp.getBody().length > 5000) {
-                return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
-            }
-            log.warn("Pollinations risposta vuota o piccola: {} bytes",
-                    resp.getBody() == null ? 0 : resp.getBody().length);
-        } catch (Exception e) {
-            log.warn("Pollinations FLUX fallito: {}", e.getMessage());
-        }
-        // Tentativo 2: Pollinations con modello turbo
-        try {
-            String encoded = URLEncoder.encode(prompt, "UTF-8").replace("+", "%20");
-            String url = "https://image.pollinations.ai/prompt/" + encoded
-                       + "?width=768&height=768&nologo=true&model=turbo";
-            ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
-            if (resp.getStatusCode().is2xxSuccessful()
-                    && resp.getBody() != null
-                    && resp.getBody().length > 3000) {
-                return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
-            }
-        } catch (Exception e) {
-            log.warn("Pollinations turbo fallito: {}", e.getMessage());
-        }
-        // Tentativo 3: HuggingFace se HF_TOKEN disponibile
-        if (!hfKey.isEmpty()) {
-            try {
-                HttpHeaders h = new HttpHeaders();
-                h.setContentType(MediaType.APPLICATION_JSON);
-                h.setBearerAuth(hfKey);
-                ObjectNode req = MAPPER.createObjectNode();
-                req.put("inputs", prompt);
-                ObjectNode params = MAPPER.createObjectNode();
-                params.put("wait_for_model", true);
-                params.put("use_cache", false);
-                req.set("parameters", params);
-                ResponseEntity<byte[]> resp = imgClient.postForEntity(
-                        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-                        new HttpEntity<>(MAPPER.writeValueAsString(req), h), byte[].class);
-                if (resp.getStatusCode().is2xxSuccessful()
-                        && resp.getBody() != null
-                        && resp.getBody().length > 1000) {
-                    return "IMAGE:" + Base64.getEncoder().encodeToString(resp.getBody());
-                }
-            } catch (Exception e) { log.warn("HF: {}", e.getMessage()); }
-        }
-        return "ERRORE_IMMAGINE: Generazione non riuscita. Riprova tra 30 secondi.";
+
+        // ── FALLBACK: SVG placeholder con la scena descritta ──────────────
+        log.warn("Tutti i motori immagine falliti per prompt: {}", engPrompt);
+        return "ERRORE_IMMAGINE: Servizio immagini temporaneamente non disponibile. " +
+               "Prompt EN usato: [" + engPrompt.substring(0, Math.min(80, engPrompt.length())) + "]";
     }
     private String thinkingMode(String userMsg, String context, String baseUrl, String apiKey, String model) throws Exception {
         // Step 1: Ragionamento interno
@@ -1766,7 +1776,14 @@ public class ChatController {
                        "debate,interview,language,mindmap,prompt_eng,video_gen,audio_gen,image_gen,spaces. " +
                        "Scegli 1-2 agenti. SOLO JSON valido.";
             case "spaces": return "Sei SPACES, assistente vocale personale di SPACE AI. Data:" + d + ". Rispondi in max 3 frasi concise per la voce. Usa sempre tono professionale e amichevole. Inizia con 'SPACES:'.";
-            case "image_gen": return "Sei IMAGE_GEN di SPACE AI. Data:" + d + ". Genera [GENERA_IMMAGINE: detailed english description]. Poi descrivi in italiano.";
+            case "image_gen": return "Sei IMAGE_GEN di SPACE AI. Data:" + d + ". " +
+                "Il tuo compito: ricevi una richiesta di immagine in italiano, " +
+                "devi OBBLIGATORIAMENTE rispondere con il tag [GENERA_IMMAGINE: ...] " +
+                "contenente una descrizione DETTAGLIATA in INGLESE della scena ESATTA richiesta. " +
+                "IMPORTANTE: descrivi TUTTI i soggetti, l'azione, l'ambientazione, i colori. " +
+                "Esempio: se l'utente chiede 'Trump su un missile iraniano', scrivi: " +
+                "[GENERA_IMMAGINE: Donald Trump in a dark suit and red tie, sitting and riding on a large iranian missile painted in green white red colors, launching into the sky, dramatic cinematic scene, mountains background, photorealistic] " +
+                "Dopo il tag, descrivi in italiano quello che hai generato.";
             case "code": return "Sei CODE di SPACE AI. Data:" + d + ". Python,Java,JS,TS,Go,Rust,C++,SQL,React,Spring,FastAPI,Docker. Codice COMPLETO con ```. Rispondi in italiano.";
             case "debug": return "Sei DEBUG di SPACE AI. Data:" + d + ". Root cause + soluzione + prevenzione. Rispondi in italiano.";
             case "debug2": return "Sei DEBUG2 di SPACE AI. Data:" + d + ". Profiling memoria/CPU, distributed tracing, OpenTelemetry, heap dump. Rispondi in italiano.";
@@ -2102,13 +2119,20 @@ public class ChatController {
 
             if (isImg) {
                 String imgAgent = callLLM(agentPrompt("image_gen"), enriched, history, baseUrl, apiKey, model, 400);
-                String hfPrompt = userMessage;
+                // Estrai prompt EN dal tag [GENERA_IMMAGINE:...] — il vero fix al bug
+                // L'agente image_gen deve generare la scena descritta, non il soggetto generico
+                String hfPrompt = userMessage; // fallback: generateImage tradurrà da IT
                 if (imgAgent.contains("[GENERA_IMMAGINE:")) {
                     int s = imgAgent.indexOf("[GENERA_IMMAGINE:") + 17;
                     int e = imgAgent.indexOf("]", s);
-                    if (e > s) hfPrompt = imgAgent.substring(s, e).trim();
+                    if (e > s) {
+                        hfPrompt = imgAgent.substring(s, e).trim();
+                        log.info("Prompt EN estratto da IMAGE_GEN: {}", hfPrompt);
+                    }
+                } else {
+                    // L'agente non ha usato il tag: forza traduzione del messaggio originale
+                    log.warn("IMAGE_GEN no tag: traduco manualmente '{}'", userMessage);
                 }
-                String imgResult = generateImage(hfPrompt);
                 String textResp = imgAgent.replaceAll("\\[GENERA_IMMAGINE:[^\\]]*\\]", "").trim();
                 if (textResp.isEmpty()) textResp = "Ecco l'immagine generata!";
                 saveMessages(sessionId, userMessage, textResp, supabaseUrl, supabaseKey);
