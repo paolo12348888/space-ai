@@ -2374,9 +2374,9 @@ public class ChatController {
         m.put("date",            today());
         return ResponseEntity.ok(m);
     }
-        // ── ENDPOINT MEMORIA DIFFERENZIALE ───────────────────────────────────────────────
+    // ── ENDPOINT MEMORIA DIFFERENZIALE ──────────────────────────────────────────────
     @GetMapping("/memory/stats")
-    public ResponseEntity<Object> memoryStats() {
+    public ResponseEntity<Object> differentialMemoryStats() {
         int sharedNodes = sharedKnowledge.size();
         int sharedEdges = sharedKnowledge.values().stream().mapToInt(Set::size).sum();
         int activeSessions = sessionDeltas.size();
