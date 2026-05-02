@@ -1091,13 +1091,11 @@ public class ChatController {
             StringBuilder sb = new StringBuilder();
             // Abstract (risposta diretta)
             String abs = json.path("Abstract").asText();
-            if (!abs.isBlank()) sb.append("RISPOSTA DIRETTA: ").append(abs).append("
-");
+            if (!abs.isBlank()) sb.append("RISPOSTA DIRETTA: ").append(abs).append("\n");
             // AbstractText
             String absText = json.path("AbstractText").asText();
             if (!absText.isBlank() && !absText.equals(abs))
-                sb.append(absText).append("
-");
+                sb.append(absText).append("\n");
             // RelatedTopics
             com.fasterxml.jackson.databind.JsonNode topics = json.path("RelatedTopics");
             if (topics.isArray()) {
@@ -1105,14 +1103,12 @@ public class ChatController {
                 for (com.fasterxml.jackson.databind.JsonNode t : topics) {
                     if (i++ >= 3) break;
                     String text = t.path("Text").asText();
-                    if (!text.isBlank()) sb.append("- ").append(text).append("
-");
+                    if (!text.isBlank()) sb.append("- ").append(text).append("\n");
                 }
             }
             // Answer (calcoli diretti, conversioni, etc)
             String answer = json.path("Answer").asText();
-            if (!answer.isBlank()) sb.append("RISPOSTA: ").append(answer).append("
-");
+            if (!answer.isBlank()) sb.append("RISPOSTA: ").append(answer).append("\n");
             String result = sb.toString().trim();
             if (!result.isBlank()) {
                 log.info("DuckDuckGo search OK per: {}", query.substring(0, Math.min(40, query.length())));
