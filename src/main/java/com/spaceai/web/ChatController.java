@@ -2134,7 +2134,7 @@ public class ChatController {
                     log.warn("IMAGE_GEN no tag: traduco manualmente '{}'", userMessage);
                 }
                 String imgResult = generateImage(hfPrompt);
-                String textResp = imgAgent.replaceAll("\[GENERA_IMMAGINE:[^\]]*\]", "").trim();
+                String textResp = imgAgent.replaceAll("\\[GENERA_IMMAGINE:[^\\]]*\\]", "").trim();
                 if (textResp.isEmpty()) textResp = "Ecco l'immagine generata!";
                 saveMessages(sessionId, userMessage, textResp, supabaseUrl, supabaseKey);
                 if (imgResult.startsWith("IMAGE:"))
