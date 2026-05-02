@@ -907,7 +907,7 @@ public class ChatController {
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
 
     // ── PERSISTENZA BRAIN STATE ───────────────────────────────────
-    @javax.annotation.PreDestroy
+    @jakarta.annotation.PreDestroy
     public void saveBrainState() {
         try {
             com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
@@ -1119,6 +1119,24 @@ public class ChatController {
         }
         return null;
     }
+    private String enhancePromptForSD(String prompt) {
+        if (prompt == null || prompt.isBlank()) return "a beautiful space scene";
+        String p = prompt
+            .replaceAll("(?i)\\bcrea\\b", "create")
+            .replaceAll("(?i)\\bun\\b", "a")
+            .replaceAll("(?i)\\buna\\b", "a")
+            .replaceAll("(?i)\\bgatto\\b", "cat")
+            .replaceAll("(?i)\\bcane\\b", "dog")
+            .replaceAll("(?i)\\bcielo\\b", "sky")
+            .replaceAll("(?i)\\bmare\\b", "sea")
+            .replaceAll("(?i)\\bmontagna\\b", "mountain")
+            .replaceAll("(?i)\\bcittà\\b", "city")
+            .replaceAll("(?i)\\bforesta\\b", "forest")
+            .replaceAll("(?i)\\bnotte\\b", "night")
+            .replaceAll("(?i)\\bgiorno\\b", "day");
+        return p + ", highly detailed, photorealistic, 4k, masterpiece, best quality";
+    }
+
     private String generateImage(String prompt) {
         // RestTemplate con timeout lungo per generazione immagini
         org.springframework.web.client.RestTemplate imgClient = new org.springframework.web.client.RestTemplate();
@@ -1208,7 +1226,6 @@ public class ChatController {
             log.warn("Pollinations turbo fallito: {}", e.getMessage());
         }
         // Tentativo 3: HuggingFace se HF_TOKEN disponibile
-        String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
             try {
                 HttpHeaders h = new HttpHeaders();
@@ -1621,12 +1638,12 @@ public class ChatController {
             }
             // Gestione immagini
             String q = userMessage.toLowerCase();
+            String curMode = body.getOrDefault("mode", "");
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
             boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
                     (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
-            String curMode = body.getOrDefault("mode", "");
             // Visual Creative: genera SVG autonomamente
             if (isVisualCreative && !isImg) {
                 try {
@@ -2070,7 +2087,7 @@ public class ChatController {
                 stats.put("gzipRatio", String.format("%.1fx", sample.isEmpty()?1.0:(double)sample.length()/Math.max(1,comp.length)));
             } catch(Exception ignored) {}
         }
-        stats.put("stmEntries",       activeSTMBuffer.size());
+        stats.put("stmEntries",       stmBuffer.size());
         stats.put("roaringIndexed",   sessionBitOffsets.size());
         stats.put("compressionType",  "GZIP-native (CBOR+Zstd equivalent)");
         // Dimostra compressione: calcola ratio su un sample
