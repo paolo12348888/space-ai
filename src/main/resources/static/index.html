@@ -468,6 +468,74 @@ function addImgRow(b64,mime){
   acts.appendChild(dl);bub.appendChild(img);bub.appendChild(acts);
   row.appendChild(av);row.appendChild(bub);msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
 }
+function addSVGRow(svgDataUrl, caption, svgCode){
+  removeWelcome();
+  var row=document.createElement("div");row.className="row ai";
+  var av=document.createElement("div");av.className="av";
+  var im=document.createElement("img");im.src=LOGO;av.appendChild(im);
+  var bub=document.createElement("div");bub.className="bubble";
+  bub.style.cssText="padding:8px;max-width:92%";
+  // Immagine SVG
+  var img=document.createElement("img");
+  img.src=svgDataUrl;
+  img.style.cssText="max-width:100%;border-radius:10px;display:block;cursor:zoom-in;margin-bottom:8px";
+  img.onclick=function(){window.open(img.src,"_blank");};
+  bub.appendChild(img);
+  // Caption testo
+  if(caption){
+    var cap=document.createElement("p");
+    cap.style.cssText="margin:4px 0 8px 0;font-size:.85rem;opacity:.8";
+    cap.textContent=caption;
+    bub.appendChild(cap);
+  }
+  // Pulsanti azione
+  var acts=document.createElement("div");acts.className="acts";
+  // Scarica SVG come immagine
+  var dlImg=document.createElement("a");
+  dlImg.href=svgDataUrl;
+  dlImg.download="space-ai-visual-"+Date.now()+".svg";
+  dlImg.className="abtn";dlImg.style.textDecoration="none";
+  dlImg.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica SVG';
+  acts.appendChild(dlImg);
+  // Scarica PNG (conversione canvas)
+  var dlPng=document.createElement("button");
+  dlPng.className="abtn";
+  dlPng.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica PNG';
+  dlPng.onclick=function(){
+    var canvas=document.createElement("canvas");
+    canvas.width=900;canvas.height=600;
+    var ctx2=canvas.getContext("2d");
+    var tmpImg=new Image();
+    tmpImg.onload=function(){
+      ctx2.drawImage(tmpImg,0,0,900,600);
+      var a=document.createElement("a");
+      a.download="space-ai-visual-"+Date.now()+".png";
+      a.href=canvas.toDataURL("image/png");
+      a.click();
+    };
+    tmpImg.src=svgDataUrl;
+  };
+  acts.appendChild(dlPng);
+  // Visualizza codice SVG se disponibile
+  if(svgCode){
+    var showCode=document.createElement("button");
+    showCode.className="abtn";showCode.textContent="</> Codice";
+    showCode.onclick=function(){
+      var pre=document.getElementById("svgCodeBlock_"+Date.now());
+      var existing=bub.querySelector(".svgCodePre");
+      if(existing){existing.remove();showCode.textContent="</> Codice";return;}
+      var codeDiv=document.createElement("details");codeDiv.className="svgCodePre";
+      codeDiv.style.cssText="margin-top:8px;font-size:.7rem;max-height:200px;overflow:auto";
+      codeDiv.innerHTML="<summary style='cursor:pointer;color:var(--accent)'>Codice SVG</summary><pre style='white-space:pre-wrap;word-break:break-all'>"+svgCode.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</pre>";
+      bub.insertBefore(codeDiv,acts);
+      showCode.textContent="Chiudi";
+    };
+    acts.appendChild(showCode);
+  }
+  bub.appendChild(acts);
+  row.appendChild(av);row.appendChild(bub);
+  msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
+}
 function addTyping(){
   removeWelcome();
   var row=document.createElement("div");row.className="row ai";row.id="typing";
@@ -580,12 +648,34 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
-        if(data.svgImage){
-          // SVG generato da Visual Creative
-          addSVGRow(data.svgImage, data.response||"Immagine SVG generata!");
+        // ── Gestione risposte Visual Creative (SVG + realistica) ──────
+        if(data.mode==="visual_creative"){
+          if(data.image){
+            // Immagine realistica (Pollinations) - scaricabile come JPEG
+            addImgRow(data.image, data.imageType||"image/jpeg");
+            if(data.svgCode){
+              // Mostra anche bottone SVG se disponibile
+              var svgBlob=new Blob([data.svgCode],{type:"image/svg+xml"});
+              var svgUrl=URL.createObjectURL(svgBlob);
+              var svgBtn=document.createElement("div");svgBtn.className="row ai";
+              var svgA=document.createElement("a");
+              svgA.href=svgUrl;svgA.download="space-ai-"+Date.now()+".svg";
+              svgA.className="abtn";svgA.style.cssText="text-decoration:none;display:inline-block;margin:4px 0 0 56px";
+              svgA.innerHTML="</> Scarica anche SVG";
+              svgBtn.appendChild(svgA);msgsEl.appendChild(svgBtn);
+            }
+          } else if(data.svgImage){
+            // Solo SVG generato dal LLM
+            addSVGRow(data.svgImage, data.response||"Immagine generata!", data.svgCode||"");
+          } else if(data.response){
+            addRow(data.response,"ai");
+          }
+        // ── Gestione risposta testo normale ──────────────────────────
+        } else if(data.svgImage){
+          addSVGRow(data.svgImage, data.response||"Immagine SVG generata!", data.svgCode||"");
         } else if(data.response){
           if(data.response.startsWith("ERRORE_IMMAGINE:")){
-            addRow("Generazione immagine non riuscita. Riprova tra 30 secondi.","err");
+            addRow("⚠️ Generazione immagine non riuscita. Riprova tra qualche secondo.","err");
           } else {
             addRow(data.response,"ai");
             if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
@@ -597,7 +687,8 @@ async function sendMsg(){
           var ei=document.getElementById("emotionIndicator");
           if(ei)ei.textContent=eMap[data.emotion]||"😐";
         }
-        if(data.image)addImgRow(data.image,data.imageType||"image/jpeg");
+        // Immagine da altri agenti (image_gen, ecc.)
+        if(data.image && data.mode!=="visual_creative")addImgRow(data.image,data.imageType||"image/jpeg");
       }
     }
   }catch(e){
