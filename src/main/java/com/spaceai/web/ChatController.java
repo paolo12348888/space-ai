@@ -347,9 +347,9 @@ public class ChatController {
         // Sintetizza le 3 prospettive
         String consensusPrompt =
             "Sintetizza queste 3 analisi in una risposta definitiva ottimale:\n\n" +
-            "RISPOSTA 1: " + response1.substring(0, Math.min(800, response1.length())) + "\n\n" +
-            "ANALISI 2: " + p2.substring(0, Math.min(800, p2.length())) + "\n\n" +
-            "CRITICA 3: " + p3.substring(0, Math.min(800, p3.length())) + "\n\n" +
+            "RISPOSTA 1: " + response1.substring(0, Math.min(2000, response1.length())) + "\n\n" +
+            "ANALISI 2: " + p2.substring(0, Math.min(2000, p2.length())) + "\n\n" +
+            "CRITICA 3: " + p3.substring(0, Math.min(2000, p3.length())) + "\n\n" +
             "Crea la risposta MIGLIORE combinando il meglio di tutte e tre. Markdown, italiano.";
         return callLLM(consensusPrompt, query, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
@@ -810,7 +810,7 @@ public class ChatController {
                 newFacts++;
             }
         }
-        if (newFacts > 0)
+        if (newFacts > 0) log.info("Nuovi fatti: {} per sessione {}", newFacts, sessionId);
     }
     private String compressFact(String sentence, String sessionId) {
         String s = sentence.toLowerCase().trim();
@@ -1493,9 +1493,60 @@ public class ChatController {
                        "Ragioni in modo indipendente, verifichi le tue risposte, impari dall errore. " +
                        "Combini conoscenza da Llama, Qwen, DeepSeek e dalla tua rete neurale interna. " +
                        "Approccio: osserva -> ragiona -> verifica -> correggi -> apprendi. Rispondi in italiano.";
+            case "visual_creative":
+                return "Sei VISUAL_CREATIVE di SPACE AI. Data:" + d + ". " +
+                       "Genera codice SVG 800x600 valido dalla descrizione. " +
+                       "USA SOLO tag SVG standard. Aggiungi sfondo gradiente e testo. " +
+                       "Restituisci SOLO il codice dentro ```svg ... ```. Nessuna spiegazione.";
             default: return coreSystem();
         }
     }
+
+    // ── VISUAL CREATIVE: SVG autonomo senza API esterne ───────────
+    private String handleVisualCreative(String prompt, String sid,
+                                         String baseUrl, String apiKey, String model) throws Exception {
+        String svgCode = extractSVGCode(callLLM(agentPrompt("visual_creative"),
+            "DESCRIZIONE: " + prompt, new ArrayList<>(), baseUrl, apiKey, model, 2500));
+        if (svgCode == null || svgCode.length() < 50)
+            return "Riprova con una descrizione piu dettagliata.";
+        byte[] svgBytes = svgCode.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String svgB64 = "data:image/svg+xml;base64," + Base64.getEncoder().encodeToString(svgBytes);
+        return "IMAGE_SVG:" + svgB64 + "SVGSEP" + svgCode;
+    }
+
+    private String extractSVGCode(String resp) {
+        int s = resp.indexOf("```svg");
+        if (s >= 0) { s += 6; int e = resp.indexOf("```", s); if (e > s) return resp.substring(s,e).trim(); }
+        s = resp.indexOf("<svg");
+        if (s >= 0) { int e = resp.lastIndexOf("</svg>") + 6; if (e > s) return resp.substring(s,e).trim(); }
+        return null;
+    }
+
+    // ── OLLAMA/llama.cpp LOCAL LLM ────────────────────────────────
+    private String callLocalLLM(String prompt, int maxTokens) {
+        String url = env("OLLAMA_URL", "");
+        if (url.isEmpty()) return null;
+        try {
+            HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+            ObjectNode req = MAPPER.createObjectNode();
+            req.put("model", env("OLLAMA_MODEL","llama3:8b-instruct-q4_K_M"));
+            req.put("prompt", prompt); req.put("stream", false);
+            ObjectNode opts = MAPPER.createObjectNode();
+            opts.put("temperature", 0.7); opts.put("num_predict", maxTokens);
+            req.set("options", opts);
+            ResponseEntity<String> resp = restTemplate.postForEntity(url + "/api/generate",
+                new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+            return MAPPER.readTree(resp.getBody()).path("response").asText();
+        } catch (Exception e) { log.warn("Ollama: {}", e.getMessage()); return null; }
+    }
+
+    // calculateReward con interazione utente
+    private double calculateReward(String sid, String query, String resp, String agent, boolean interacted) {
+        double r = computeReward(query, resp, agent);
+        if (interacted) r += 0.3;
+        return Math.max(-0.5, Math.min(1.0, r));
+    }
+
     private String synthesizerPrompt() {
         return "Sei SYNTHESIZER di SPACE AI. Data:" + today() + ". " +
                "Unifica in UNA risposta finale perfetta. Elimina ridondanze. Markdown. Italiano.";
@@ -1574,8 +1625,35 @@ public class ChatController {
             }
             // Gestione immagini
             String q = userMessage.toLowerCase();
+            boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
+                q.contains("disegna") || q.contains("illustra") ||
+                q.contains("crea svg") || q.contains("genera svg");
             boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
-                    q.contains("disegna") || (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
+                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
+            String curMode = body.getOrDefault("mode", "");
+            // Visual Creative: genera SVG autonomamente
+            if (isVisualCreative && !isImg) {
+                try {
+                    String visualResp = handleVisualCreative(userMessage, sessionId, baseUrl, apiKey, model);
+                    if (visualResp.startsWith("IMAGE_SVG:")) {
+                        String[] parts = visualResp.split("\\|\\|SVG:");
+                        String imgData = parts[0].substring(10); // rimuovi IMAGE_SVG:
+                        saveMessages(sessionId, userMessage, "Immagine SVG generata.", supabaseUrl, supabaseKey);
+                        Map<String,Object> vr = new HashMap<>();
+                        vr.put("response", "Ecco l'immagine che ho creato autonomamente!");
+                        vr.put("svgImage", imgData); // data:image/svg+xml;base64,...
+                        vr.put("status", "ok"); vr.put("mode", "visual_creative");
+                        vr.put("sessionId", sessionId);
+                        return ResponseEntity.ok(vr);
+                    }
+                    saveMessages(sessionId, userMessage, visualResp, supabaseUrl, supabaseKey);
+                    Map<String,Object> vr = new HashMap<>();
+                    vr.put("response", visualResp); vr.put("status", "ok");
+                    vr.put("sessionId", sessionId); vr.put("mode", "visual_creative");
+                    return ResponseEntity.ok(vr);
+                } catch (Exception ve) { log.warn("Visual creative: {}", ve.getMessage()); }
+            }
+
             if (isImg) {
                 String imgAgent = callLLM(agentPrompt("image_gen"), enriched, history, baseUrl, apiKey, model, 400);
                 String hfPrompt = userMessage;
@@ -2045,6 +2123,54 @@ public class ChatController {
         r.put("date",    today());
         r.put("note",    "Dati in tempo reale - cutoff LLM base: " + KNOWLEDGE_CUTOFF);
         return ResponseEntity.ok(r);
+    }
+
+    @GetMapping("/brain/status")
+    public ResponseEntity<Object> brainStatus() {
+        Map<String,Object> s = new HashMap<>();
+        // Stato memoria
+        int totalLTM = longTermMemory.values().stream().mapToInt(List::size).sum();
+        s.put("memory", Map.of(
+            "stmActive",    stmBuffer.size(),
+            "ltmFacts",     totalLTM,
+            "ltmSessions",  longTermMemory.size(),
+            "kgNodes",      knowledgeGraph.size(),
+            "bloomCount",   bloomCount.get(),
+            "roaringIndex", sessionBitOffsets.size()
+        ));
+        // Stato rete neurale
+        double avgWeight = 0;
+        for (double[] w : synapticWeights.values())
+            for (double v : w) avgWeight += v;
+        if (!synapticWeights.isEmpty())
+            avgWeight /= (synapticWeights.size() * 16.0);
+        s.put("neural", Map.of(
+            "agents",         synapticWeights.size(),
+            "avgWeight",      String.format("%.3f", avgWeight),
+            "learningCycles", learningCycles.get(),
+            "metaEpoch",      metaEpoch.get(),
+            "backpropCalls",  totalRequests.get()
+        ));
+        // Stato quantum
+        s.put("quantum", Map.of(
+            "qubits",      QUBIT_COUNT,
+            "initialized", quantumInitialized,
+            "stateVector", quantumState.length
+        ));
+        // Stato sistema
+        long avgMs = totalRequests.get() > 0 ?
+            totalResponseTimeMs.get() / Math.max(1, totalRequests.get()) : 0;
+        s.put("system", Map.of(
+            "totalRequests",  totalRequests.get(),
+            "cacheSize",      responseCache.size(),
+            "cacheHits",      cacheHits.get(),
+            "avgResponseMs",  avgMs,
+            "circuitBreaker", isCircuitOpen() ? "OPEN" : "closed",
+            "brainPersisted", java.nio.file.Files.exists(java.nio.file.Paths.get(BRAIN_FILE))
+        ));
+        s.put("version", "SPACE AI v4.0");
+        s.put("date", today());
+        return ResponseEntity.ok(s);
     }
 
     @GetMapping("/brain/metrics")
