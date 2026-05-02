@@ -1947,23 +1947,77 @@ public class ChatController {
                        "Approccio: osserva -> ragiona -> verifica -> correggi -> apprendi. Rispondi in italiano.";
             case "visual_creative":
                 return "Sei VISUAL_CREATIVE di SPACE AI. Data:" + d + ". " +
-                       "Genera codice SVG 800x600 valido dalla descrizione. " +
-                       "USA SOLO tag SVG standard. Aggiungi sfondo gradiente e testo. " +
-                       "Restituisci SOLO il codice dentro ```svg ... ```. Nessuna spiegazione.";
+                       "Ricevi una descrizione e devi produrre un SVG 900x600 RICCO E DETTAGLIATO. " +
+                       "REGOLE OBBLIGATORIE: " +
+                       "1) Inizia SEMPRE con <svg xmlns='http://www.w3.org/2000/svg' width='900' height='600' viewBox='0 0 900 600'> " +
+                       "2) Usa SEMPRE un background gradient che copra tutto (defs + linearGradient + rect fill). " +
+                       "3) Disegna TUTTI gli elementi della scena: persone, oggetti, sfondo, dettagli. " +
+                       "4) Usa forme: rect, circle, ellipse, polygon, path, line, polyline. " +
+                       "5) Aggiungi colori realistici per ogni elemento. " +
+                       "6) Includi un titolo testuale in basso con la scena descritta. " +
+                       "7) Produci almeno 20 elementi SVG per una scena ricca. " +
+                       "Restituisci SOLO il codice dentro ```svg\n...\n```. Zero spiegazioni.";
             default: return coreSystem();
         }
     }
 
-    // ── VISUAL CREATIVE: SVG autonomo senza API esterne ───────────
+    // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────────
     private String handleVisualCreative(String prompt, String sid,
                                          String baseUrl, String apiKey, String model) throws Exception {
-        String svgCode = extractSVGCode(callLLM(agentPrompt("visual_creative"),
-            "DESCRIZIONE: " + prompt, new ArrayList<>(), baseUrl, apiKey, model, 2500));
-        if (svgCode == null || svgCode.length() < 50)
-            return "Riprova con una descrizione piu dettagliata.";
-        byte[] svgBytes = svgCode.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        String svgB64 = "data:image/svg+xml;base64," + Base64.getEncoder().encodeToString(svgBytes);
-        return "IMAGE_SVG:" + svgB64 + "SVGSEP" + svgCode;
+
+        // ── STADIO 1: Chiedi al LLM una descrizione EN dettagliata + SVG ────
+        String llmResp = callLLM(agentPrompt("visual_creative"),
+            "DESCRIZIONE SCENA: " + prompt, new ArrayList<>(), baseUrl, apiKey, model, 3000);
+
+        // ── STADIO 2: Estrai SVG generato dal LLM ───────────────────────────
+        String svgCode = extractSVGCode(llmResp);
+
+        // ── STADIO 3: Prova anche Pollinations con il prompt originale ───────
+        // Pollinations genera immagini realistiche, SVG è il fallback visivo
+        String pollinationsImg = null;
+        try {
+            org.springframework.web.client.RestTemplate vc_client =
+                new org.springframework.web.client.RestTemplate();
+            org.springframework.http.client.SimpleClientHttpRequestFactory vcf =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            vcf.setConnectTimeout(8000);
+            vcf.setReadTimeout(25000);
+            vc_client.setRequestFactory(vcf);
+
+            String engPrompt = enhancePromptForSD(prompt);
+            long seed = Math.abs(engPrompt.hashCode()) % 99999;
+            String encoded = java.net.URLEncoder.encode(engPrompt, "UTF-8").replace("+", "%20");
+            String url = "https://image.pollinations.ai/prompt/" + encoded
+                + "?width=900&height=600&nologo=true&enhance=true&model=flux&seed=" + seed;
+            log.info("VisualCreative Pollinations: {}", url.substring(0, Math.min(100, url.length())));
+            ResponseEntity<byte[]> resp = vc_client.getForEntity(url, byte[].class);
+            if (resp.getStatusCode().is2xxSuccessful()
+                    && resp.getBody() != null && resp.getBody().length > 5000) {
+                pollinationsImg = "data:image/jpeg;base64,"
+                    + Base64.getEncoder().encodeToString(resp.getBody());
+                log.info("VisualCreative Pollinations OK: {} bytes", resp.getBody().length);
+            }
+        } catch (Exception pe) {
+            log.warn("VisualCreative Pollinations fallito: {}", pe.getMessage());
+        }
+
+        // ── STADIO 4: Costruisci risposta con ENTRAMBE le immagini se disponibili ──
+        // Priorità: immagine realistica (Pollinations) + SVG scaricabile
+        if (pollinationsImg != null && svgCode != null && svgCode.length() > 100) {
+            // Abbiamo entrambe: manda l'immagine realistica come principale + SVG come alternativa
+            return "IMAGE_DUAL:" + pollinationsImg + "||SVG_DATA:" + svgCode;
+        } else if (pollinationsImg != null) {
+            // Solo Pollinations (SVG fallito)
+            return "IMAGE_REAL:" + pollinationsImg;
+        } else if (svgCode != null && svgCode.length() > 100) {
+            // Solo SVG (Pollinations fallito)
+            byte[] svgBytes = svgCode.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            String svgB64 = "data:image/svg+xml;base64,"
+                + Base64.getEncoder().encodeToString(svgBytes);
+            return "IMAGE_SVG:" + svgB64 + "||SVG_CODE:" + svgCode;
+        } else {
+            return "Riprova con una descrizione più dettagliata della scena.";
+        }
     }
 
     private String extractSVGCode(String resp) {
@@ -2096,27 +2150,48 @@ public class ChatController {
                 q.contains("crea svg") || q.contains("genera svg");
             boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
                     (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
-            // Visual Creative: genera SVG autonomamente
+            // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────
             if (isVisualCreative && !isImg) {
                 try {
                     String visualResp = handleVisualCreative(userMessage, sessionId, baseUrl, apiKey, model);
-                    if (visualResp.startsWith("IMAGE_SVG:")) {
-                        String[] parts = visualResp.split("\\|\\|SVG:");
-                        String imgData = parts[0].substring(10); // rimuovi IMAGE_SVG:
-                        saveMessages(sessionId, userMessage, "Immagine SVG generata.", supabaseUrl, supabaseKey);
-                        Map<String,Object> vr = new HashMap<>();
-                        vr.put("response", "Ecco l'immagine che ho creato autonomamente!");
-                        vr.put("svgImage", imgData); // data:image/svg+xml;base64,...
-                        vr.put("status", "ok"); vr.put("mode", "visual_creative");
-                        vr.put("sessionId", sessionId);
-                        return ResponseEntity.ok(vr);
-                    }
-                    saveMessages(sessionId, userMessage, visualResp, supabaseUrl, supabaseKey);
                     Map<String,Object> vr = new HashMap<>();
-                    vr.put("response", visualResp); vr.put("status", "ok");
-                    vr.put("sessionId", sessionId); vr.put("mode", "visual_creative");
+                    vr.put("status", "ok");
+                    vr.put("mode", "visual_creative");
+                    vr.put("sessionId", sessionId);
+
+                    if (visualResp.startsWith("IMAGE_DUAL:")) {
+                        // Abbiamo sia immagine realistica che SVG
+                        String[] parts = visualResp.substring(11).split("\|\|SVG_DATA:", 2);
+                        vr.put("image", parts[0].substring(parts[0].indexOf(",") + 1)); // base64 senza header
+                        vr.put("imageType", "image/jpeg");
+                        vr.put("svgCode", parts.length > 1 ? parts[1] : "");
+                        vr.put("response", "🎨 Ecco la tua immagine! Ho generato sia una versione realistica che il codice SVG scaricabile.");
+                        vr.put("downloadable", true);
+                    } else if (visualResp.startsWith("IMAGE_REAL:")) {
+                        // Solo immagine realistica Pollinations
+                        String imgData = visualResp.substring(11);
+                        vr.put("image", imgData.substring(imgData.indexOf(",") + 1));
+                        vr.put("imageType", "image/jpeg");
+                        vr.put("response", "🎨 Ecco la tua immagine realistica!");
+                        vr.put("downloadable", true);
+                    } else if (visualResp.startsWith("IMAGE_SVG:")) {
+                        // Solo SVG
+                        String[] parts = visualResp.split("\|\|SVG_CODE:", 2);
+                        String svgB64 = parts[0].substring(10); // rimuovi IMAGE_SVG:
+                        vr.put("svgImage", svgB64);  // data:image/svg+xml;base64,...
+                        vr.put("svgCode", parts.length > 1 ? parts[1] : "");
+                        vr.put("response", "🎨 Ecco la tua immagine SVG! Puoi scaricarla con il pulsante.");
+                        vr.put("downloadable", true);
+                    } else {
+                        vr.put("response", visualResp);
+                    }
+                    saveMessages(sessionId, userMessage,
+                        (String) vr.getOrDefault("response", "Immagine generata."),
+                        supabaseUrl, supabaseKey);
                     return ResponseEntity.ok(vr);
-                } catch (Exception ve) { log.warn("Visual creative: {}", ve.getMessage()); }
+                } catch (Exception ve) {
+                    log.warn("Visual creative: {}", ve.getMessage());
+                }
             }
 
             if (isImg) {
