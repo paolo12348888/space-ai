@@ -224,6 +224,162 @@ public class ChatController {
         }
     }
 
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SEMANTIC EMBEDDING ENGINE + RAG SYSTEM
+    // TF-IDF embedding leggero: ogni testo → vettore float[512]
+    // Similarità coseno per retrieval semantico preciso (no librerie esterne)
+    // RAG: indicizza documenti interi a chunk, retrieval top-K semantico
+    // ══════════════════════════════════════════════════════════════════════
+
+    private final Map<String, Integer> embedVocab    = new ConcurrentHashMap<>();
+    private final AtomicInteger        vocabSize     = new AtomicInteger(0);
+    private static final int  EMBED_DIM     = 512;
+    private static final int  CHUNK_SIZE    = 512;
+    private static final int  CHUNK_OVERLAP = 64;
+    private static final int  RAG_TOP_K     = 5;
+    private static final double SIM_THRESHOLD = 0.15;
+    private final Map<String, List<RagChunk>> ragStore  = new ConcurrentHashMap<>();
+    private final Map<String, Double>         idfScores = new ConcurrentHashMap<>();
+    private final AtomicInteger               docCount  = new AtomicInteger(0);
+
+    private static class RagChunk {
+        final String docId; final String text; final float[] embedding;
+        final int chunkIndex; final long timestamp;
+        RagChunk(String docId, String text, float[] embedding, int chunkIndex) {
+            this.docId=docId; this.text=text; this.embedding=embedding;
+            this.chunkIndex=chunkIndex; this.timestamp=System.currentTimeMillis();
+        }
+    }
+
+    private List<String> tokenize(String text) {
+        if (text==null||text.isBlank()) return new ArrayList<>();
+        return Arrays.stream(text.toLowerCase()
+                .replaceAll("[^a-zA-Z\u00C0-\u024F0-9\\s]"," ").split("\\s+"))
+            .filter(w->w.length()>2).collect(Collectors.toList());
+    }
+
+    private void updateVocab(List<String> tokens) {
+        for (String t : new HashSet<>(tokens))
+            embedVocab.computeIfAbsent(t, k -> vocabSize.getAndIncrement());
+    }
+
+    private void updateIDF(List<String> tokens) {
+        int N = docCount.incrementAndGet();
+        Set<String> unique = new HashSet<>(tokens);
+        for (String t : unique) idfScores.merge(t, 1.0, Double::sum);
+        double logN = Math.log(1.0 + N);
+        for (String t : unique) {
+            double df = idfScores.getOrDefault(t, 1.0);
+            idfScores.put(t, logN - Math.log(1.0 + df) + 1.0);
+        }
+    }
+
+    private float[] embed(String text) {
+        float[] vec = new float[EMBED_DIM];
+        if (text==null||text.isBlank()) return vec;
+        List<String> tokens = tokenize(text);
+        if (tokens.isEmpty()) return vec;
+        Map<String,Integer> tf = new HashMap<>();
+        for (String t : tokens) tf.merge(t,1,Integer::sum);
+        for (Map.Entry<String,Integer> e : tf.entrySet()) {
+            String word = e.getKey();
+            double tfScore = (double)e.getValue()/tokens.size();
+            double idf = idfScores.getOrDefault(word, 1.0);
+            double tfidf = tfScore * idf;
+            int b1 = Math.abs(word.hashCode()) % EMBED_DIM;
+            int b2 = (int)(Math.abs((long)word.hashCode()*2654435761L) % EMBED_DIM);
+            vec[b1] += (float)tfidf;
+            vec[b2] -= (float)(tfidf*0.5);
+        }
+        float norm = 0f;
+        for (float v : vec) norm += v*v;
+        norm = (float)Math.sqrt(norm);
+        if (norm>0) for (int i=0;i<EMBED_DIM;i++) vec[i]/=norm;
+        return vec;
+    }
+
+    private double cosineSimilarity(float[] a, float[] b) {
+        if (a==null||b==null||a.length!=b.length) return 0.0;
+        double dot=0,nA=0,nB=0;
+        for (int i=0;i<a.length;i++){dot+=a[i]*b[i];nA+=a[i]*a[i];nB+=b[i]*b[i];}
+        double d=Math.sqrt(nA)*Math.sqrt(nB);
+        return d<1e-8?0.0:dot/d;
+    }
+
+    private int ragIndexDocument(String docId, String text) {
+        if (text==null||text.isBlank()||docId==null) return 0;
+        List<String> tokens = tokenize(text);
+        updateVocab(tokens); updateIDF(tokens);
+        List<RagChunk> chunks = new ArrayList<>();
+        int i=0,idx=0;
+        while (i<text.length()) {
+            int end=Math.min(i+CHUNK_SIZE,text.length());
+            String ct=text.substring(i,end).trim();
+            if (ct.length()>30) chunks.add(new RagChunk(docId,ct,embed(ct),idx++));
+            i+=CHUNK_SIZE-CHUNK_OVERLAP;
+        }
+        ragStore.put(docId,chunks);
+        log.info("RAG indexed: docId={} chunks={} vocab={}", docId, chunks.size(), vocabSize.get());
+        return chunks.size();
+    }
+
+    private String ragRetrieve(String query, String sessionId) {
+        if (ragStore.isEmpty()) return "";
+        float[] qEmb = embed(query);
+        List<double[]> scored = new ArrayList<>();
+        List<RagChunk> all = new ArrayList<>();
+        for (Map.Entry<String,List<RagChunk>> e : ragStore.entrySet()) {
+            boolean isSession = e.getKey().startsWith(sessionId);
+            for (RagChunk c : e.getValue()) {
+                double sim = cosineSimilarity(qEmb,c.embedding)+(isSession?0.1:0);
+                if (sim>=SIM_THRESHOLD) scored.add(new double[]{sim,all.size()});
+                all.add(c);
+            }
+        }
+        if (scored.isEmpty()) return "";
+        scored.sort((a,b)->Double.compare(b[0],a[0]));
+        StringBuilder ctx=new StringBuilder();
+        ctx.append("\n## 📚 Contesto RAG\n");
+        int count=0;
+        for (double[] s:scored) {
+            if (count>=RAG_TOP_K) break;
+            RagChunk c=all.get((int)s[1]);
+            String did=c.docId.length()>40?c.docId.substring(c.docId.length()-40):c.docId;
+            ctx.append(String.format("**[%s | chunk%d | sim:%.2f]**\n%s\n\n",
+                did,c.chunkIndex,s[0],c.text.substring(0,Math.min(400,c.text.length()))));
+            count++;
+        }
+        return count>0?ctx.toString():"";
+    }
+
+    private String semanticMemoryRetrieve(String query, String sessionId) {
+        float[] qEmb = embed(query);
+        List<String> candidates = new ArrayList<>();
+        candidates.addAll(longTermMemory.getOrDefault(sessionId,new ArrayList<>()));
+        sharedKnowledge.forEach((s,objs)->objs.forEach(o->candidates.add(s+" e "+o)));
+        sessionDeltas.getOrDefault(sessionId,new HashMap<>()).forEach((s,objs)->
+            objs.forEach(o->candidates.add(s+" :: "+o)));
+        if (candidates.isEmpty()) return "";
+        List<double[]> scored=new ArrayList<>();
+        for (int i=0;i<candidates.size();i++) {
+            double sim=cosineSimilarity(qEmb,embed(candidates.get(i)));
+            if (sim>=SIM_THRESHOLD) scored.add(new double[]{sim,i});
+        }
+        scored.sort((a,b)->Double.compare(b[0],a[0]));
+        if (scored.isEmpty()) return "";
+        StringBuilder ctx=new StringBuilder("[SEM-MEM]: ");
+        int count=0;
+        for (double[] s:scored) {
+            if (count>=MSA_TOP_K) break;
+            String f=candidates.get((int)s[1]);
+            ctx.append(f,0,Math.min(100,f.length())).append(" · ");
+            count++;
+        }
+        return ctx.toString().replaceAll(" · $","").trim();
+    }
+
+
     private double[] getNeuronWeights(String agent) {
         return synapticWeights.computeIfAbsent(agent, k -> {
             double[] w = new double[16];
@@ -312,7 +468,10 @@ public class ChatController {
         bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
         if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
-            ltm.add(fact.substring(0, Math.min(200, fact.length())));
+            String stored = fact.substring(0, Math.min(200, fact.length()));
+            ltm.add(stored);
+            // Aggiorna vocabolario embedding con il nuovo fatto
+            updateVocab(tokenize(stored));
         }
     }
     private String[] extractSubjectObject(String sentence) {
@@ -833,6 +992,126 @@ public class ChatController {
         return ctx.toString().trim();
     }
 
+    // ── MSA: Memory Sparse Attention (ispirato al paper Evermind/Shanda Group) ─────────
+    // Invece di recuperare TUTTI i fatti dalla LTM (full-attention = O(n²) e costoso),
+    // calcoliamo un attention score sparso per ogni fatto e selezioniamo solo i top-K.
+    // Questo scala a milioni di fatti senza degradazione di precisione.
+
+    // Numero massimo di token di memoria da iniettare nel prompt
+    private static final int MSA_TOP_K        = 6;   // top-K fatti selezionati
+    private static final int MSA_MIN_SCORE    = 2;   // soglia minima di attenzione
+    private static final int MSA_MAX_FACT_LEN = 120; // lunghezza massima per fatto
+
+    /**
+     * Calcola l'attention score sparso tra query e un fatto di memoria.
+     * Score = somma pesata di:
+     *   - keyword overlap (peso 3)
+     *   - bigram overlap (peso 2)
+     *   - recenza (i fatti piu recenti in lista hanno indice piu alto)
+     *   - lunghezza informatività (fatti troppo corti penalizzati)
+     */
+    private int msaAttentionScore(String query, String fact, int positionIndex, int totalFacts) {
+        if (fact == null || fact.isBlank()) return 0;
+        String q = query.toLowerCase();
+        String f = fact.toLowerCase();
+        String[] qWords = q.split("\s+");
+        String[] fWords = f.split("\s+");
+
+        // 1. Keyword overlap (unigram)
+        int overlap = 0;
+        for (String qw : qWords) {
+            if (qw.length() > 3) {
+                for (String fw : fWords) {
+                    if (fw.equals(qw) || fw.startsWith(qw) || qw.startsWith(fw)) {
+                        overlap += 3;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2. Bigram overlap (cattura frasi come "machine learning", "neural network")
+        Set<String> qBigrams = new HashSet<>();
+        for (int i = 0; i < qWords.length - 1; i++)
+            if (qWords[i].length() > 2) qBigrams.add(qWords[i] + "_" + qWords[i+1]);
+        for (int i = 0; i < fWords.length - 1; i++) {
+            String bigram = fWords[i] + "_" + fWords[i+1];
+            if (qBigrams.contains(bigram)) overlap += 2;
+        }
+
+        // 3. Recency bonus: i fatti più recenti (indice alto) valgono di più
+        int recencyBonus = (int)(2.0 * positionIndex / Math.max(1, totalFacts));
+
+        // 4. Penalità per fatti troppo corti (poco informativi)
+        int lengthPenalty = fact.length() < 20 ? -2 : 0;
+
+        // 5. Bonus se il fatto contiene "::" (formato soggetto::attributo = strutturato)
+        int structuredBonus = fact.contains("::") ? 1 : 0;
+
+        return overlap + recencyBonus + lengthPenalty + structuredBonus;
+    }
+
+    /**
+     * MSA Retrieval: seleziona i top-K fatti più rilevanti dalla LTM con sparse attention.
+     * Combina LTM della sessione + sharedKnowledge + sessionDeltas.
+     * Restituisce una stringa compatta pronta per essere iniettata nel prompt.
+     */
+    private String msaRetrieve(String query, String sessionId) {
+        // --- Raccolta candidati da tutte le sorgenti ---
+        List<String> candidates = new ArrayList<>();
+
+        // 1. LTM della sessione corrente
+        List<String> ltm = longTermMemory.getOrDefault(sessionId, new ArrayList<>());
+        candidates.addAll(ltm);
+
+        // 2. STM (circular buffer - ultimi messaggi)
+        stmRecall(sessionId).stream()
+            .map(e -> e.replaceFirst("^U:", "").replaceFirst(" A:.*", ""))
+            .forEach(candidates::add);
+
+        // 3. Session deltas (fatti differenziali della sessione)
+        Map<String, Set<String>> deltas = sessionDeltas.getOrDefault(sessionId, new HashMap<>());
+        deltas.forEach((subj, objs) ->
+            objs.forEach(obj -> candidates.add(subj + "::" + obj)));
+
+        // 4. SharedKnowledge rilevante (top concetti della query)
+        String q = query.toLowerCase();
+        for (String word : q.split("\s+")) {
+            if (word.length() > 4) {
+                Set<String> shared = sharedKnowledge.get(word);
+                if (shared != null)
+                    shared.stream().limit(3).forEach(v -> candidates.add(word + "::" + v));
+            }
+        }
+
+        if (candidates.isEmpty()) return "";
+
+        // --- Calcolo attention score sparso per ogni candidato ---
+        int total = candidates.size();
+        List<int[]> scored = new ArrayList<>(); // [score, index]
+        for (int i = 0; i < total; i++) {
+            int score = msaAttentionScore(query, candidates.get(i), i, total);
+            if (score >= MSA_MIN_SCORE)
+                scored.add(new int[]{score, i});
+        }
+
+        // --- Selezione top-K (sparse: solo i più rilevanti) ---
+        scored.sort((a, b) -> Integer.compare(b[0], a[0]));
+
+        StringBuilder ctx = new StringBuilder();
+        ctx.append("[MSA-MEM k=").append(Math.min(MSA_TOP_K, scored.size())).append("]: ");
+        int count = 0;
+        for (int[] s : scored) {
+            if (count >= MSA_TOP_K) break;
+            String fact = candidates.get(s[1]);
+            String trimmed = fact.substring(0, Math.min(MSA_MAX_FACT_LEN, fact.length())).trim();
+            ctx.append(trimmed).append(" · ");
+            count++;
+        }
+
+        return count > 0 ? ctx.toString().replaceAll(" · $", "").trim() : "";
+    }
+
     // L'AI sa di avere memoria, KG e quantum - prompt "cosciente"
     private String buildSystemPrompt(String mode, String sessionId, String query) {
         String memCtx  = retrieveRelevantMemory(query, sessionId);
@@ -848,12 +1127,22 @@ public class ChatController {
         sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ");
         sb.append("knowledge graph ").append(kgSize).append(" nodi, LTM ").append(ltmSize).append(" fatti, ");
         sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
-        if (!memCtx.isEmpty())
-            sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
-        // Aggiungi memoria differenziale (sharedKnowledge + sessionDeltas)
-        String diffMem = retrieveDifferentialMemory(sessionId, query);
-        if (!diffMem.isEmpty())
-            sb.append("MEMORIA DIFFERENZIALE: ").append(diffMem).append("\n");
+        // Semantic Memory: embedding coseno reale (più preciso del keyword matching)
+        String semMem = semanticMemoryRetrieve(query, sessionId);
+        if (!semMem.isEmpty())
+            sb.append("MEMORIA SEMANTICA: ").append(semMem).append("\n");
+        else {
+            // Fallback: MSA sparse attention
+            String msaMem = msaRetrieve(query, sessionId);
+            if (!msaMem.isEmpty())
+                sb.append("MEMORIA ATTIVA (MSA): ").append(msaMem).append("\n");
+            else if (!memCtx.isEmpty())
+                sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
+        }
+        // RAG: contesto dai documenti indicizzati (PDF, web, testo)
+        String ragCtx = ragRetrieve(query, sessionId);
+        if (!ragCtx.isEmpty())
+            sb.append(ragCtx);
         if (!kgTop.isEmpty())
             sb.append("CONCETTI KG: ").append(kgTop).append("\n");
         sb.append("Emozione utente rilevata: ").append(emotion).append(".\n");
@@ -1738,6 +2027,9 @@ public class ChatController {
             }
             String enriched = userMessage;
             if (webData != null && !webData.isBlank()) {
+                // AUTO-INDEX risultati web nel RAG per sessione
+                String webDocId = sessionId + "/web_" + System.currentTimeMillis();
+                ragIndexDocument(webDocId, webData);
                 enriched = userMessage + "\n\n[DATI WEB AGGIORNATI - " + today() + "]:\n" +
                            "NOTA: Questi dati sono piu recenti della tua conoscenza base. Usali come fonte primaria.\n" +
                            webData;
@@ -1758,12 +2050,22 @@ public class ChatController {
             }
             // Analisi file testo se presente
             if (!fileContent.isEmpty()) {
-                String fileAnalysis = analyzeContent(userMessage, fileContent, baseUrl, apiKey, model);
+                // AUTO-INDEX nel RAG: indicizza il file per retrieval semantico futuro
+                String fileDocId = sessionId + "/file_" + System.currentTimeMillis();
+                int fileChunks = ragIndexDocument(fileDocId, fileContent);
+                log.info("File auto-indexed in RAG: {} chunks", fileChunks);
+                // Recupera contesto RAG rilevante dalla domanda sul file
+                String fileRagCtx = ragRetrieve(userMessage, sessionId);
+                String enrichedQuery = userMessage;
+                if (!fileRagCtx.isBlank())
+                    enrichedQuery = userMessage + "\n\n" + fileRagCtx;
+                String fileAnalysis = analyzeContent(enrichedQuery, fileContent, baseUrl, apiKey, model);
                 saveMessages(sessionId, userMessage, fileAnalysis, supabaseUrl, supabaseKey);
                 Map<String,Object> fResp = new HashMap<>();
                 fResp.put("response", fileAnalysis);
                 fResp.put("responseForVoice", cleanTextForTTS(fileAnalysis));
-                fResp.put("status","ok"); fResp.put("mode","file_analysis");
+                fResp.put("status","ok"); fResp.put("mode","file_analysis_rag");
+                fResp.put("ragChunks", fileChunks);
                 fResp.put("sessionId",sessionId);
                 return ResponseEntity.ok(fResp);
             }
@@ -2399,8 +2701,157 @@ public class ChatController {
         stats.put("estimatedSavedKB",   savedKB);
         stats.put("deduplicationRate",
             bloomCount.get() > 0 ? String.format("%.1f%%", (1.0 - (double)(totalLTM) / Math.max(1, bloomCount.get())) * 100) : "n/a");
+        // MSA config
+        stats.put("msaTopK",       MSA_TOP_K);
+        stats.put("msaMinScore",   MSA_MIN_SCORE);
+        stats.put("msaMaxFactLen", MSA_MAX_FACT_LEN);
+        stats.put("msaTotalCandidates",
+            longTermMemory.values().stream().mapToInt(List::size).sum()
+            + (int) sessionDeltas.values().stream().flatMap(m -> m.values().stream()).mapToLong(Set::size).sum()
+            + (int) sharedKnowledge.values().stream().mapToLong(Set::size).sum());
         stats.put("date", today());
+        // RAG + Embedding stats
+        stats.put("ragDocs",    ragStore.size());
+        stats.put("ragChunks",  ragStore.values().stream().mapToInt(List::size).sum());
+        stats.put("embedVocab", vocabSize.get());
+        stats.put("embedDim",   EMBED_DIM);
         return ResponseEntity.ok(stats);
+    }
+
+    // ── RAG ENDPOINTS ────────────────────────────────────────────────────────
+
+    /**
+     * POST /api/rag/index
+     * Indicizza un documento nel RAG store.
+     * Body: { "docId": "nome_doc", "text": "contenuto...", "sessionId": "..." }
+     * Supporta testo puro, contenuto di PDF già estratto, pagine web, ecc.
+     */
+    @PostMapping("/rag/index")
+    public ResponseEntity<Object> ragIndex(@RequestBody Map<String, String> body) {
+        String docId     = body.getOrDefault("docId", "doc_" + System.currentTimeMillis());
+        String text      = body.getOrDefault("text", "");
+        String sessionId = body.getOrDefault("sessionId", "global");
+        String url       = body.getOrDefault("url", "");
+
+        if (text.isBlank() && url.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "Fornisci 'text' o 'url'"));
+
+        // Se fornita una URL, scarica il contenuto
+        if (!url.isBlank() && text.isBlank()) {
+            try {
+                HttpHeaders h = new HttpHeaders();
+                h.set("User-Agent", "SPACE-AI/2.0");
+                ResponseEntity<String> resp = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(h), String.class);
+                // Rimuove tag HTML
+                text = resp.getBody() == null ? "" :
+                    resp.getBody().replaceAll("<[^>]+>", " ").replaceAll("\s{3,}", " ").trim();
+                if (docId.startsWith("doc_")) docId = url.replaceAll("https?://", "").substring(0, Math.min(60, url.length()));
+            } catch (Exception e) {
+                return ResponseEntity.status(502).body(Map.of("error", "Impossibile scaricare URL: " + e.getMessage()));
+            }
+        }
+
+        // Prefissa con sessionId per prioritizzare i doc della sessione nel retrieval
+        String fullDocId = sessionId + "/" + docId;
+        int chunks = ragIndexDocument(fullDocId, text);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status",    "indexed");
+        result.put("docId",     fullDocId);
+        result.put("chunks",    chunks);
+        result.put("vocabSize", vocabSize.get());
+        result.put("totalDocs", ragStore.size());
+        result.put("textLen",   text.length());
+        result.put("date",      today());
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * POST /api/rag/query
+     * Esegue una query RAG standalone (senza chiamare la LLM).
+     * Utile per debug e ispezione dei chunk recuperati.
+     * Body: { "query": "...", "sessionId": "..." }
+     */
+    @PostMapping("/rag/query")
+    public ResponseEntity<Object> ragQuery(@RequestBody Map<String, String> body) {
+        String query     = body.getOrDefault("query", "");
+        String sessionId = body.getOrDefault("sessionId", "global");
+        if (query.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "Query vuota"));
+
+        String ragResult  = ragRetrieve(query, sessionId);
+        String semResult  = semanticMemoryRetrieve(query, sessionId);
+        float[] qEmb      = embed(query);
+        double embNorm    = 0;
+        for (float v : qEmb) embNorm += v * v;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("query",          query);
+        result.put("ragContext",      ragResult.isBlank() ? "Nessun documento indicizzato" : ragResult);
+        result.put("semanticMemory", semResult.isBlank() ? "Nessun fatto rilevante" : semResult);
+        result.put("embeddingNorm",  String.format("%.4f", Math.sqrt(embNorm)));
+        result.put("totalDocs",      ragStore.size());
+        result.put("totalChunks",    ragStore.values().stream().mapToInt(List::size).sum());
+        result.put("vocabSize",      vocabSize.get());
+        result.put("simThreshold",   SIM_THRESHOLD);
+        result.put("topK",           RAG_TOP_K);
+        result.put("date",           today());
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * GET /api/rag/status
+     * Stato del RAG store: documenti indicizzati, chunk totali, dimensione vocabolario.
+     */
+    @GetMapping("/rag/status")
+    public ResponseEntity<Object> ragStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("totalDocs",    ragStore.size());
+        status.put("totalChunks",  ragStore.values().stream().mapToInt(List::size).sum());
+        status.put("vocabSize",    vocabSize.get());
+        status.put("embedDim",     EMBED_DIM);
+        status.put("chunkSize",    CHUNK_SIZE);
+        status.put("chunkOverlap", CHUNK_OVERLAP);
+        status.put("topK",         RAG_TOP_K);
+        status.put("simThreshold", SIM_THRESHOLD);
+        status.put("idfTerms",     idfScores.size());
+        status.put("docCount",     docCount.get());
+        // Lista documenti indicizzati
+        List<Map<String,Object>> docs = new ArrayList<>();
+        ragStore.forEach((id, chunks) -> {
+            Map<String,Object> d = new LinkedHashMap<>();
+            d.put("docId",  id);
+            d.put("chunks", chunks.size());
+            d.put("indexedAt", chunks.isEmpty() ? "-" :
+                new java.util.Date(chunks.get(0).timestamp).toString());
+            docs.add(d);
+        });
+        status.put("documents", docs);
+        status.put("date", today());
+        return ResponseEntity.ok(status);
+    }
+
+    /**
+     * DELETE /api/rag/delete/{docId}
+     * Rimuove un documento dal RAG store.
+     */
+    @DeleteMapping("/rag/delete/{docId}")
+    public ResponseEntity<Object> ragDelete(@PathVariable String docId) {
+        boolean removed = ragStore.remove(docId) != null;
+        if (!removed) {
+            // Prova anche con prefissi di sessione
+            List<String> toRemove = ragStore.keySet().stream()
+                .filter(k -> k.endsWith("/" + docId) || k.equals(docId))
+                .collect(Collectors.toList());
+            toRemove.forEach(ragStore::remove);
+            removed = !toRemove.isEmpty();
+        }
+        return ResponseEntity.ok(Map.of(
+            "status",  removed ? "deleted" : "not_found",
+            "docId",   docId,
+            "remaining", ragStore.size()
+        ));
     }
 
     @GetMapping("/health")
