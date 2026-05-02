@@ -16,6 +16,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.LinkedList;
+import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
 @RestController
 @RequestMapping("/api")
 @CrossOrigin(origins = "*")
@@ -2120,7 +2122,6 @@ public class ChatController {
             if (isImg) {
                 String imgAgent = callLLM(agentPrompt("image_gen"), enriched, history, baseUrl, apiKey, model, 400);
                 // Estrai prompt EN dal tag [GENERA_IMMAGINE:...] — il vero fix al bug
-                // L'agente image_gen deve generare la scena descritta, non il soggetto generico
                 String hfPrompt = userMessage; // fallback: generateImage tradurrà da IT
                 if (imgAgent.contains("[GENERA_IMMAGINE:")) {
                     int s = imgAgent.indexOf("[GENERA_IMMAGINE:") + 17;
@@ -2130,10 +2131,10 @@ public class ChatController {
                         log.info("Prompt EN estratto da IMAGE_GEN: {}", hfPrompt);
                     }
                 } else {
-                    // L'agente non ha usato il tag: forza traduzione del messaggio originale
                     log.warn("IMAGE_GEN no tag: traduco manualmente '{}'", userMessage);
                 }
-                String textResp = imgAgent.replaceAll("\\[GENERA_IMMAGINE:[^\\]]*\\]", "").trim();
+                String imgResult = generateImage(hfPrompt);
+                String textResp = imgAgent.replaceAll("\[GENERA_IMMAGINE:[^\]]*\]", "").trim();
                 if (textResp.isEmpty()) textResp = "Ecco l'immagine generata!";
                 saveMessages(sessionId, userMessage, textResp, supabaseUrl, supabaseKey);
                 if (imgResult.startsWith("IMAGE:"))
