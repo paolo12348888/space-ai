@@ -181,6 +181,49 @@ public class ChatController {
     private final AtomicInteger learningCycles = new AtomicInteger(0);
     // Knowledge graph: relazioni tra concetti
     private final Map<String, Set<String>> knowledgeGraph = new ConcurrentHashMap<>();
+
+    // ── MEMORIA DIFFERENZIALE A TRE LIVELLI ──────────────────────────────────────────
+    // L3: Conoscenza condivisa tra tutti gli utenti (permanente, cresce nel tempo)
+    private final Map<String, Set<String>> sharedKnowledge = new ConcurrentHashMap<>();
+    // L2: Delta per sessione - solo i fatti NON già nella sharedKnowledge
+    private final Map<String, Map<String, Set<String>>> sessionDeltas = new ConcurrentHashMap<>();
+
+    // ── ROLLING HASH per deduplica semantica (Rabin-Karp semplificato) ───────────────
+    private static final int RK_BASE = 257;
+    private static final int RK_MOD  = 1_000_000_007;
+    private int rollingHash(String text) {
+        int hash = 0;
+        for (int i = 0; i < text.length(); i++)
+            hash = (int)(((long)hash * RK_BASE + text.charAt(i)) % RK_MOD);
+        return hash;
+    }
+    private boolean isDuplicateSemantic(String text) {
+        String key = text.substring(0, Math.min(80, text.length())).toLowerCase();
+        return bloomMightContain(key);
+    }
+
+    // ── STORE FACT DIFFERENTIAL: salva solo i nuovi fatti ────────────────────────────
+    private void storeFactDifferential(String sessionId, String subject, String object) {
+        if (subject == null || object == null || subject.length() < 3 || object.length() < 3) return;
+        String s = subject.toLowerCase().trim();
+        String o = object.toLowerCase().trim();
+        Set<String> shared = sharedKnowledge.get(s);
+        if (shared != null && shared.contains(o)) return;
+        sessionDeltas
+            .computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
+            .computeIfAbsent(s, k -> ConcurrentHashMap.newKeySet())
+            .add(o);
+        // Promozione a sharedKnowledge se il fatto appare in >= 3 sessioni
+        long sessions = sessionDeltas.values().stream()
+            .filter(m -> m.containsKey(s) && m.get(s).contains(o))
+            .count();
+        if (sessions >= 3) {
+            sharedKnowledge.computeIfAbsent(s, k -> ConcurrentHashMap.newKeySet()).add(o);
+            sessionDeltas.values().forEach(m -> { if (m.containsKey(s)) m.get(s).remove(o); });
+            log.debug("Fatto promosso a sharedKnowledge: {}>{}", s, o);
+        }
+    }
+
     private double[] getNeuronWeights(String agent) {
         return synapticWeights.computeIfAbsent(agent, k -> {
             double[] w = new double[16];
@@ -244,16 +287,48 @@ public class ChatController {
         learningCycles.incrementAndGet();
     }
     private void updateSTM(String sessionId, String content) {
+        // Deduplica con Bloom filter prima di salvare in STM
+        String normalized = content.substring(0, Math.min(80, content.length())).toLowerCase();
+        if (isDuplicateSemantic(normalized)) {
+            log.debug("STM dedup skip: {}", normalized.substring(0, Math.min(40, normalized.length())));
+            return;
+        }
+        bloomAdd(normalized);
+        stmPush(sessionId, content, ""); // aggiorna circular buffer
         LinkedList<String> stm = shortTermMemory.computeIfAbsent(sessionId, k -> new LinkedList<>());
         stm.addFirst(content.substring(0, Math.min(150, content.length())));
-        while (stm.size() > 5) stm.removeLast(); // finestra 5 elementi
+        while (stm.size() > 5) stm.removeLast();
     }
     private void consolidateToLTM(String sessionId, String fact) {
+        if (fact == null || fact.length() < 20) return;
+        // Estrai soggetto/oggetto e usa la memoria differenziale
+        String[] parts = extractSubjectObject(fact);
+        if (parts != null) {
+            storeFactDifferential(sessionId, parts[0], parts[1]);
+        }
+        // Salva nella LTM solo se non duplicato
+        String normalized = fact.substring(0, Math.min(80, fact.length())).toLowerCase();
+        if (bloomMightContain(normalized)) return;
+        bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        // Consolida solo fatti importanti (lunghezza > 50 char)
         if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
             ltm.add(fact.substring(0, Math.min(200, fact.length())));
         }
+    }
+    private String[] extractSubjectObject(String sentence) {
+        String s = sentence.toLowerCase().trim();
+        String[] patterns = {"e un ", "e una ", "significa ", "serve per ", "usato per ",
+                             "definito come ", "chiamato ", "noto come ", ":: "};
+        for (String p : patterns) {
+            int idx = s.indexOf(p);
+            if (idx > 2 && idx < s.length() - p.length() - 2) {
+                String subj = s.substring(0, idx).trim().replaceAll("\s+", "_");
+                String obj  = s.substring(idx + p.length()).trim();
+                if (subj.length() >= 2 && obj.length() >= 3)
+                    return new String[]{subj, obj.substring(0, Math.min(60, obj.length()))};
+            }
+        }
+        return null;
     }
     private void updateKnowledgeGraph(String query, String response, String agent) {
         // Estrai concetti chiave
@@ -720,6 +795,44 @@ public class ChatController {
             sb.append(e.getKey()).append("(").append(e.getValue().size()).append(") "));
         return sb.toString().trim();
     }
+    // ── MEMORIA DIFFERENZIALE: arricchisce il contesto con sharedKnowledge + sessionDeltas ──
+    private String retrieveDifferentialMemory(String sessionId, String query) {
+        StringBuilder ctx = new StringBuilder();
+        String q = query.toLowerCase();
+        String[] qWords = q.split("\\s+");
+        // 1. Cerca nei delta della sessione (fatti specifici dell'utente)
+        Map<String, Set<String>> deltas = sessionDeltas.getOrDefault(sessionId, new HashMap<>());
+        List<String> deltaFacts = new ArrayList<>();
+        for (String word : qWords) {
+            if (word.length() > 4) {
+                Set<String> found = deltas.get(word);
+                if (found != null) found.stream().limit(3).forEach(v -> deltaFacts.add(word + "→" + v));
+                // Cerca parzialmente nelle chiavi
+                deltas.forEach((k, v) -> {
+                    if (k.contains(word) && deltaFacts.size() < 5)
+                        v.stream().limit(2).forEach(val -> deltaFacts.add(k + "→" + val));
+                });
+            }
+        }
+        if (!deltaFacts.isEmpty()) {
+            ctx.append("FATTI SESSIONE: ");
+            deltaFacts.stream().limit(4).forEach(f -> ctx.append(f).append("; "));
+        }
+        // 2. Cerca nella sharedKnowledge (conoscenza globale condivisa da tutti gli utenti)
+        List<String> sharedFacts = new ArrayList<>();
+        for (String word : qWords) {
+            if (word.length() > 4) {
+                Set<String> shared = sharedKnowledge.get(word);
+                if (shared != null) shared.stream().limit(2).forEach(v -> sharedFacts.add(word + "→" + v));
+            }
+        }
+        if (!sharedFacts.isEmpty()) {
+            ctx.append(" | CONOSCENZA GLOBALE: ");
+            sharedFacts.stream().limit(3).forEach(f -> ctx.append(f).append("; "));
+        }
+        return ctx.toString().trim();
+    }
+
     // L'AI sa di avere memoria, KG e quantum - prompt "cosciente"
     private String buildSystemPrompt(String mode, String sessionId, String query) {
         String memCtx  = retrieveRelevantMemory(query, sessionId);
@@ -737,6 +850,10 @@ public class ChatController {
         sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
         if (!memCtx.isEmpty())
             sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
+        // Aggiungi memoria differenziale (sharedKnowledge + sessionDeltas)
+        String diffMem = retrieveDifferentialMemory(sessionId, query);
+        if (!diffMem.isEmpty())
+            sb.append("MEMORIA DIFFERENZIALE: ").append(diffMem).append("\n");
         if (!kgTop.isEmpty())
             sb.append("CONCETTI KG: ").append(kgTop).append("\n");
         sb.append("Emozione utente rilevata: ").append(emotion).append(".\n");
@@ -932,6 +1049,14 @@ public class ChatController {
                 kgNode.set(e.getKey(), arr);
             });
             state.set("kg", kgNode);
+            // Persisti sharedKnowledge (conoscenza globale condivisa)
+            com.fasterxml.jackson.databind.node.ObjectNode skNode = MAPPER.createObjectNode();
+            sharedKnowledge.entrySet().stream().limit(2000).forEach(e -> {
+                com.fasterxml.jackson.databind.node.ArrayNode arr = MAPPER.createArrayNode();
+                e.getValue().stream().limit(20).forEach(arr::add);
+                skNode.set(e.getKey(), arr);
+            });
+            state.set("sharedKnowledge", skNode);
             state.put("requests", totalRequests.get());
             state.put("cycles", learningCycles.get());
             state.put("epoch", metaEpoch.get());
@@ -966,8 +1091,14 @@ public class ChatController {
             if (state.has("requests")) totalRequests.set(state.path("requests").asInt());
             if (state.has("cycles")) learningCycles.set(state.path("cycles").asInt());
             if (state.has("epoch")) metaEpoch.set(state.path("epoch").asInt());
-            log.info("Brain ricaricato: {} agenti, {} sessioni LTM, {} nodi KG",
-                synapticWeights.size(), longTermMemory.size(), knowledgeGraph.size());
+            // Ricarica sharedKnowledge
+            state.path("sharedKnowledge").fields().forEachRemaining(e -> {
+                Set<String> rel = ConcurrentHashMap.newKeySet();
+                e.getValue().forEach(v -> rel.add(v.asText()));
+                sharedKnowledge.put(e.getKey(), rel);
+            });
+            log.info("Brain ricaricato: {} agenti, {} sessioni LTM, {} nodi KG, {} sharedKnowledge",
+                synapticWeights.size(), longTermMemory.size(), knowledgeGraph.size(), sharedKnowledge.size());
         } catch (Exception e) { log.warn("Load brain: {}", e.getMessage()); }
     }
 
@@ -1774,12 +1905,14 @@ public class ChatController {
                 if (prediction != null) finalResponse += System.lineSeparator() + System.lineSeparator() + "---" + System.lineSeparator() + "> " + prediction;
                 // 7. Aggiorna tutti i sistemi di memoria e apprendimento
                 String ltmEntry = userMessage.substring(0, Math.min(60, userMessage.length())) + " -> done";
-                    consolidateToLTM(sessionId, ltmEntry);
+                consolidateToLTM(sessionId, ltmEntry);
                 updateSTM(sessionId, userMessage);
                 updateKnowledgeGraph(userMessage, finalResponse, agents.isEmpty() ? "reasoner" : agents.get(0));
                 updateNarrative(sessionId, userMessage, finalResponse);
                 learnQuestionPattern(sessionId, userMessage);
                 adaptRealtime(sessionId, userMessage, finalResponse, finalResponse.length());
+                // 7b. Estrai e indicizza fatti nuovi con memoria differenziale
+                extractAndStoreFacts(sessionId, userMessage, finalResponse);
                 // 8. Meta-learning
                 for (String a : agents) {
                     backpropagate(a, userMessage, 0.8);
@@ -2241,7 +2374,36 @@ public class ChatController {
         m.put("date",            today());
         return ResponseEntity.ok(m);
     }
-        @GetMapping("/health")
+        // ── ENDPOINT MEMORIA DIFFERENZIALE ───────────────────────────────────────────────
+    @GetMapping("/memory/stats")
+    public ResponseEntity<Object> memoryStats() {
+        int sharedNodes = sharedKnowledge.size();
+        int sharedEdges = sharedKnowledge.values().stream().mapToInt(Set::size).sum();
+        int activeSessions = sessionDeltas.size();
+        int deltaEdges = sessionDeltas.values().stream()
+            .flatMap(m -> m.values().stream()).mapToInt(Set::size).sum();
+        long totalLTM = longTermMemory.values().stream().mapToInt(List::size).sum();
+        Map<String,Object> stats = new java.util.LinkedHashMap<>();
+        stats.put("bloomCount",         bloomCount.get());
+        stats.put("sharedKnowledgeNodes", sharedNodes);
+        stats.put("sharedKnowledgeEdges", sharedEdges);
+        stats.put("activeSessions",     activeSessions);
+        stats.put("deltaEdges",         deltaEdges);
+        stats.put("ltmFacts",           totalLTM);
+        stats.put("stmEntries",         stmBuffer.size());
+        stats.put("kgNodes",            knowledgeGraph.size());
+        stats.put("estimatedMemKB",     (bloomBits.length * 8 / 1024) + (totalLTM * 80 / 1024));
+        stats.put("estimatedRuntimeMB", Runtime.getRuntime().totalMemory() / 1024 / 1024);
+        // Risparmio stimato: ogni fatto differenziale pesa ~500 byte vs ~50KB standard
+        long savedKB = (long)(deltaEdges + sharedEdges) * 49; // 50KB - 1KB = 49KB risparmio/fatto
+        stats.put("estimatedSavedKB",   savedKB);
+        stats.put("deduplicationRate",
+            bloomCount.get() > 0 ? String.format("%.1f%%", (1.0 - (double)(totalLTM) / Math.max(1, bloomCount.get())) * 100) : "n/a");
+        stats.put("date", today());
+        return ResponseEntity.ok(stats);
+    }
+
+    @GetMapping("/health")
     public ResponseEntity<Map<String,String>> health() {
         long avgMs = totalRequests.get() > 0 ?
             totalResponseTimeMs.get() / totalRequests.get() : 0;
