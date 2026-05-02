@@ -2161,7 +2161,7 @@ public class ChatController {
 
                     if (visualResp.startsWith("IMAGE_DUAL:")) {
                         // Abbiamo sia immagine realistica che SVG
-                        String[] parts = visualResp.substring(11).split("\|\|SVG_DATA:", 2);
+                        String[] parts = visualResp.substring(11).split("\\|\\|SVG_DATA:", 2);
                         vr.put("image", parts[0].substring(parts[0].indexOf(",") + 1)); // base64 senza header
                         vr.put("imageType", "image/jpeg");
                         vr.put("svgCode", parts.length > 1 ? parts[1] : "");
@@ -2176,7 +2176,7 @@ public class ChatController {
                         vr.put("downloadable", true);
                     } else if (visualResp.startsWith("IMAGE_SVG:")) {
                         // Solo SVG
-                        String[] parts = visualResp.split("\|\|SVG_CODE:", 2);
+                        String[] parts = visualResp.split("\\|\\|SVG_CODE:", 2);
                         String svgB64 = parts[0].substring(10); // rimuovi IMAGE_SVG:
                         vr.put("svgImage", svgB64);  // data:image/svg+xml;base64,...
                         vr.put("svgCode", parts.length > 1 ? parts[1] : "");
