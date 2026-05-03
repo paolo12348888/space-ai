@@ -189,6 +189,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
           <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
+          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
           <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
           <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
           <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
@@ -686,7 +687,93 @@ async function sendMsg(){
     inpEl.focus();
   }
 }
+  // ── Manus Agent ───────────────────────────────────────────────────────────
+  function showManusPanel(){document.getElementById("manusPanel").style.display="flex";}
+  function closeManusPanel(){document.getElementById("manusPanel").style.display="none";}
+
+  function manusRunTask(){
+    var goal=document.getElementById("manusGoal").value.trim();
+    if(!goal){alert("Inserisci un obiettivo");return;}
+    var sid=typeof sessionId!=="undefined"?sessionId:"global";
+    var btn=document.getElementById("manusRunBtn");
+    btn.disabled=true;btn.textContent="⏳ Avvio...";
+    fetch("/api/manus/task",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({goal:goal,sessionId:sid})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){addRow("❌ Errore: "+d.error,"err");closeManusPanel();btn.disabled=false;btn.textContent="🚀 Avvia Task";return;}
+        addRow("🤖 **Manus Task avviato**\nID: "+d.taskId+"\nObbiettivo: "+d.goal+"\n\n⏳ Esecuzione in corso... monitoro automaticamente.","ai");
+        closeManusPanel();
+        btn.disabled=false;btn.textContent="🚀 Avvia Task";
+        pollManusTask(d.taskId, 0);
+      }).catch(function(e){alert("Errore: "+e);btn.disabled=false;btn.textContent="🚀 Avvia Task";});
+  }
+
+  function pollManusTask(taskId, attempt){
+    if(attempt>60)return; // max 5 minuti
+    fetch("/api/manus/task/"+taskId)
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.status==="DONE"){
+          var prog=d.subtasks.map(function(s){return(s.status==="DONE"?"✅":"❌")+" "+s.description;}).join("\n");
+          addRow("✅ **Manus Task completato** ("+d.elapsed+")\n\n"+
+            "**Subtask eseguiti:**\n"+prog+"\n\n"+
+            "**📋 Report finale:**\n"+d.finalReport,"ai");
+        } else if(d.status==="FAILED"){
+          addRow("❌ Task fallito: "+d.finalReport,"err");
+        } else {
+          // Ancora in esecuzione — riprova tra 3 secondi
+          setTimeout(function(){pollManusTask(taskId, attempt+1);}, 3000);
+          if(attempt%5===0){
+            var pct=d.progress||0;
+            addRow("⏳ Task in esecuzione... "+pct+"% completato ("+d.elapsed+")","ai");
+          }
+        }
+      }).catch(function(){setTimeout(function(){pollManusTask(taskId,attempt+1);},5000);});
+  }
+
+  function manusExecCode(){
+    var lang=document.getElementById("manusLang").value;
+    var code=document.getElementById("manusCode").value.trim();
+    if(!code){alert("Inserisci del codice");return;}
+    addRow("⚙️ Eseguo codice "+lang+"...","ai");
+    fetch("/api/manus/exec",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({language:lang,code:code})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){addRow("❌ "+d.error,"err");return;}
+        var out=(d.success?"✅":"⚠️")+" **Output "+lang+"** (exit: "+d.exitCode+")\n\n```\n"+d.output+"\n```";
+        if(d.stderr)out+="\n\n**Stderr:**\n```\n"+d.stderr+"\n```";
+        addRow(out,"ai");
+      }).catch(function(e){addRow("❌ Errore: "+e,"err");});
+  }
+
+  function manusBrowse(){
+    var url=document.getElementById("manusUrl").value.trim();
+    var task=document.getElementById("manusTask").value.trim()||"Estrai le informazioni principali";
+    if(!url){alert("Inserisci un URL");return;}
+    addRow("🌐 Navigando "+url+"...","ai");
+    var sid=typeof sessionId!=="undefined"?sessionId:"global";
+    fetch("/api/manus/browse",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({url:url,task:task,sessionId:sid})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){addRow("❌ "+d.error,"err");return;}
+        var resp="🌐 **Pagina analizzata:** "+d.url+"\n"+
+          "📄 "+d.pageLength+" caratteri | 🧩 "+d.ragChunks+" chunk RAG\n\n"+d.analysis;
+        if(d.links&&d.links.length>0)resp+="\n\n🔗 **Link trovati:**\n"+d.links.slice(0,5).join("\n");
+        addRow(resp,"ai");
+      }).catch(function(e){addRow("❌ Errore: "+e,"err");});
+  }
+
   // ── GitHub Connector ───────────────────────────────────────────────────
+  function showManusTab(tab){
+    ["task","code","browse"].forEach(function(t){
+      document.getElementById("manusTab"+t.charAt(0).toUpperCase()+t.slice(1)).style.display=t===tab?"block":"none";
+      var btn=document.getElementById("tab"+t.charAt(0).toUpperCase()+t.slice(1));
+      if(btn){btn.style.background=t===tab?"var(--accent)":"transparent";btn.style.color=t===tab?"#000":"var(--text)";}
+    });
+  }
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
   function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
   function githubRepoInfo(){
@@ -725,6 +812,56 @@ async function sendMsg(){
       }).catch(function(e){alert("Errore issues: "+e);});
   }
 </script>
+
+<!-- Manus Agent Panel -->
+<div id="manusPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--bg2,#161b24);border-radius:16px;padding:24px;width:95%;max-width:560px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h3 style="margin:0;color:var(--accent)">&#129302; Manus Autonomous Agent</h3>
+      <button onclick="closeManusPanel()" style="background:none;border:none;color:var(--text);font-size:1.5rem;cursor:pointer">&#10005;</button>
+    </div>
+
+    <!-- Tab buttons -->
+    <div style="display:flex;gap:4px;margin-bottom:20px;background:var(--bg,#0d1117);border-radius:10px;padding:4px">
+      <button onclick="showManusTab('task')" id="tabTask" style="flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:.85rem">🎯 Task</button>
+      <button onclick="showManusTab('code')" id="tabCode" style="flex:1;padding:8px;border-radius:8px;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:.85rem">⚙️ Codice</button>
+      <button onclick="showManusTab('browse')" id="tabBrowse" style="flex:1;padding:8px;border-radius:8px;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:.85rem">🌐 Browser</button>
+    </div>
+
+    <!-- Task tab -->
+    <div id="manusTabTask">
+      <p style="font-size:.85rem;opacity:.7;margin:0 0 12px">Descrivi un obiettivo complesso. SPACE AI lo decompone in sotto-task e li esegue autonomamente.</p>
+      <textarea id="manusGoal" placeholder="es. Cerca le ultime notizie su Bitcoin, analizza il trend e scrivi un report" style="width:100%;height:100px;padding:10px;border-radius:10px;border:1px solid #444;background:var(--bg);color:var(--text);resize:vertical;font-size:.9rem;box-sizing:border-box;margin-bottom:12px"></textarea>
+      <button id="manusRunBtn" onclick="manusRunTask()" style="width:100%;padding:12px;border-radius:10px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:700;font-size:1rem">🚀 Avvia Task Autonomo</button>
+    </div>
+
+    <!-- Code tab -->
+    <div id="manusTabCode" style="display:none">
+      <p style="font-size:.85rem;opacity:.7;margin:0 0 12px">Esegui codice in un sandbox sicuro. Supporta Python, JavaScript, Java, Bash, Go, Rust e altri.</p>
+      <select id="manusLang" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);margin-bottom:10px;box-sizing:border-box">
+        <option value="python">Python 3.10</option>
+        <option value="javascript">JavaScript (Node 18)</option>
+        <option value="java">Java 15</option>
+        <option value="bash">Bash</option>
+        <option value="go">Go</option>
+        <option value="rust">Rust</option>
+        <option value="php">PHP</option>
+        <option value="ruby">Ruby</option>
+        <option value="cpp">C++</option>
+      </select>
+      <textarea id="manusCode" placeholder="# Scrivi il tuo codice qui&#10;print('Hello from SPACE AI!')" style="width:100%;height:140px;padding:10px;border-radius:10px;border:1px solid #444;background:var(--bg);color:var(--text);resize:vertical;font-family:monospace;font-size:.85rem;box-sizing:border-box;margin-bottom:12px"></textarea>
+      <button onclick="manusExecCode()" style="width:100%;padding:12px;border-radius:10px;border:none;background:#238636;color:#fff;cursor:pointer;font-weight:700;font-size:1rem">▶ Esegui Codice</button>
+    </div>
+
+    <!-- Browse tab -->
+    <div id="manusTabBrowse" style="display:none">
+      <p style="font-size:.85rem;opacity:.7;margin:0 0 12px">Naviga qualsiasi sito web. SPACE AI scarica la pagina, la analizza e risponde al tuo task.</p>
+      <input id="manusUrl" placeholder="https://example.com" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);margin-bottom:10px;box-sizing:border-box">
+      <input id="manusTask" placeholder="Task: es. Estrai i prezzi, Riassumi l'articolo, Trova i contatti" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);margin-bottom:12px;box-sizing:border-box">
+      <button onclick="manusBrowse()" style="width:100%;padding:12px;border-radius:10px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:700;font-size:1rem">🌐 Naviga e Analizza</button>
+    </div>
+  </div>
+</div>
 
 <!-- GitHub Panel Modal -->
 <div id="githubPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:999;align-items:center;justify-content:center">
