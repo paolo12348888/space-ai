@@ -2488,26 +2488,44 @@ public class ChatController {
             int fps           = json.path("fps").asInt(2);
             int totalFrames   = frames.isArray() ? frames.size() : 0;
 
-            if (totalFrames == 0)
-                return "ERRORE: Storyboard vuoto. Riprova con una descrizione piu dettagliata.";
+            // Check error key from LLM
+            if (!json.path("error").asText("").isEmpty()) {
+                log.warn("VideoGen: LLM reported error: {}", json.path("error").asText());
+            }
+            if (totalFrames == 0) {
+                // FALLBACK: genera almeno 3 frame dalla descrizione originale
+                log.warn("VideoGen: storyboard vuoto, uso fallback con 3 frame");
+                List<String> fallbackPrompts = new ArrayList<>();
+                String engDesc = enhancePromptForSD(description);
+                fallbackPrompts.add(engDesc + ", opening scene, wide shot");
+                fallbackPrompts.add(engDesc + ", main action, medium shot");
+                fallbackPrompts.add(engDesc + ", final scene, cinematic closeup");
+                for (int fi = 0; fi < fallbackPrompts.size(); fi++) {
+                    String fp = fallbackPrompts.get(fi);
+                    frameDescs.add("Scena " + (fi+1));
+                    framePrompts.add(fp);
+                    String imgR = generateImage(fp);
+                    frameB64s.add(imgR.startsWith("IMAGE:") ? imgR.substring(6) : "");
+                }
+                duration = 6; fps = 2;
+            }
 
             // STEP 2: Genera immagine per ogni frame
             List<String> frameB64s     = new ArrayList<>();
             List<String> frameDescs    = new ArrayList<>();
             List<String> framePrompts  = new ArrayList<>();
 
-            for (JsonNode frame : frames) {
-                String promptImg  = frame.path("prompt_image").asText(description);
-                String frameDesc  = frame.path("description").asText("Frame " + frameB64s.size());
-                frameDescs.add(frameDesc);
-                framePrompts.add(promptImg);
-                String imgResult = generateImage(promptImg);
-                if (imgResult.startsWith("IMAGE:"))
-                    frameB64s.add(imgResult.substring(6));
-                else
-                    frameB64s.add(""); // frame fallito
-                log.info("VideoGen frame {}/{}: {}", frameB64s.size(), totalFrames,
-                    promptImg.substring(0, Math.min(50, promptImg.length())));
+            if (totalFrames > 0) {
+                for (JsonNode frame : frames) {
+                    String promptImg = frame.path("prompt_image").asText(description);
+                    String frameDesc = frame.path("description").asText("Frame " + (frameB64s.size()+1));
+                    frameDescs.add(frameDesc);
+                    framePrompts.add(promptImg);
+                    String imgResult = generateImage(promptImg);
+                    frameB64s.add(imgResult.startsWith("IMAGE:") ? imgResult.substring(6) : "");
+                    log.info("VideoGen frame {}/{}: {}", frameB64s.size(), totalFrames,
+                        promptImg.substring(0, Math.min(50, promptImg.length())));
+                }
             }
 
             long frameMs = totalFrames > 0 ? (duration * 1000L / totalFrames) : 1000;
@@ -2540,14 +2558,18 @@ public class ChatController {
             html.append("</div>");
 
             // Controlli
-            html.append("<div style='display:flex;gap:8px;margin-top:10px;align-items:center'>");
+            html.append("<div style='display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap'>");
             html.append("<button id='vbtn' onclick='toggleVideo()' style='padding:8px 18px;")
                 .append("border-radius:8px;border:none;background:#00d4ff;color:#000;cursor:pointer;font-weight:700'>▶ Play</button>");
             html.append("<input type='range' id='vslider' min='0' max='")
                 .append(Math.max(0, frameB64s.size()-1))
-                .append("' value='0' oninput='goFrame(this.value)' style='flex:1'>");
+                .append("' value='0' oninput='goFrame(this.value)' style='flex:1;min-width:80px'>");
             html.append("<span id='vcount' style='font-size:.8rem;opacity:.7'>1/")
                 .append(frameB64s.size()).append("</span>");
+            // Download WebM button (MediaRecorder lato client)
+            html.append("<button onclick='recordVideo()' style='padding:8px 14px;border-radius:8px;")
+                .append("border:none;background:#a855f7;color:#fff;cursor:pointer;font-weight:700;font-size:.85rem'>")
+                .append("⬇ Scarica WebM</button>");
             html.append("</div>");
 
             // Thumbnails
@@ -2593,6 +2615,37 @@ public class ChatController {
             html.append("    timer=setInterval(function(){showFrame((cur+1)%frames);},frameMs);}");
             html.append("};");
             html.append("showFrame(0);");
+            // MediaRecorder: registra lo slideshow come WebM lato client
+            html.append("window.recordVideo=function(){");
+            html.append("  var btn=event.target;btn.textContent='⏳ Registrando...';btn.disabled=true;");
+            html.append("  var canvas=document.createElement('canvas');");
+            html.append("  canvas.width=document.getElementById('vp').offsetWidth||640;");
+            html.append("  canvas.height=document.getElementById('vp').offsetHeight||360;");
+            html.append("  var ctx2=canvas.getContext('2d');");
+            html.append("  var stream=canvas.captureStream(").append(fps).append(");");
+            html.append("  var rec=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8'});");
+            html.append("  var chunks=[];");
+            html.append("  rec.ondataavailable=function(e){if(e.data.size>0)chunks.push(e.data);};");
+            html.append("  rec.onstop=function(){");
+            html.append("    var blob=new Blob(chunks,{type:'video/webm'});");
+            html.append("    var a=document.createElement('a');");
+            html.append("    a.href=URL.createObjectURL(blob);");
+            html.append("    a.download='space-ai-video-'+Date.now()+'.webm';");
+            html.append("    a.click();");
+            html.append("    btn.textContent='⬇ Scarica WebM';btn.disabled=false;");
+            html.append("  };");
+            html.append("  rec.start();");
+            html.append("  var fi=0;");
+            html.append("  function drawNext(){");
+            html.append("    showFrame(fi);");
+            html.append("    var img=document.getElementById('vf'+fi);");
+            html.append("    if(img){ctx2.drawImage(img,0,0,canvas.width,canvas.height);}");
+            html.append("    fi++;");
+            html.append("    if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
+            html.append("    else{setTimeout(function(){rec.stop();},200);}");
+            html.append("  }");
+            html.append("  drawNext();");
+            html.append("};");
             html.append("})();");
             html.append("</script></div>");
 
@@ -3009,11 +3062,19 @@ public class ChatController {
             case "prompt_eng": return "Sei PROMPT_ENGINEER di SPACE AI. Data:" + d + ". Chain-of-thought,few-shot,ReAct. Rispondi in italiano.";
             case "video_gen":
                 return "Sei VIDEO_GEN di SPACE AI. Data:" + d + ". " +
-                       "Ricevi una descrizione di scena animata e devi restituire SOLO JSON valido senza testo extra:\n" +
-                       "{\"storyboard\":[{\"frame\":1,\"description\":\"...\",\"prompt_image\":\"...\"}],\"duration_seconds\":5,\"fps\":2}\n" +
-                       "Regole: max 5 frame, ogni prompt_image in INGLESE dettagliato per Pollinations, " +
-                       "ogni frame deve mostrare un momento diverso della scena animata. " +
-                       "Rispondi SOLO con JSON valido, zero testo fuori dal JSON.";
+                       "Ricevi una descrizione e devi rispondere SOLO con JSON valido, ZERO testo extra, ZERO codice Python, ZERO spiegazioni. " +
+                       "Formato ESATTO da rispettare: " +
+                       "{\"storyboard\":[" +
+                       "{\"frame\":1,\"description\":\"scena 1 in italiano\",\"prompt_image\":\"detailed english description for image generation\"}," +
+                       "{\"frame\":2,\"description\":\"scena 2\",\"prompt_image\":\"english prompt 2\"}," +
+                       "{\"frame\":3,\"description\":\"scena 3\",\"prompt_image\":\"english prompt 3\"}" +
+                       "],\"duration_seconds\":6,\"fps\":2} " +
+                       "Regole OBBLIGATORIE: " +
+                       "1) Esattamente 3-5 frame, ognuno un momento diverso della scena. " +
+                       "2) prompt_image SEMPRE in inglese descrittivo e dettagliato (colori, soggetti, ambientazione). " +
+                       "3) Se la descrizione non e chiara, inventa una scena plausibile. " +
+                       "4) MAI restituire codice Python o istruzioni testuali. " +
+                       "5) Se non puoi fare lo storyboard: {\"error\":\"descrizione non valida\"}";
             case "audio_gen": return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". ElevenLabs,Suno,voice cloning,podcast. Rispondi in italiano.";
             case "aegis":
                 return "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data:" + d + ". " +
@@ -3191,6 +3252,30 @@ public class ChatController {
                 // Carica in neuralMemory per future richieste
                 if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
             }
+            // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
+            String qlv = userMessage.toLowerCase();
+            boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
+                qlv.contains("crea video") || qlv.contains("animazione di") ||
+                qlv.contains("video di") || qlv.contains("fai un video") ||
+                qlv.contains("genera un video") || qlv.contains("realizza un video");
+            if (isVideo) {
+                try {
+                    log.info("VideoGen: avvio per '{}'", userMessage.substring(0, Math.min(60, userMessage.length())));
+                    String videoHtml = generateVideoHtml(userMessage, sessionId, baseUrl, apiKey, model);
+                    saveMessages(sessionId, userMessage, "Video generato.", supabaseUrl, supabaseKey);
+                    updateSTM(sessionId, userMessage);
+                    Map<String,Object> vResp = new HashMap<>();
+                    vResp.put("response",  "🎬 Ecco il tuo video animato! Clicca ▶ Play, poi ⬇ Scarica WebM per salvarlo.");
+                    vResp.put("videoHtml", videoHtml);
+                    vResp.put("status",    "ok");
+                    vResp.put("mode",      "video_gen");
+                    vResp.put("sessionId", sessionId);
+                    return ResponseEntity.ok(vResp);
+                } catch (Exception ve) {
+                    log.warn("VideoGen failed, continuo con flow normale: {}", ve.getMessage());
+                }
+            }
+
             // ── AGENT LOOP Manus-style: per query complesse multi-step ─────────
             String agentLoopResult = null;
             if (needsAgentLoop(userMessage)) {
@@ -3312,27 +3397,6 @@ public class ChatController {
                     return ResponseEntity.ok(vr);
                 } catch (Exception ve) {
                     log.warn("Visual creative: {}", ve.getMessage());
-                }
-            }
-
-            // ── VIDEO GENERATION ────────────────────────────────────────────
-            String ql = userMessage.toLowerCase();
-            boolean isVideo = ql.contains("crea un video") || ql.contains("genera video") ||
-                ql.contains("crea video") || ql.contains("animazione di") ||
-                ql.contains("video di") || ql.contains("fai un video");
-            if (isVideo) {
-                try {
-                    String videoHtml = generateVideoHtml(userMessage, sessionId, baseUrl, apiKey, model);
-                    saveMessages(sessionId, userMessage, "Video generato.", supabaseUrl, supabaseKey);
-                    Map<String,Object> vResp = new HashMap<>();
-                    vResp.put("response", "🎬 Ecco il tuo video animato!");
-                    vResp.put("videoHtml", videoHtml);
-                    vResp.put("status", "ok");
-                    vResp.put("mode", "video_gen");
-                    vResp.put("sessionId", sessionId);
-                    return ResponseEntity.ok(vResp);
-                } catch (Exception ve) {
-                    log.warn("Video gen failed: {}", ve.getMessage());
                 }
             }
 
