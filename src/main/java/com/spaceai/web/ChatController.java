@@ -1464,38 +1464,72 @@ public class ChatController {
 
     private boolean needsSearch(String msg) {
         String q = msg.toLowerCase();
-        // Cerca SEMPRE per: eventi recenti, persone, prezzi, notizie, sport
+        // Tempo reale: date, eventi, notizie
         if (q.contains("oggi") || q.contains("adesso") || q.contains("ora") ||
             q.contains("2024") || q.contains("2025") || q.contains("2026") ||
             q.contains("recente") || q.contains("ultime") || q.contains("ultimo") ||
             q.contains("aggiornato") || q.contains("attuale") || q.contains("corrente") ||
-            q.contains("notizie") || q.contains("news") || q.contains("cerca")) return true;
-        // Prezzi e mercati - sempre aggiornati
+            q.contains("notizie") || q.contains("news") || q.contains("cerca") ||
+            q.contains("dammi info") || q.contains("dimmi") && q.contains("now") ||
+            q.contains("live") || q.contains("in diretta") || q.contains("breaking")) return true;
+        // Prezzi, mercati, crypto
         if (q.contains("prezzo") || q.contains("quotazione") || q.contains("borsa") ||
-            q.contains("bitcoin") || q.contains("crypto") || q.contains("azioni") ||
-            q.contains("euro") || q.contains("dollaro") || q.contains("mercato")) return true;
-        // Sport e eventi
+            q.contains("bitcoin") || q.contains("ethereum") || q.contains("crypto") ||
+            q.contains("azioni") || q.contains("euro") || q.contains("dollaro") ||
+            q.contains("mercato") || q.contains("nasdaq") || q.contains("s&p") ||
+            q.contains("ftse") || q.contains("dow jones")) return true;
+        // Sport
         if (q.contains("partita") || q.contains("risultato") || q.contains("campionato") ||
             q.contains("serie a") || q.contains("champions") || q.contains("formula 1") ||
-            q.contains("gara") || q.contains("torneo")) return true;
+            q.contains("gara") || q.contains("torneo") || q.contains("classifica") ||
+            q.contains("gol") || q.contains("marcatore") || q.contains("moto gp")) return true;
         // Meteo
         if (q.contains("meteo") || q.contains("temperatura") || q.contains("previsioni") ||
-            q.contains("piove") || q.contains("sole")) return true;
-        // Persone famose e aziende (potrebbero avere news recenti)
-        if (q.contains("chi e") || q.contains("chi è") || q.contains("cosa ha fatto") ||
-            q.contains("quando e morto") || q.contains("elezioni") || q.contains("governo")) return true;
-        // Tecnologia recente
+            q.contains("piove") || q.contains("sole") || q.contains("vento") ||
+            q.contains("allerta") || q.contains("uv index")) return true;
+        // Persone, politica, eventi
+        if (q.contains("chi è") || q.contains("chi e ") || q.contains("cosa ha fatto") ||
+            q.contains("morto") || q.contains("elezioni") || q.contains("governo") ||
+            q.contains("presidente") || q.contains("premier") || q.contains("ministro") ||
+            q.contains("guerra") || q.contains("conflitto") || q.contains("attacco")) return true;
+        // Tecnologia
         if (q.contains("gpt") || q.contains("claude") || q.contains("gemini") ||
-            q.contains("llm") || q.contains("intelligenza artificiale") && q.contains("nuov")) return true;
+            q.contains("llama") || q.contains("openai") || q.contains("anthropic") ||
+            q.contains("mistral") || q.contains("deepseek") ||
+            (q.contains("ia") || q.contains("ai")) && q.contains("nuov")) return true;
+        // Domande dirette su fatti verificabili
+        if (q.startsWith("chi ") || q.startsWith("cosa ") || q.startsWith("quando ") ||
+            q.startsWith("dove ") || q.startsWith("quanto ") || q.startsWith("qual è") ||
+            q.startsWith("quanti ") || q.contains("?") && q.length() < 80) return true;
         return false;
     }
 
-    // Cerca sempre su web - versione potenziata con fallback Google
+    // Decide se usare Agent Loop (query complesse multi-step)
+    private boolean needsAgentLoop(String msg) {
+        String q = msg.toLowerCase();
+        return q.contains("analizza") || q.contains("ricerca e") || q.contains("confronta") ||
+               q.contains("compara") || q.contains("spiega in dettaglio") ||
+               q.contains("fai un report") || q.contains("scrivi un articolo") ||
+               q.contains("github") || q.contains("leggi il file") ||
+               q.contains("cerca e poi") || q.contains("trova e") ||
+               (q.contains("cerca") && q.contains("e") && q.length() > 60);
+    }
+
+    // Cerca su web — pipeline: Tavily → SerpAPI/Google → DuckDuckGo
     private String searchWebEnhanced(String query, String sessionId) {
-        // Prima prova Tavily (risultati migliori)
+        // 1. Tavily (più contestuale, se disponibile)
         String tavily = searchWeb(query);
-        if (tavily != null && !tavily.isBlank()) return tavily;
-        // Fallback: DuckDuckGo Instant Answer API (gratuita, no key)
+        if (tavily != null && !tavily.isBlank()) {
+            ragIndexDocument(sessionId + "/search_" + System.currentTimeMillis(), tavily);
+            return tavily;
+        }
+        // 2. Google live (SerpAPI o Custom Search)
+        String google = searchGoogle(query);
+        if (google != null && !google.isBlank()) {
+            ragIndexDocument(sessionId + "/search_" + System.currentTimeMillis(), google);
+            return google;
+        }
+        // 3. DuckDuckGo fallback gratuito
         return searchDuckDuckGo(query);
     }
 
@@ -1541,6 +1575,457 @@ public class ChatController {
         }
         return null;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 🔍 GOOGLE SEARCH LIVE — dati aggiornati al secondo
+    // Fonte 1: SerpAPI (SERPAPI_KEY env var)
+    // Fonte 2: Google Custom Search (GOOGLE_CSE_KEY + GOOGLE_CSE_ID env vars)
+    // Fonte 3: DuckDuckGo (già esistente, gratuita)
+    // Fonte 4: Scraping diretto URL (per news, meteo, prezzi)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private String searchGoogle(String query) {
+        // ── Fonte 1: SerpAPI ────────────────────────────────────────────────
+        String serpKey = env("SERPAPI_KEY", "");
+        if (!serpKey.isEmpty()) {
+            try {
+                String encoded = URLEncoder.encode(query, "UTF-8");
+                String url = "https://serpapi.com/search.json?q=" + encoded
+                    + "&api_key=" + serpKey + "&hl=it&gl=it&num=5"
+                    + "&tbm=&tbs=qdr:h"; // risultati ultima ora
+                HttpHeaders h = new HttpHeaders();
+                h.set("User-Agent", "SPACE-AI/4.0");
+                ResponseEntity<String> resp = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(h), String.class);
+                JsonNode json = MAPPER.readTree(resp.getBody());
+                StringBuilder sb = new StringBuilder();
+                // Answer box (risposta diretta Google)
+                JsonNode answerBox = json.path("answer_box");
+                if (!answerBox.isMissingNode()) {
+                    String ans = answerBox.path("answer").asText();
+                    if (ans.isBlank()) ans = answerBox.path("snippet").asText();
+                    if (!ans.isBlank()) sb.append("🎯 RISPOSTA GOOGLE: ").append(ans).append("
+
+");
+                }
+                // Knowledge graph
+                JsonNode kg = json.path("knowledge_graph");
+                if (!kg.isMissingNode() && !kg.path("description").asText().isBlank())
+                    sb.append("📌 ").append(kg.path("description").asText()).append("
+
+");
+                // Organic results
+                JsonNode organic = json.path("organic_results");
+                if (organic.isArray()) {
+                    sb.append("🔍 RISULTATI LIVE:
+");
+                    int i = 0;
+                    for (JsonNode r : organic) {
+                        if (i++ >= 5) break;
+                        sb.append(i).append(". **").append(r.path("title").asText()).append("**
+");
+                        String snippet = r.path("snippet").asText();
+                        if (!snippet.isBlank())
+                            sb.append("   ").append(snippet, 0, Math.min(250, snippet.length())).append("
+");
+                        sb.append("   🔗 ").append(r.path("link").asText()).append("
+
+");
+                    }
+                }
+                // News results
+                JsonNode news = json.path("news_results");
+                if (news.isArray() && news.size() > 0) {
+                    sb.append("📰 NOTIZIE RECENTI:
+");
+                    int i = 0;
+                    for (JsonNode n : news) {
+                        if (i++ >= 3) break;
+                        sb.append("• ").append(n.path("title").asText());
+                        String date = n.path("date").asText();
+                        if (!date.isBlank()) sb.append(" [").append(date).append("]");
+                        sb.append("
+  ").append(n.path("source").asText()).append("
+");
+                    }
+                }
+                String result = sb.toString().trim();
+                if (!result.isBlank()) {
+                    log.info("SerpAPI OK: {} chars", result.length());
+                    return "📡 FONTE: Google Search Live (" + today() + ")
+
+" + result;
+                }
+            } catch (Exception e) { log.warn("SerpAPI: {}", e.getMessage()); }
+        }
+
+        // ── Fonte 2: Google Custom Search API ──────────────────────────────
+        String gcsKey = env("GOOGLE_CSE_KEY", "");
+        String gcsId  = env("GOOGLE_CSE_ID", "");
+        if (!gcsKey.isEmpty() && !gcsId.isEmpty()) {
+            try {
+                String encoded = URLEncoder.encode(query, "UTF-8");
+                String url = "https://www.googleapis.com/customsearch/v1?q=" + encoded
+                    + "&key=" + gcsKey + "&cx=" + gcsId + "&num=5&lr=lang_it&dateRestrict=d1";
+                ResponseEntity<String> resp = restTemplate.getForEntity(url, String.class);
+                JsonNode json = MAPPER.readTree(resp.getBody());
+                StringBuilder sb = new StringBuilder();
+                sb.append("🔍 RISULTATI GOOGLE LIVE:
+");
+                JsonNode items = json.path("items");
+                if (items.isArray()) {
+                    int i = 0;
+                    for (JsonNode item : items) {
+                        if (i++ >= 5) break;
+                        sb.append(i).append(". **").append(item.path("title").asText()).append("**
+");
+                        String snippet = item.path("snippet").asText();
+                        if (!snippet.isBlank())
+                            sb.append("   ").append(snippet, 0, Math.min(200, snippet.length())).append("
+");
+                        sb.append("   🔗 ").append(item.path("link").asText()).append("
+
+");
+                    }
+                }
+                String result = sb.toString().trim();
+                if (result.length() > 50) {
+                    log.info("Google CSE OK");
+                    return "📡 FONTE: Google Custom Search (" + today() + ")
+
+" + result;
+                }
+            } catch (Exception e) { log.warn("Google CSE: {}", e.getMessage()); }
+        }
+
+        // ── Fonte 3: DuckDuckGo (fallback gratuito) ─────────────────────────
+        return searchDuckDuckGo(query);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 🐙 GITHUB LIVE CONNECTOR — legge/scrive repo in tempo reale
+    // Richiede env var: GITHUB_TOKEN
+    // ════════════════════════════════════════════════════════════════════════
+
+    private JsonNode githubApi(String endpoint) throws Exception {
+        String token = env("GITHUB_TOKEN", "");
+        if (token.isEmpty()) throw new IllegalStateException("GITHUB_TOKEN non configurato");
+        HttpHeaders h = new HttpHeaders();
+        h.set("Authorization", "Bearer " + token);
+        h.set("Accept", "application/vnd.github+json");
+        h.set("X-GitHub-Api-Version", "2022-11-28");
+        h.set("User-Agent", "SPACE-AI/4.0");
+        ResponseEntity<String> resp = restTemplate.exchange(
+            "https://api.github.com" + endpoint,
+            HttpMethod.GET, new HttpEntity<>(h), String.class);
+        return MAPPER.readTree(resp.getBody());
+    }
+
+    private String githubPost(String endpoint, String body) throws Exception {
+        String token = env("GITHUB_TOKEN", "");
+        if (token.isEmpty()) throw new IllegalStateException("GITHUB_TOKEN non configurato");
+        HttpHeaders h = new HttpHeaders();
+        h.set("Authorization", "Bearer " + token);
+        h.set("Accept", "application/vnd.github+json");
+        h.set("X-GitHub-Api-Version", "2022-11-28");
+        h.setContentType(MediaType.APPLICATION_JSON);
+        h.set("User-Agent", "SPACE-AI/4.0");
+        ResponseEntity<String> resp = restTemplate.postForEntity(
+            "https://api.github.com" + endpoint,
+            new HttpEntity<>(body, h), String.class);
+        return resp.getBody();
+    }
+
+    @GetMapping("/github/repo")
+    public ResponseEntity<Object> githubRepoInfo(@RequestParam String owner,
+                                                  @RequestParam String repo) {
+        try {
+            JsonNode info = githubApi("/repos/" + owner + "/" + repo);
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("name",        info.path("full_name").asText());
+            r.put("description", info.path("description").asText());
+            r.put("stars",       info.path("stargazers_count").asInt());
+            r.put("forks",       info.path("forks_count").asInt());
+            r.put("language",    info.path("language").asText());
+            r.put("updated",     info.path("updated_at").asText());
+            r.put("defaultBranch", info.path("default_branch").asText());
+            return ResponseEntity.ok(r);
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/github/file")
+    public ResponseEntity<Object> githubReadFile(@RequestParam String owner,
+                                                  @RequestParam String repo,
+                                                  @RequestParam String path) {
+        try {
+            JsonNode file = githubApi("/repos/" + owner + "/" + repo + "/contents/" + path);
+            String encoded = file.path("content").asText().replaceAll("\s", "");
+            String content = new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8);
+            // Auto-indicizza nel RAG per poter fare domande sul file
+            String docId = "github/" + owner + "/" + repo + "/" + path;
+            int chunks = ragIndexDocument(docId, content);
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("path",    path);
+            r.put("sha",     file.path("sha").asText());
+            r.put("size",    file.path("size").asInt());
+            r.put("content", content.substring(0, Math.min(5000, content.length())));
+            r.put("ragChunks", chunks);
+            r.put("indexed", true);
+            return ResponseEntity.ok(r);
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/github/commit")
+    public ResponseEntity<Object> githubCommitFile(@RequestBody Map<String,String> body) {
+        try {
+            String owner   = body.get("owner");
+            String repo    = body.get("repo");
+            String path    = body.get("path");
+            String content = body.get("content");
+            String message = body.getOrDefault("message", "SPACE AI: update file");
+            String branch  = body.getOrDefault("branch", "main");
+            // Recupera SHA attuale del file (necessario per update)
+            String sha = "";
+            try {
+                JsonNode existing = githubApi("/repos/" + owner + "/" + repo + "/contents/" + path);
+                sha = existing.path("sha").asText();
+            } catch (Exception ignored) {}
+            // Prepara il payload
+            ObjectNode payload = MAPPER.createObjectNode();
+            payload.put("message", message);
+            payload.put("content", Base64.getEncoder().encodeToString(
+                content.getBytes(StandardCharsets.UTF_8)));
+            payload.put("branch", branch);
+            if (!sha.isEmpty()) payload.put("sha", sha);
+            String result = githubPost("/repos/" + owner + "/" + repo + "/contents/" + path,
+                MAPPER.writeValueAsString(payload));
+            JsonNode resp = MAPPER.readTree(result);
+            return ResponseEntity.ok(Map.of(
+                "status",  "committed",
+                "commit",  resp.path("commit").path("sha").asText(),
+                "message", message,
+                "path",    path
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/github/issues")
+    public ResponseEntity<Object> githubIssues(@RequestParam String owner,
+                                                @RequestParam String repo) {
+        try {
+            JsonNode issues = githubApi("/repos/" + owner + "/" + repo + "/issues?state=open&per_page=10");
+            List<Map<String,Object>> list = new ArrayList<>();
+            for (JsonNode iss : issues) {
+                Map<String,Object> i = new LinkedHashMap<>();
+                i.put("number", iss.path("number").asInt());
+                i.put("title",  iss.path("title").asText());
+                i.put("state",  iss.path("state").asText());
+                i.put("author", iss.path("user").path("login").asText());
+                i.put("created", iss.path("created_at").asText());
+                list.add(i);
+            }
+            return ResponseEntity.ok(Map.of("issues", list, "count", list.size()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 🤖 AGENT LOOP MANUS-STYLE — ciclo iterativo con tool execution
+    // Osserva → Ragiona → Seleziona Tool → Esegui → Osserva → Ripeti
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Registro strumenti disponibili (abilitati via env vars)
+    private Map<String,Boolean> getAvailableTools() {
+        Map<String,Boolean> tools = new LinkedHashMap<>();
+        tools.put("web_search",    true);                                    // sempre attivo
+        tools.put("google_search", !env("SERPAPI_KEY","").isEmpty()
+                                || !env("GOOGLE_CSE_KEY","").isEmpty());    // richiede key
+        tools.put("rag_retrieval", true);                                    // sempre attivo
+        tools.put("github_read",   !env("GITHUB_TOKEN","").isEmpty());      // richiede token
+        tools.put("github_write",  !env("GITHUB_TOKEN","").isEmpty());      // richiede token
+        tools.put("memory_read",   true);                                    // sempre attivo
+        tools.put("image_gen",     true);                                    // sempre attivo
+        tools.put("math_eval",     true);                                    // sempre attivo
+        return tools;
+    }
+
+    /**
+     * Esegue un singolo tool dal loop agente.
+     * Restituisce il risultato dell'esecuzione come stringa.
+     */
+    private String executeTool(String tool, String params, String sessionId,
+                                String baseUrl, String apiKey, String model) {
+        try {
+            switch (tool) {
+                case "web_search":
+                case "google_search":
+                    return searchGoogle(params);
+                case "rag_retrieval":
+                    return ragRetrieve(params, sessionId);
+                case "memory_read":
+                    return semanticMemoryRetrieve(params, sessionId);
+                case "github_read":
+                    // params formato: "owner/repo/path"
+                    String[] parts = params.split("/", 3);
+                    if (parts.length >= 3) {
+                        JsonNode f = githubApi("/repos/" + parts[0] + "/" + parts[1] + "/contents/" + parts[2]);
+                        String enc = f.path("content").asText().replaceAll("\s", "");
+                        return new String(Base64.getDecoder().decode(enc), StandardCharsets.UTF_8)
+                            .substring(0, Math.min(3000, Integer.MAX_VALUE));
+                    }
+                    return "Formato params: owner/repo/path";
+                case "math_eval":
+                    // Valutazione espressioni matematiche semplici via LLM
+                    return callLLM("Sei un calcolatore. Rispondi SOLO con il numero risultato.",
+                        params, new ArrayList<>(), baseUrl, apiKey, model, 100);
+                default:
+                    return "Tool sconosciuto: " + tool;
+            }
+        } catch (Exception e) {
+            log.warn("Tool {} fallito: {}", tool, e.getMessage());
+            return "Errore tool " + tool + ": " + e.getMessage();
+        }
+    }
+
+    /**
+     * Agent Loop principale — max 4 iterazioni come Manus.
+     * Il LLM decide autonomamente quali tool usare e quando fermarsi.
+     */
+    private String agentLoop(String userQuery, String sessionId,
+                              String baseUrl, String apiKey, String model) throws Exception {
+        Map<String,Boolean> tools = getAvailableTools();
+        String toolsList = tools.entrySet().stream()
+            .filter(Map.Entry::getValue)
+            .map(Map.Entry::getKey)
+            .collect(Collectors.joining(", "));
+
+        String agentSystemPrompt =
+            "Sei SPACE AI con Agent Loop Manus-style. Data: " + today() + ".
+" +
+            "Strumenti disponibili: " + toolsList + "
+
+" +
+            "Per usare uno strumento rispondi con:
+" +
+            "[TOOL: nome_tool | PARAMS: parametri]
+
+" +
+            "Quando hai abbastanza informazioni, rispondi con:
+" +
+            "[FINAL_ANSWER]
+<la tua risposta completa>
+[/FINAL_ANSWER]
+
+" +
+            "Regole:
+" +
+            "- Usa web_search/google_search per dati in tempo reale
+" +
+            "- Usa rag_retrieval per documenti già indicizzati
+" +
+            "- Usa github_read per leggere file dal repo
+" +
+            "- Max 4 iterazioni di tool use
+" +
+            "- Cita sempre le fonti usate
+" +
+            "- Rispondi sempre in italiano";
+
+        List<Map<String,String>> agentHistory = new ArrayList<>();
+        StringBuilder observations = new StringBuilder();
+        String currentQuery = userQuery;
+        int maxIterations = 4;
+
+        for (int iteration = 0; iteration < maxIterations; iteration++) {
+            String contextMsg = currentQuery;
+            if (observations.length() > 0)
+                contextMsg += "
+
+[OSSERVAZIONI PRECEDENTI]:
+" + observations;
+
+            String llmResp = callLLM(agentSystemPrompt, contextMsg,
+                agentHistory, baseUrl, apiKey, model, 1500);
+
+            log.info("AgentLoop iter {}: {}", iteration,
+                llmResp.substring(0, Math.min(100, llmResp.length())));
+
+            // Controlla se ha una risposta finale
+            if (llmResp.contains("[FINAL_ANSWER]")) {
+                int s = llmResp.indexOf("[FINAL_ANSWER]") + 14;
+                int e = llmResp.indexOf("[/FINAL_ANSWER]");
+                if (e > s) return llmResp.substring(s, e).trim();
+                return llmResp.substring(s).trim();
+            }
+
+            // Estrai e esegui tool calls
+            boolean toolCalled = false;
+            int toolStart = llmResp.indexOf("[TOOL:");
+            while (toolStart >= 0) {
+                int toolEnd = llmResp.indexOf("]", toolStart);
+                if (toolEnd < 0) break;
+                String toolCall = llmResp.substring(toolStart + 6, toolEnd);
+                String[] toolParts = toolCall.split("\\|");
+                String toolName = toolParts[0].replace("TOOL:", "").replace("nome_tool", "").trim();
+                String params   = toolParts.length > 1
+                    ? toolParts[1].replace("PARAMS:", "").trim() : currentQuery;
+
+                if (!toolName.isEmpty() && tools.getOrDefault(toolName, false)) {
+                    log.info("AgentLoop executing tool: {} params: {}", toolName,
+                        params.substring(0, Math.min(60, params.length())));
+                    String toolResult = executeTool(toolName, params, sessionId, baseUrl, apiKey, model);
+                    if (toolResult != null && !toolResult.isBlank()) {
+                        observations.append("
+📡 Tool [").append(toolName).append("] risultato:
+")
+                            .append(toolResult, 0, Math.min(800, toolResult.length())).append("
+---
+");
+                        toolCalled = true;
+                        // Indicizza nel RAG per retrieval futuro
+                        ragIndexDocument(sessionId + "/agent_obs_" + iteration, toolResult);
+                    }
+                }
+                toolStart = llmResp.indexOf("[TOOL:", toolEnd);
+            }
+
+            // Aggiunge alla history del loop
+            agentHistory.add(Map.of("role", "assistant", "content", llmResp));
+            if (!toolCalled) {
+                // Il LLM non ha usato tool né dato risposta finale: usa la risposta diretta
+                return llmResp;
+            }
+        }
+        // Risposta finale dopo max iterazioni
+        String finalPrompt = userQuery + "
+
+[DATI RACCOLTI]:
+" + observations +
+            "
+
+Fornisci la risposta finale completa in italiano citando le fonti.";
+        return callLLM(agentSystemPrompt, finalPrompt, new ArrayList<>(), baseUrl, apiKey, model, 2500);
+    }
+
+    @GetMapping("/tools/status")
+    public ResponseEntity<Object> toolsStatus() {
+        Map<String,Object> status = new LinkedHashMap<>();
+        status.put("tools", getAvailableTools());
+        status.put("serpapi",    !env("SERPAPI_KEY","").isEmpty() ? "✅ configurato" : "❌ manca SERPAPI_KEY");
+        status.put("googleCse",  !env("GOOGLE_CSE_KEY","").isEmpty() ? "✅ configurato" : "❌ manca GOOGLE_CSE_KEY");
+        status.put("github",     !env("GITHUB_TOKEN","").isEmpty() ? "✅ configurato" : "❌ manca GITHUB_TOKEN");
+        status.put("tavily",     !env("TAVILY_API_KEY","").isEmpty() ? "✅ configurato" : "❌ manca TAVILY_API_KEY");
+        status.put("date",       today());
+        return ResponseEntity.ok(status);
+    }
+
     /**
      * Traduce e ottimizza il prompt IT→EN per Stable Diffusion / Pollinations.
      * Usa un dizionario esteso + LLM fallback per scene complesse.
@@ -2091,11 +2576,32 @@ public class ChatController {
                 // Carica in neuralMemory per future richieste
                 if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
             }
-            // Web search
-            // Cerca su web se necessario - usa enhanced search (Tavily + DuckDuckGo fallback)
+            // ── AGENT LOOP Manus-style: per query complesse multi-step ─────────
+            String agentLoopResult = null;
+            if (needsAgentLoop(userMessage)) {
+                try {
+                    log.info("Avvio Agent Loop: {}", userMessage.substring(0, Math.min(60, userMessage.length())));
+                    agentLoopResult = agentLoop(userMessage, sessionId, baseUrl, apiKey, model);
+                    if (agentLoopResult != null && agentLoopResult.length() > 50) {
+                        saveMessages(sessionId, userMessage, agentLoopResult, supabaseUrl, supabaseKey);
+                        updateSTM(sessionId, userMessage);
+                        consolidateToLTM(sessionId, userMessage.substring(0, Math.min(80, userMessage.length())));
+                        Map<String,Object> alResp = new HashMap<>();
+                        alResp.put("response",  agentLoopResult);
+                        alResp.put("status",    "ok");
+                        alResp.put("mode",      "agent_loop");
+                        alResp.put("sessionId", sessionId);
+                        alResp.put("agentLoop", true);
+                        return ResponseEntity.ok(alResp);
+                    }
+                } catch (Exception ale) {
+                    log.warn("Agent loop fallito, continuo con flow normale: {}", ale.getMessage());
+                }
+            }
+            // ── GOOGLE SEARCH LIVE: per query che richiedono dati aggiornati ─
+            // Pipeline: Tavily → SerpAPI/Google CSE → DuckDuckGo
             String webData = needsSearch(userMessage) ? searchWebEnhanced(userMessage, sessionId) : null;
-            // Forza ricerca per domande che riguardano post-2023
-            if (webData == null && userMessage.matches(".*\\b(202[4-9]|chi e|cosa e successo|quando|dove ora)\\b.*")) {
+            if (webData == null && userMessage.matches(".*\b(202[4-9]|chi e|cosa e successo|quando|dove ora)\b.*")) {
                 webData = searchWebEnhanced(userMessage, sessionId);
             }
             String enriched = userMessage;
