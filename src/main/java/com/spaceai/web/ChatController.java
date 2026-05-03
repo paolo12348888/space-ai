@@ -1587,21 +1587,16 @@ public class ChatController {
     // Decide se usare Agent Loop (query complesse multi-step)
     private boolean needsAgentLoop(String msg) {
         String q = msg.toLowerCase();
-        // Attiva per query lunghe (>60 char = quasi sempre multi-step)
-        if (q.length() > 60) return true;
-        // Keyword espliciti
+        // Soglia 40 char: query lunghe sono quasi sempre multi-step
+        if (q.length() > 40) return true;
+        // Keyword espliciti anche per query brevi
         return q.contains("analizza") || q.contains("confronta") || q.contains("compara") ||
-               q.contains("fai un report") || q.contains("scrivi un articolo") ||
-               q.contains("github") || q.contains("leggi il file") ||
-               q.contains("cerca e poi") || q.contains("trova e") ||
-               q.contains("vai su ") || q.contains("apri il sito") ||
-               q.contains("naviga") || q.contains("scraping") ||
-               q.contains("esegui") || q.contains("calcola") ||
-               q.contains("scrivi codice") || q.contains("programma") ||
-               q.contains("crea uno script") || q.contains("sviluppa") ||
-               q.contains("crea un video") || q.contains("genera video") ||
-               q.contains("riassumi e") || q.contains("cerca e") ||
-               q.contains("spiega perche") || q.contains("dimmi tutto");
+               q.contains("cerca") || q.contains("codice") || q.contains("programma") ||
+               q.contains("report") || q.contains("articolo") || q.contains("github") ||
+               q.contains("naviga") || q.contains("video") || q.contains("esegui") ||
+               q.contains("calcola") || q.contains("sviluppa") || q.contains("scrivi") ||
+               q.contains("riassumi") || q.contains("spiega") || q.contains("dimmi") ||
+               q.contains("trova") || q.contains("cerca e") || q.contains("leggi");
     }
 
     // Cerca su web — pipeline: Tavily → SerpAPI/Google → DuckDuckGo
@@ -1919,11 +1914,13 @@ public class ChatController {
         tools.put("rag_retrieval", true);                                    // sempre attivo
         tools.put("github_read",   !env("GITHUB_TOKEN","").isEmpty());      // richiede token
         tools.put("github_write",  !env("GITHUB_TOKEN","").isEmpty());      // richiede token
-        tools.put("memory_read",   true);
-        tools.put("image_gen",     true);
-        tools.put("math_eval",     true);
-        tools.put("code_exec",     true);    // Piston API - sempre disponibile
-        tools.put("web_scrape",    true);    // Browser agent - sempre disponibile
+        tools.put("memory_read",    true);
+        tools.put("memory_store",   true);   // Salva fatto nella LTM (Punto 7)
+        tools.put("memory_retrieve",true);   // Cerca nella memoria semantica (Punto 7)
+        tools.put("image_gen",      true);
+        tools.put("math_eval",      true);
+        tools.put("code_exec",      true);
+        tools.put("web_scrape",     true);
         return tools;
     }
 
@@ -1931,6 +1928,77 @@ public class ChatController {
      * Esegue un singolo tool dal loop agente.
      * Restituisce il risultato dell'esecuzione come stringa.
      */
+    // ══════════════════════════════════════════════════════════════════
+    // PUNTO 4: Tool Schema — definizione JSON strutturata per ogni tool
+    // Usata per validare e documentare i tool disponibili
+    // ══════════════════════════════════════════════════════════════════
+    private ObjectNode buildToolSchema(String toolName) {
+        ObjectNode schema = MAPPER.createObjectNode();
+        schema.put("name", toolName);
+        ObjectNode params = MAPPER.createObjectNode();
+        params.put("type", "object");
+        ObjectNode props = MAPPER.createObjectNode();
+        ObjectNode queryProp = MAPPER.createObjectNode();
+        queryProp.put("type", "string");
+        switch (toolName) {
+            case "web_search": case "google_search":
+                schema.put("description", "Cerca informazioni aggiornate sul web");
+                queryProp.put("description", "Query di ricerca in italiano o inglese");
+                break;
+            case "rag_retrieval":
+                schema.put("description", "Recupera informazioni dai documenti indicizzati");
+                queryProp.put("description", "Query semantica per il retrieval");
+                break;
+            case "memory_store":
+                schema.put("description", "Salva un fatto nella memoria persistente (formato: soggetto::attributo)");
+                queryProp.put("description", "Fatto da memorizzare, formato: soggetto::valore");
+                break;
+            case "memory_retrieve":
+                schema.put("description", "Cerca fatti rilevanti nella memoria semantica");
+                queryProp.put("description", "Query per il retrieval semantico della memoria");
+                break;
+            case "github_read":
+                schema.put("description", "Legge un file da GitHub (formato: owner/repo/path)");
+                queryProp.put("description", "Percorso nel formato owner/repo/path/to/file");
+                break;
+            case "code_exec":
+                schema.put("description", "Esegue codice in sandbox sicura (formato: linguaggio\ncodice)");
+                queryProp.put("description", "Linguaggio e codice nel formato: python\nprint('hello')");
+                break;
+            case "web_scrape":
+                schema.put("description", "Naviga e analizza una pagina web");
+                queryProp.put("description", "URL della pagina da analizzare");
+                break;
+            case "image_gen":
+                schema.put("description", "Genera un'immagine da una descrizione");
+                queryProp.put("description", "Descrizione dell'immagine da generare");
+                break;
+            case "math_eval":
+                schema.put("description", "Valuta un'espressione matematica");
+                queryProp.put("description", "Espressione matematica da calcolare");
+                break;
+            default:
+                schema.put("description", "Tool generico: " + toolName);
+                queryProp.put("description", "Parametri per il tool");
+        }
+        props.set("query", queryProp);
+        params.set("properties", props);
+        ArrayNode required = MAPPER.createArrayNode(); required.add("query");
+        params.set("required", required);
+        schema.set("parameters", params);
+        return schema;
+    }
+
+    @GetMapping("/tools/schema")
+    public ResponseEntity<Object> getToolsSchema() {
+        Map<String,Boolean> tools = getAvailableTools();
+        List<ObjectNode> schemas = tools.entrySet().stream()
+            .filter(Map.Entry::getValue)
+            .map(e -> buildToolSchema(e.getKey()))
+            .collect(Collectors.toList());
+        return ResponseEntity.ok(Map.of("tools", schemas, "count", schemas.size(), "date", today()));
+    }
+
     private String executeTool(String tool, String params, String sessionId,
                                 String baseUrl, String apiKey, String model) {
         try {
@@ -1952,6 +2020,18 @@ public class ChatController {
                             .substring(0, Math.min(3000, Integer.MAX_VALUE));
                     }
                     return "Formato params: owner/repo/path";
+                case "memory_store":
+                    // Salva un fatto esplicitamente nella LTM della sessione
+                    consolidateToLTM(sessionId, params);
+                    storeFactDifferential(sessionId,
+                        params.contains("::") ? params.split("::")[0] : params.substring(0, Math.min(30, params.length())),
+                        params.contains("::") ? params.split("::")[1] : params);
+                    updateVocab(tokenize(params));
+                    return "Fatto memorizzato: " + params.substring(0, Math.min(80, params.length()));
+                case "memory_retrieve":
+                    // Cerca semanticamente nella memoria
+                    String memResult = msaRetrieveUnified(params, sessionId);
+                    return memResult.isEmpty() ? "Nessun fatto trovato per: " + params : memResult;
                 case "math_eval":
                     return callLLM("Sei un calcolatore. Rispondi SOLO con il numero risultato.",
                         params, new ArrayList<>(), baseUrl, apiKey, model, 100);
@@ -2021,17 +2101,27 @@ public class ChatController {
         String agentSystemPrompt =
             "Sei SPACE AI con Agent Loop Manus-style. Data: " + today() + ".\n" +
             "Strumenti disponibili: " + toolsList + "\n\n" +
-            "Per usare uno strumento rispondi con:\n" +
-            "[TOOL: nome_tool | PARAMS: parametri]\n\n" +
-            "Quando hai abbastanza informazioni, rispondi con:\n" +
-            "[FINAL_ANSWER]\n<la tua risposta completa>\n[/FINAL_ANSWER]\n\n" +
+            "FASE 1 — PIANIFICAZIONE (OBBLIGATORIA):\n" +
+            "Prima di qualsiasi azione, scrivi un Piano d'azione cosi:\n" +
+            "[PLAN]\n" +
+            "Obiettivo: <cosa devo ottenere>\n" +
+            "Passi: 1) ... 2) ... 3) ...\n" +
+            "Tool che usero: <lista>\n" +
+            "[/PLAN]\n\n" +
+            "FASE 2 — ESECUZIONE (usa i tool):\n" +
+            "Per ogni tool: [TOOL: nome_tool | PARAMS: parametri]\n\n" +
+            "FASE 3 — RISPOSTA FINALE:\n" +
+            "[FINAL_ANSWER]\n<risposta completa>\n[/FINAL_ANSWER]\n\n" +
             "Regole:\n" +
-            "- Usa web_search/google_search per dati in tempo reale\n" +
-            "- Usa rag_retrieval per documenti gia indicizzati\n" +
-            "- Usa github_read per leggere file dal repo\n" +
-            "- Max 4 iterazioni di tool use\n" +
-            "- Cita sempre le fonti usate\n" +
-            "- Rispondi sempre in italiano";
+            "- SEMPRE inizia con [PLAN] prima di usare tool\n" +
+            "- web_search/google_search per dati in tempo reale\n" +
+            "- rag_retrieval per documenti indicizzati\n" +
+            "- memory_store per salvare fatti importanti\n" +
+            "- memory_retrieve per cercare nella memoria\n" +
+            "- github_read per file del repo\n" +
+            "- Max 4 iterazioni\n" +
+            "- Cita sempre le fonti\n" +
+            "- Rispondi in italiano";
 
         List<Map<String,String>> agentHistory = new ArrayList<>();
         StringBuilder observations = new StringBuilder();
@@ -2043,8 +2133,9 @@ public class ChatController {
             if (observations.length() > 0)
                 contextMsg += "\n\n[OSSERVAZIONI PRECEDENTI]:\n" + observations;
 
+            String routedModel = selectModel(contextMsg, model);
             String llmResp = callLLM(agentSystemPrompt, contextMsg,
-                agentHistory, baseUrl, apiKey, model, 1500);
+                agentHistory, baseUrl, apiKey, routedModel, 1500);
 
             log.info("AgentLoop iter {}: {}", iteration,
                 llmResp.substring(0, Math.min(100, llmResp.length())));
@@ -2249,25 +2340,41 @@ public class ChatController {
 
         log.info("ManusTask {}: {} subtasks pianificati", task.id, task.subtasks.size());
 
-        // STEP 2: Esecuzione subtask in sequenza
+        // STEP 2: Esecuzione subtask in PARALLELO (Punto 8)
         StringBuilder allResults = new StringBuilder();
+        // Lancia tutti i subtask in parallelo
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (SubTask sub : task.subtasks) {
             sub.status = TaskStatus.RUNNING;
-            log.info("Eseguo subtask {}: {} con tool {}", sub.id, sub.description, sub.tool);
-            try {
-                sub.result = executeTool(sub.tool, sub.params, task.sessionId, baseUrl, apiKey, model);
-                if (sub.result == null || sub.result.isBlank())
-                    sub.result = "Nessun risultato disponibile";
-                sub.status = TaskStatus.DONE;
-                allResults.append("### Subtask ").append(sub.id).append(": ").append(sub.description).append("\n");
+            CompletableFuture<Void> f = CompletableFuture.runAsync(() -> {
+                log.info("Subtask parallelo {}: {} [{}]", sub.id, sub.description, sub.tool);
+                try {
+                    sub.result = executeTool(sub.tool, sub.params, task.sessionId, baseUrl, apiKey, model);
+                    if (sub.result == null || sub.result.isBlank())
+                        sub.result = "Nessun risultato disponibile";
+                    sub.status = TaskStatus.DONE;
+                    ragIndexDocument(task.id + "/sub_" + sub.id, sub.result);
+                } catch (Exception e) {
+                    sub.result = "Errore: " + e.getMessage();
+                    sub.status = TaskStatus.FAILED;
+                    log.warn("Subtask {} fallito: {}", sub.id, e.getMessage());
+                }
+            });
+            futures.add(f);
+        }
+        // Attendi tutti i subtask (max 90 secondi totali)
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .get(90, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception te) {
+            log.warn("Alcuni subtask hanno superato il timeout: {}", te.getMessage());
+        }
+        // Raccogli i risultati in ordine
+        for (SubTask sub : task.subtasks) {
+            allResults.append("### Subtask ").append(sub.id)
+                .append(" [").append(sub.status).append("]: ").append(sub.description).append("\n");
+            if (sub.result != null)
                 allResults.append(sub.result, 0, Math.min(600, sub.result.length())).append("\n\n");
-                // Indicizza nel RAG per report finale
-                ragIndexDocument(task.id + "/sub_" + sub.id, sub.result);
-            } catch (Exception e) {
-                sub.result  = "Errore: " + e.getMessage();
-                sub.status  = TaskStatus.FAILED;
-                log.warn("Subtask {} fallito: {}", sub.id, e.getMessage());
-            }
         }
 
         // STEP 3: Sintesi finale
@@ -2288,6 +2395,68 @@ public class ChatController {
 
         // Salva il report nel RAG
         ragIndexDocument(task.id + "/final_report", task.finalReport);
+
+        // Punto 9: Checkpoint — salva stato su file
+        saveTaskCheckpoint(task);
+    }
+
+    private void saveTaskCheckpoint(ManusTask task) {
+        try {
+            ObjectNode cp = MAPPER.createObjectNode();
+            cp.put("taskId",   task.id);
+            cp.put("goal",     task.goal);
+            cp.put("status",   task.status.name());
+            cp.put("report",   task.finalReport != null ? task.finalReport.substring(0, Math.min(2000, task.finalReport.length())) : "");
+            cp.put("savedAt",  today());
+            cp.put("elapsed",  (task.completedAt - task.createdAt) + "ms");
+            ArrayNode subs = MAPPER.createArrayNode();
+            for (SubTask s : task.subtasks) {
+                ObjectNode sn = MAPPER.createObjectNode();
+                sn.put("id", s.id); sn.put("tool", s.tool);
+                sn.put("status", s.status.name());
+                sn.put("result", s.result != null ? s.result.substring(0, Math.min(200, s.result.length())) : "");
+                subs.add(sn);
+            }
+            cp.set("subtasks", subs);
+            java.nio.file.Path cpDir = java.nio.file.Paths.get("checkpoints");
+            if (!java.nio.file.Files.exists(cpDir)) java.nio.file.Files.createDirectories(cpDir);
+            java.nio.file.Files.writeString(cpDir.resolve(task.id + ".json"),
+                MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(cp));
+            log.info("Checkpoint salvato: checkpoints/{}.json", task.id);
+        } catch (Exception e) {
+            log.warn("Checkpoint save failed: {}", e.getMessage());
+        }
+    }
+
+    @GetMapping("/manus/checkpoint/{taskId}")
+    public ResponseEntity<Object> getCheckpoint(@PathVariable String taskId) {
+        try {
+            java.nio.file.Path cp = java.nio.file.Paths.get("checkpoints", taskId + ".json");
+            if (!java.nio.file.Files.exists(cp))
+                return ResponseEntity.status(404).body(Map.of("error", "Checkpoint non trovato"));
+            String json = java.nio.file.Files.readString(cp);
+            return ResponseEntity.ok(MAPPER.readTree(json));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/manus/checkpoints")
+    public ResponseEntity<Object> listCheckpoints() {
+        try {
+            java.nio.file.Path cpDir = java.nio.file.Paths.get("checkpoints");
+            if (!java.nio.file.Files.exists(cpDir))
+                return ResponseEntity.ok(Map.of("checkpoints", List.of(), "total", 0));
+            List<String> files = java.nio.file.Files.list(cpDir)
+                .filter(p -> p.toString().endsWith(".json"))
+                .map(p -> p.getFileName().toString().replace(".json",""))
+                .sorted(Comparator.reverseOrder())
+                .limit(20)
+                .collect(Collectors.toList());
+            return ResponseEntity.ok(Map.of("checkpoints", files, "total", files.size()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -2441,6 +2610,19 @@ public class ChatController {
                 if (href.startsWith("http")) links.add(href);
             }
 
+            // Punto 11: Estrai form fields (Computer Use proto)
+            List<Map<String,String>> formFields = new ArrayList<>();
+            java.util.regex.Matcher fm = java.util.regex.Pattern
+                .compile("<input[^>]+name=([^>]{1,60})>").matcher(rawHtml);
+            int fCount = 0;
+            while (fm.find() && fCount++ < 10) {
+                Map<String,String> field = new LinkedHashMap<>();
+                field.put("name", fm.group(1));
+                field.put("type", rawHtml.substring(Math.max(0,fm.start()-50),
+                    Math.min(rawHtml.length(),fm.end()+10)).contains("type="password"") ? "password" : "text");
+                formFields.add(field);
+            }
+
             Map<String,Object> r = new LinkedHashMap<>();
             r.put("url",        url);
             r.put("task",       task);
@@ -2448,6 +2630,7 @@ public class ChatController {
             r.put("pageLength", cleanText.length());
             r.put("ragChunks",  chunks);
             r.put("links",      links);
+            r.put("formFields", formFields);
             r.put("indexed",    true);
             r.put("date",       today());
             return ResponseEntity.ok(r);
@@ -2456,6 +2639,42 @@ public class ChatController {
             log.warn("Browse failed {}: {}", url, e.getMessage());
             return ResponseEntity.status(503).body(Map.of(
                 "error", "Impossibile navigare " + url + ": " + e.getMessage()));
+        }
+    }
+
+    // Punto 11: Form submission — Computer Use
+    @PostMapping("/manus/form-submit")
+    public ResponseEntity<Object> manusFormSubmit(@RequestBody Map<String,Object> body) {
+        String url    = (String) body.getOrDefault("url", "");
+        String method = ((String) body.getOrDefault("method", "POST")).toUpperCase();
+        @SuppressWarnings("unchecked")
+        Map<String,String> formData = (Map<String,String>) body.getOrDefault("formData", new HashMap<>());
+        if (url.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","URL obbligatorio"));
+        try {
+            org.springframework.web.client.RestTemplate ft =
+                new org.springframework.web.client.RestTemplate();
+            org.springframework.http.client.SimpleClientHttpRequestFactory ff =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            ff.setConnectTimeout(10000); ff.setReadTimeout(20000); ft.setRequestFactory(ff);
+            HttpHeaders fh = new HttpHeaders();
+            fh.set("User-Agent","Mozilla/5.0 (compatible; SPACE-AI/4.0)");
+            fh.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+            org.springframework.util.MultiValueMap<String,String> fBody =
+                new org.springframework.util.LinkedMultiValueMap<>();
+            formData.forEach(fBody::add);
+            ResponseEntity<String> resp = ft.exchange(url,
+                method.equals("GET") ? HttpMethod.GET : HttpMethod.POST,
+                new HttpEntity<>(fBody, fh), String.class);
+            String respText = resp.getBody() != null ?
+                resp.getBody().replaceAll("<[^>]+>"," ").replaceAll("\s{3,}"," ").trim() : "";
+            return ResponseEntity.ok(Map.of(
+                "status", resp.getStatusCode().value(),
+                "url", url, "method", method,
+                "responseLength", respText.length(),
+                "preview", respText.substring(0, Math.min(500, respText.length()))
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -2680,13 +2899,71 @@ public class ChatController {
     @GetMapping("/tools/status")
     public ResponseEntity<Object> toolsStatus() {
         Map<String,Object> status = new LinkedHashMap<>();
-        status.put("tools", getAvailableTools());
-        status.put("serpapi",    !env("SERPAPI_KEY","").isEmpty() ? "✅ configurato" : "❌ manca SERPAPI_KEY");
-        status.put("googleCse",  !env("GOOGLE_CSE_KEY","").isEmpty() ? "✅ configurato" : "❌ manca GOOGLE_CSE_KEY");
-        status.put("github",     !env("GITHUB_TOKEN","").isEmpty() ? "✅ configurato" : "❌ manca GITHUB_TOKEN");
-        status.put("tavily",     !env("TAVILY_API_KEY","").isEmpty() ? "✅ configurato" : "❌ manca TAVILY_API_KEY");
-        status.put("date",       today());
+        status.put("tools",     getAvailableTools());
+        status.put("serpapi",   !env("SERPAPI_KEY","").isEmpty()    ? "configured" : "missing SERPAPI_KEY");
+        status.put("googleCse", !env("GOOGLE_CSE_KEY","").isEmpty() ? "configured" : "missing GOOGLE_CSE_KEY");
+        status.put("github",    !env("GITHUB_TOKEN","").isEmpty()   ? "configured" : "missing GITHUB_TOKEN");
+        status.put("tavily",    !env("TAVILY_API_KEY","").isEmpty() ? "configured" : "missing TAVILY_API_KEY");
+        status.put("moeComplex",!env("GROQ_MODEL_COMPLEX","").isEmpty() ? "configured" : "missing GROQ_MODEL_COMPLEX");
+        status.put("moeFast",   !env("GROQ_MODEL_FAST","").isEmpty()    ? "configured" : "missing GROQ_MODEL_FAST");
+        status.put("date",      today());
         return ResponseEntity.ok(status);
+    }
+
+    // Punto 10: MCP-style server manifest — espone tutti i tool come server MCP compatibile
+    @GetMapping("/mcp/manifest")
+    public ResponseEntity<Object> mcpManifest() {
+        Map<String,Boolean> tools = getAvailableTools();
+        List<ObjectNode> toolDefs = tools.entrySet().stream()
+            .filter(Map.Entry::getValue)
+            .map(e -> buildToolSchema(e.getKey()))
+            .collect(Collectors.toList());
+        Map<String,Object> manifest = new LinkedHashMap<>();
+        manifest.put("name",        "space-ai-mcp-server");
+        manifest.put("version",     "4.0.0");
+        manifest.put("description", "SPACE AI MCP Server — Manus-style autonomous agent");
+        manifest.put("protocol",    "mcp/1.0");
+        manifest.put("tools",       toolDefs);
+        manifest.put("resources", List.of(
+            Map.of("uri","rag://documents","name","RAG Document Store","mimeType","text/plain"),
+            Map.of("uri","memory://ltm","name","Long Term Memory","mimeType","text/plain"),
+            Map.of("uri","memory://shared","name","Shared Knowledge","mimeType","text/plain")
+        ));
+        manifest.put("capabilities", Map.of(
+            "tools", true, "resources", true, "prompts", true,
+            "streaming", false, "roots", false
+        ));
+        manifest.put("date", today());
+        return ResponseEntity.ok(manifest);
+    }
+
+    @PostMapping("/mcp/call")
+    public ResponseEntity<Object> mcpCallTool(@RequestBody Map<String,Object> body) {
+        String toolName = (String) body.getOrDefault("name", "");
+        @SuppressWarnings("unchecked")
+        Map<String,Object> arguments = (Map<String,Object>) body.getOrDefault("arguments", new HashMap<>());
+        String params    = (String) arguments.getOrDefault("query",
+                           arguments.getOrDefault("params", "").toString());
+        String sessionId = (String) body.getOrDefault("sessionId", "global");
+        String baseUrl   = env("GROQ_BASE_URL","https://api.groq.com/openai/v1");
+        String apiKey    = env("GROQ_API_KEY","");
+        String model     = env("GROQ_MODEL","llama-3.3-70b-versatile");
+        if (toolName.isEmpty() || params.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error","name e arguments.query obbligatori"));
+        try {
+            String result = executeTool(toolName, params, sessionId, baseUrl, apiKey, model);
+            return ResponseEntity.ok(Map.of(
+                "content", List.of(Map.of("type","text","text", result)),
+                "isError",  false,
+                "tool",     toolName,
+                "date",     today()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of(
+                "content", List.of(Map.of("type","text","text","Errore: "+e.getMessage())),
+                "isError",  true
+            ));
+        }
     }
 
     /**
@@ -3247,12 +3524,14 @@ public class ChatController {
             long startTime = System.currentTimeMillis();
             String cacheK = "default:" + userMessage.substring(0, Math.min(80, userMessage.length()));
             // Memoria contestuale: usa neuralMemory (locale, veloce) o Supabase
-            List<Map<String,String>> history = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
-            if (history.isEmpty() && !supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
-                history = loadHistory(sessionId, supabaseUrl, supabaseKey);
-                // Carica in neuralMemory per future richieste
-                if (!history.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(history));
+            List<Map<String,String>> fullHistory = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
+            if (fullHistory.isEmpty() && !supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
+                fullHistory = loadHistory(sessionId, supabaseUrl, supabaseKey);
+                if (!fullHistory.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(fullHistory));
             }
+            // Punto 13: Sliding window — max 20 messaggi per rispettare limite token Groq
+            List<Map<String,String>> history = fullHistory.size() <= 20 ? fullHistory :
+                fullHistory.subList(fullHistory.size() - 20, fullHistory.size());
             // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
             String qlv = userMessage.toLowerCase();
             boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
@@ -3608,6 +3887,31 @@ public class ChatController {
         if (q.contains("strategia")) return List.of("strategist");
         return List.of("reasoner");
     }
+    // ══════════════════════════════════════════════════════════════════
+    // PUNTO 12: MoE Routing — instrada query complesse a modelli diversi
+    // GROQ_MODEL_COMPLEX e GROQ_MODEL_FAST configurabili su Render
+    // ══════════════════════════════════════════════════════════════════
+    private String selectModel(String query, String defaultModel) {
+        String q = query.toLowerCase();
+        boolean isCode    = q.contains("codice") || q.contains("java") ||
+            q.contains("python") || q.contains("javascript") || q.contains("debug") ||
+            q.contains("algoritmo") || q.contains("programma");
+        boolean isComplex = q.length() > 200 || q.contains("analisi approfondita") ||
+            q.contains("ragionamento") || q.contains("filosofia") || q.contains("matematica avanzata");
+        boolean isSimple  = q.length() < 30 && !q.contains("?") && !q.contains("spiega");
+        String complexModel = env("GROQ_MODEL_COMPLEX", "");
+        String fastModel    = env("GROQ_MODEL_FAST",    "");
+        if ((isCode || isComplex) && !complexModel.isEmpty()) {
+            log.debug("MoE: routing a modello complex={}", complexModel);
+            return complexModel;
+        }
+        if (isSimple && !fastModel.isEmpty()) {
+            log.debug("MoE: routing a modello fast={}", fastModel);
+            return fastModel;
+        }
+        return defaultModel;
+    }
+
     private String callLLM(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
         return callLLMWithTemp(system, userMsg, history, baseUrl, apiKey, model, maxTokens, 0.8);
@@ -4159,6 +4463,76 @@ public class ChatController {
             "docId",   docId,
             "remaining", ragStore.size()
         ));
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // PUNTO 14: MITRE Security Agent — CVE monitor + security audit
+    // ══════════════════════════════════════════════════════════════════
+
+    @PostMapping("/security/audit")
+    public ResponseEntity<Object> securityAudit(@RequestBody Map<String,String> body) {
+        String target    = body.getOrDefault("target", "").trim();
+        String auditType = body.getOrDefault("type", "general"); // general, code, network, deps
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+
+        if (target.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Target obbligatorio"));
+
+        try {
+            // 1. Cerca CVE recenti correlate al target
+            String cveSearch = searchGoogle("CVE " + target + " vulnerability 2025 2026");
+
+            // 2. Analisi MITRE ATT&CK con LLM
+            String mitrePrompt =
+                "Sei un esperto di sicurezza informatica MITRE ATT&CK. " +
+                "Analizza il target: " + target + "\n" +
+                "Tipo audit: " + auditType + "\n" +
+                "CVE rilevanti trovate:\n" + cveSearch.substring(0, Math.min(1000, cveSearch.length())) + "\n\n" +
+                "Fornisci un report di sicurezza con:\n" +
+                "1. Vulnerabilita rilevate (CVE)\n" +
+                "2. Tattiche MITRE ATT&CK applicabili\n" +
+                "3. Livello di rischio (CRITICO/ALTO/MEDIO/BASSO)\n" +
+                "4. Mitigazioni raccomandate\n" +
+                "5. Prossimi passi\n" +
+                "Rispondi in italiano in formato strutturato.";
+
+            String auditReport = callLLM(
+                "Sei AEGIS, l'agente di sicurezza di SPACE AI. Analizza con rigore MITRE ATT&CK.",
+                mitrePrompt, new ArrayList<>(), baseUrl, apiKey, model, 3000);
+
+            // 3. Indicizza nel RAG per riferimento futuro
+            ragIndexDocument("security/audit_" + System.currentTimeMillis(), auditReport);
+
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("target",    target);
+            r.put("auditType", auditType);
+            r.put("report",    auditReport);
+            r.put("cveData",   cveSearch.substring(0, Math.min(500, cveSearch.length())));
+            r.put("date",      today());
+            return ResponseEntity.ok(r);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/security/cve")
+    public ResponseEntity<Object> searchCVE(@RequestParam String target) {
+        try {
+            // Cerca CVE recenti
+            String cveResults = searchGoogle("CVE " + target + " NIST NVD security vulnerability");
+            // Cerca anche su GitHub Security Advisories
+            String ghsaResults = searchGoogle("GHSA " + target + " github advisory");
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("target",   target);
+            r.put("cve",      cveResults.substring(0, Math.min(1000, cveResults.length())));
+            r.put("ghsa",     ghsaResults.substring(0, Math.min(500, ghsaResults.length())));
+            r.put("date",     today());
+            return ResponseEntity.ok(r);
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/health")
