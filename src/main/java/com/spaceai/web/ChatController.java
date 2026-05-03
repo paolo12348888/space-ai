@@ -1599,67 +1599,53 @@ public class ChatController {
                     url, HttpMethod.GET, new HttpEntity<>(h), String.class);
                 JsonNode json = MAPPER.readTree(resp.getBody());
                 StringBuilder sb = new StringBuilder();
-                // Answer box (risposta diretta Google)
+                // Answer box
                 JsonNode answerBox = json.path("answer_box");
                 if (!answerBox.isMissingNode()) {
                     String ans = answerBox.path("answer").asText();
                     if (ans.isBlank()) ans = answerBox.path("snippet").asText();
-                    if (!ans.isBlank()) sb.append("🎯 RISPOSTA GOOGLE: ").append(ans).append("
-
-");
+                    if (!ans.isBlank()) sb.append("RISPOSTA GOOGLE: ").append(ans).append("\n\n");
                 }
                 // Knowledge graph
                 JsonNode kg = json.path("knowledge_graph");
                 if (!kg.isMissingNode() && !kg.path("description").asText().isBlank())
-                    sb.append("📌 ").append(kg.path("description").asText()).append("
-
-");
+                    sb.append("INFO: ").append(kg.path("description").asText()).append("\n\n");
                 // Organic results
                 JsonNode organic = json.path("organic_results");
                 if (organic.isArray()) {
-                    sb.append("🔍 RISULTATI LIVE:
-");
+                    sb.append("RISULTATI LIVE:\n");
                     int i = 0;
                     for (JsonNode r : organic) {
                         if (i++ >= 5) break;
-                        sb.append(i).append(". **").append(r.path("title").asText()).append("**
-");
+                        sb.append(i).append(". ").append(r.path("title").asText()).append("\n");
                         String snippet = r.path("snippet").asText();
                         if (!snippet.isBlank())
-                            sb.append("   ").append(snippet, 0, Math.min(250, snippet.length())).append("
-");
-                        sb.append("   🔗 ").append(r.path("link").asText()).append("
-
-");
+                            sb.append("   ").append(snippet, 0, Math.min(250, snippet.length())).append("\n");
+                        sb.append("   ").append(r.path("link").asText()).append("\n\n");
                     }
                 }
                 // News results
                 JsonNode news = json.path("news_results");
                 if (news.isArray() && news.size() > 0) {
-                    sb.append("📰 NOTIZIE RECENTI:
-");
+                    sb.append("NOTIZIE RECENTI:\n");
                     int i = 0;
                     for (JsonNode n : news) {
                         if (i++ >= 3) break;
-                        sb.append("• ").append(n.path("title").asText());
+                        sb.append("- ").append(n.path("title").asText());
                         String date = n.path("date").asText();
                         if (!date.isBlank()) sb.append(" [").append(date).append("]");
-                        sb.append("
-  ").append(n.path("source").asText()).append("
-");
+                        sb.append("\n  ").append(n.path("source").asText()).append("\n");
                     }
                 }
                 String result = sb.toString().trim();
                 if (!result.isBlank()) {
                     log.info("SerpAPI OK: {} chars", result.length());
-                    return "📡 FONTE: Google Search Live (" + today() + ")
-
-" + result;
+                    return "FONTE: Google Search Live (" + today() + ")\n\n" + result;
                 }
             } catch (Exception e) { log.warn("SerpAPI: {}", e.getMessage()); }
         }
 
-        // ── Fonte 2: Google Custom Search API ──────────────────────────────
+        // Fonte 2: Google Custom Search API
         String gcsKey = env("GOOGLE_CSE_KEY", "");
         String gcsId  = env("GOOGLE_CSE_ID", "");
         if (!gcsKey.isEmpty() && !gcsId.isEmpty()) {
@@ -1670,37 +1656,31 @@ public class ChatController {
                 ResponseEntity<String> resp = restTemplate.getForEntity(url, String.class);
                 JsonNode json = MAPPER.readTree(resp.getBody());
                 StringBuilder sb = new StringBuilder();
-                sb.append("🔍 RISULTATI GOOGLE LIVE:
-");
+                sb.append("RISULTATI GOOGLE LIVE:\n");
                 JsonNode items = json.path("items");
                 if (items.isArray()) {
                     int i = 0;
                     for (JsonNode item : items) {
                         if (i++ >= 5) break;
-                        sb.append(i).append(". **").append(item.path("title").asText()).append("**
-");
+                        sb.append(i).append(". ").append(item.path("title").asText()).append("\n");
                         String snippet = item.path("snippet").asText();
                         if (!snippet.isBlank())
-                            sb.append("   ").append(snippet, 0, Math.min(200, snippet.length())).append("
-");
-                        sb.append("   🔗 ").append(item.path("link").asText()).append("
-
-");
+                            sb.append("   ").append(snippet, 0, Math.min(200, snippet.length())).append("\n");
+                        sb.append("   ").append(item.path("link").asText()).append("\n\n");
                     }
                 }
                 String result = sb.toString().trim();
                 if (result.length() > 50) {
                     log.info("Google CSE OK");
-                    return "📡 FONTE: Google Custom Search (" + today() + ")
-
-" + result;
+                    return "FONTE: Google Custom Search (" + today() + ")\n\n" + result;
                 }
             } catch (Exception e) { log.warn("Google CSE: {}", e.getMessage()); }
         }
 
-        // ── Fonte 3: DuckDuckGo (fallback gratuito) ─────────────────────────
+        // Fonte 3: DuckDuckGo fallback gratuito
         return searchDuckDuckGo(query);
     }
+
 
     // ════════════════════════════════════════════════════════════════════════
     // 🐙 GITHUB LIVE CONNECTOR — legge/scrive repo in tempo reale
@@ -1907,35 +1887,18 @@ public class ChatController {
             .collect(Collectors.joining(", "));
 
         String agentSystemPrompt =
-            "Sei SPACE AI con Agent Loop Manus-style. Data: " + today() + ".
-" +
-            "Strumenti disponibili: " + toolsList + "
-
-" +
-            "Per usare uno strumento rispondi con:
-" +
-            "[TOOL: nome_tool | PARAMS: parametri]
-
-" +
-            "Quando hai abbastanza informazioni, rispondi con:
-" +
-            "[FINAL_ANSWER]
-<la tua risposta completa>
-[/FINAL_ANSWER]
-
-" +
-            "Regole:
-" +
-            "- Usa web_search/google_search per dati in tempo reale
-" +
-            "- Usa rag_retrieval per documenti già indicizzati
-" +
-            "- Usa github_read per leggere file dal repo
-" +
-            "- Max 4 iterazioni di tool use
-" +
-            "- Cita sempre le fonti usate
-" +
+            "Sei SPACE AI con Agent Loop Manus-style. Data: " + today() + ".\n" +
+            "Strumenti disponibili: " + toolsList + "\n\n" +
+            "Per usare uno strumento rispondi con:\n" +
+            "[TOOL: nome_tool | PARAMS: parametri]\n\n" +
+            "Quando hai abbastanza informazioni, rispondi con:\n" +
+            "[FINAL_ANSWER]\n<la tua risposta completa>\n[/FINAL_ANSWER]\n\n" +
+            "Regole:\n" +
+            "- Usa web_search/google_search per dati in tempo reale\n" +
+            "- Usa rag_retrieval per documenti gia indicizzati\n" +
+            "- Usa github_read per leggere file dal repo\n" +
+            "- Max 4 iterazioni di tool use\n" +
+            "- Cita sempre le fonti usate\n" +
             "- Rispondi sempre in italiano";
 
         List<Map<String,String>> agentHistory = new ArrayList<>();
@@ -1946,10 +1909,7 @@ public class ChatController {
         for (int iteration = 0; iteration < maxIterations; iteration++) {
             String contextMsg = currentQuery;
             if (observations.length() > 0)
-                contextMsg += "
-
-[OSSERVAZIONI PRECEDENTI]:
-" + observations;
+                contextMsg += "\n\n[OSSERVAZIONI PRECEDENTI]:\n" + observations;
 
             String llmResp = callLLM(agentSystemPrompt, contextMsg,
                 agentHistory, baseUrl, apiKey, model, 1500);
@@ -1982,37 +1942,26 @@ public class ChatController {
                         params.substring(0, Math.min(60, params.length())));
                     String toolResult = executeTool(toolName, params, sessionId, baseUrl, apiKey, model);
                     if (toolResult != null && !toolResult.isBlank()) {
-                        observations.append("
-📡 Tool [").append(toolName).append("] risultato:
-")
-                            .append(toolResult, 0, Math.min(800, toolResult.length())).append("
----
-");
+                        observations.append("\n📡 Tool [").append(toolName).append("] risultato:\n")
+                            .append(toolResult, 0, Math.min(800, toolResult.length())).append("\n---\n");
                         toolCalled = true;
-                        // Indicizza nel RAG per retrieval futuro
                         ragIndexDocument(sessionId + "/agent_obs_" + iteration, toolResult);
                     }
                 }
                 toolStart = llmResp.indexOf("[TOOL:", toolEnd);
             }
 
-            // Aggiunge alla history del loop
             agentHistory.add(Map.of("role", "assistant", "content", llmResp));
             if (!toolCalled) {
-                // Il LLM non ha usato tool né dato risposta finale: usa la risposta diretta
                 return llmResp;
             }
         }
         // Risposta finale dopo max iterazioni
-        String finalPrompt = userQuery + "
-
-[DATI RACCOLTI]:
-" + observations +
-            "
-
-Fornisci la risposta finale completa in italiano citando le fonti.";
+        String finalPrompt = userQuery + "\n\n[DATI RACCOLTI]:\n" + observations +
+            "\n\nFornisci la risposta finale completa in italiano citando le fonti.";
         return callLLM(agentSystemPrompt, finalPrompt, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
+
 
     @GetMapping("/tools/status")
     public ResponseEntity<Object> toolsStatus() {
