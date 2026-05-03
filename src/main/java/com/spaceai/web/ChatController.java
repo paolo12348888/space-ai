@@ -33,6 +33,14 @@ public class ChatController {
     private final AtomicInteger totalRequests = new AtomicInteger(0);
     private final Map<String, AtomicInteger> agentUsage = new ConcurrentHashMap<>();
     // Evita chiamate duplicate alla LLM per domande identiche
+    // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
+    private static class KnnCacheEntry {
+        final float[] embedding; final String response; final long timestamp;
+        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
+    }
+    private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
+    private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
+    // Mantieni anche la vecchia map per compatibilità con statistiche
     private final Map<String, String> responseCache = new ConcurrentHashMap<>();
     private final Map<String, Long> cacheTimestamps = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti
@@ -1115,8 +1123,70 @@ public class ChatController {
     }
 
     // L'AI sa di avere memoria, KG e quantum - prompt "cosciente"
+    /**
+     * MSA RETRIEVAL UNIFICATO — unico metodo di retrieval memoria.
+     * Aggrega: LTM + STM + sharedKnowledge + sessionDeltas + semantic embed.
+     * Rimpiazza: retrieveRelevantMemory, semanticMemoryRetrieve, retrieveDifferentialMemory.
+     */
+    private String msaRetrieveUnified(String query, String sessionId) {
+        List<String> candidates = new ArrayList<>();
+
+        // 1. LTM sessione
+        candidates.addAll(longTermMemory.getOrDefault(sessionId, new ArrayList<>()));
+
+        // 2. STM (ultimi messaggi)
+        stmRecall(sessionId).stream()
+            .map(e -> e.replaceFirst("^U:", "").replaceFirst(" A:.*", ""))
+            .filter(s -> !s.isBlank())
+            .forEach(candidates::add);
+
+        // 3. Session deltas (fatti differenziali)
+        sessionDeltas.getOrDefault(sessionId, new HashMap<>())
+            .forEach((subj, objs) -> objs.forEach(obj -> candidates.add(subj + "::" + obj)));
+
+        // 4. SharedKnowledge (conoscenza globale)
+        String q = query.toLowerCase();
+        for (String word : q.split("\\s+")) {
+            if (word.length() > 4) {
+                Set<String> shared = sharedKnowledge.get(word);
+                if (shared != null)
+                    shared.stream().limit(3).forEach(v -> candidates.add(word + "::" + v));
+            }
+        }
+
+        if (candidates.isEmpty()) return "";
+
+        // 5. Scoring ibrido: MSA sparse attention + cosine similarity embedding
+        float[] queryEmb = embed(query);
+        int total = candidates.size();
+        List<double[]> scored = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            String fact = candidates.get(i);
+            // MSA attention score (keyword + recency)
+            double msaScore = msaAttentionScore(query, fact, i, total) * 0.4;
+            // Cosine similarity (semantic)
+            double cosScore = cosineSimilarity(queryEmb, embed(fact)) * 0.6;
+            double combined = msaScore + cosScore;
+            if (combined > 0.05) scored.add(new double[]{combined, i});
+        }
+        scored.sort((a, b) -> Double.compare(b[0], a[0]));
+
+        if (scored.isEmpty()) return "";
+
+        StringBuilder ctx = new StringBuilder("[MSA-UNIFIED k=")
+            .append(Math.min(MSA_TOP_K, scored.size())).append("]: ");
+        int count = 0;
+        for (double[] s : scored) {
+            if (count >= MSA_TOP_K) break;
+            String fact = candidates.get((int) s[1]);
+            ctx.append(fact, 0, Math.min(MSA_MAX_FACT_LEN, fact.length())).append(" · ");
+            count++;
+        }
+        return ctx.toString().replaceAll(" · $", "").trim();
+    }
+
     private String buildSystemPrompt(String mode, String sessionId, String query) {
-        String memCtx  = retrieveRelevantMemory(query, sessionId);
+    private String buildSystemPrompt(String mode, String sessionId, String query) {
         String kgTop   = getTopKGConcepts(sessionId);
         String emotion = emotionState.getOrDefault(sessionId, "neutral");
         int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
@@ -1129,19 +1199,11 @@ public class ChatController {
         sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ");
         sb.append("knowledge graph ").append(kgSize).append(" nodi, LTM ").append(ltmSize).append(" fatti, ");
         sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
-        // Semantic Memory: embedding coseno reale (più preciso del keyword matching)
-        String semMem = semanticMemoryRetrieve(query, sessionId);
-        if (!semMem.isEmpty())
-            sb.append("MEMORIA SEMANTICA: ").append(semMem).append("\n");
-        else {
-            // Fallback: MSA sparse attention
-            String msaMem = msaRetrieve(query, sessionId);
-            if (!msaMem.isEmpty())
-                sb.append("MEMORIA ATTIVA (MSA): ").append(msaMem).append("\n");
-            else if (!memCtx.isEmpty())
-                sb.append("MEMORIA ATTIVA: ").append(memCtx).append("\n");
-        }
-        // RAG: contesto dai documenti indicizzati (PDF, web, testo)
+        // MSA UNIFICATO: unico meccanismo di retrieval — aggrega tutto
+        String msaMem = msaRetrieveUnified(query, sessionId);
+        if (!msaMem.isEmpty())
+            sb.append("MEMORIA ATTIVA (MSA): ").append(msaMem).append("\n");
+        // RAG: contesto dai documenti indicizzati
         String ragCtx = ragRetrieve(query, sessionId);
         if (!ragCtx.isEmpty())
             sb.append(ragCtx);
@@ -1254,22 +1316,41 @@ public class ChatController {
             this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
     }
     private String getCached(String key) {
+        // 1. KNN semantica (soglia alta = quasi identico)
+        String knn = knnCacheGet(key);
+        if (knn != null) { cacheHits.incrementAndGet(); return knn; }
+        // 2. Cache esatta
         String cached = responseCache.get(key);
         if (cached == null) return null;
         Long ts = cacheTimestamps.get(key);
         if (ts == null || System.currentTimeMillis() - ts > CACHE_TTL_MS) {
-            responseCache.remove(key);
-            cacheTimestamps.remove(key);
-            return null;
+            responseCache.remove(key); cacheTimestamps.remove(key); return null;
         }
         cacheHits.incrementAndGet();
         return cached;
     }
     private void putCache(String key, String value) {
-        if (value == null || value.length() > 10000) return; // non cachare risposte enormi
+        if (value == null || value.length() > 10000) return;
+        knnCachePut(key, value);  // salva nel ring buffer KNN
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
         if (responseCache.size() > 500) cleanExpiredCache();
+    }
+    private String knnCacheGet(String query) {
+        float[] qv = embed(query);
+        double bestSim = 0; String bestResp = null;
+        for (KnnCacheEntry e : ringCache) {
+            if (e == null) continue;
+            if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
+            double sim = cosineSimilarity(qv, e.embedding);
+            if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
+        }
+        if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
+        return bestResp;
+    }
+    private void knnCachePut(String query, String response) {
+        int idx = cacheIdx.getAndUpdate(i -> (i + 1) % 500);
+        ringCache[idx] = new KnnCacheEntry(embed(query), response);
     }
     private void cleanExpiredCache() {
         long now = System.currentTimeMillis();
@@ -1278,7 +1359,6 @@ public class ChatController {
     }
     private String cacheKey(String msg, String agent) {
         return (agent + ":" + msg).substring(0, Math.min(120, (agent + ":" + msg).length()));
-    }
     private boolean isRateLimited(String sessionId) {
         long now = System.currentTimeMillis();
         Long window = sessionWindows.get(sessionId);
@@ -1507,8 +1587,10 @@ public class ChatController {
     // Decide se usare Agent Loop (query complesse multi-step)
     private boolean needsAgentLoop(String msg) {
         String q = msg.toLowerCase();
-        return q.contains("analizza") || q.contains("ricerca e") || q.contains("confronta") ||
-               q.contains("compara") || q.contains("spiega in dettaglio") ||
+        // Attiva per query lunghe (>60 char = quasi sempre multi-step)
+        if (q.length() > 60) return true;
+        // Keyword espliciti
+        return q.contains("analizza") || q.contains("confronta") || q.contains("compara") ||
                q.contains("fai un report") || q.contains("scrivi un articolo") ||
                q.contains("github") || q.contains("leggi il file") ||
                q.contains("cerca e poi") || q.contains("trova e") ||
@@ -1517,7 +1599,9 @@ public class ChatController {
                q.contains("esegui") || q.contains("calcola") ||
                q.contains("scrivi codice") || q.contains("programma") ||
                q.contains("crea uno script") || q.contains("sviluppa") ||
-               (q.contains("cerca") && q.contains("e") && q.length() > 60);
+               q.contains("crea un video") || q.contains("genera video") ||
+               q.contains("riassumi e") || q.contains("cerca e") ||
+               q.contains("spiega perche") || q.contains("dimmi tutto");
     }
 
     // Cerca su web — pipeline: Tavily → SerpAPI/Google → DuckDuckGo
@@ -2375,6 +2459,170 @@ public class ChatController {
         }
     }
 
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIDEO GENERATOR — storyboard LLM + frame Pollinations → slideshow HTML
+    // ════════════════════════════════════════════════════════════════════
+
+    private String generateVideoHtml(String description, String sessionId,
+                                      String baseUrl, String apiKey, String model) {
+        try {
+            // STEP 1: LLM genera storyboard JSON
+            String storyboardResp = callLLM(
+                agentPrompt("video_gen"),
+                "SCENA: " + description,
+                new ArrayList<>(), baseUrl, apiKey, model, 2000);
+
+            // Estrai JSON dalla risposta
+            String cleaned = storyboardResp
+                .replaceAll("(?s)```json", "").replaceAll("```", "").trim();
+            int jsonStart = cleaned.indexOf("{");
+            int jsonEnd   = cleaned.lastIndexOf("}");
+            if (jsonStart < 0 || jsonEnd < 0)
+                return "ERRORE: LLM non ha prodotto JSON valido per lo storyboard.";
+            cleaned = cleaned.substring(jsonStart, jsonEnd + 1);
+
+            JsonNode json     = MAPPER.readTree(cleaned);
+            JsonNode frames   = json.path("storyboard");
+            int duration      = json.path("duration_seconds").asInt(5);
+            int fps           = json.path("fps").asInt(2);
+            int totalFrames   = frames.isArray() ? frames.size() : 0;
+
+            if (totalFrames == 0)
+                return "ERRORE: Storyboard vuoto. Riprova con una descrizione piu dettagliata.";
+
+            // STEP 2: Genera immagine per ogni frame
+            List<String> frameB64s     = new ArrayList<>();
+            List<String> frameDescs    = new ArrayList<>();
+            List<String> framePrompts  = new ArrayList<>();
+
+            for (JsonNode frame : frames) {
+                String promptImg  = frame.path("prompt_image").asText(description);
+                String frameDesc  = frame.path("description").asText("Frame " + frameB64s.size());
+                frameDescs.add(frameDesc);
+                framePrompts.add(promptImg);
+                String imgResult = generateImage(promptImg);
+                if (imgResult.startsWith("IMAGE:"))
+                    frameB64s.add(imgResult.substring(6));
+                else
+                    frameB64s.add(""); // frame fallito
+                log.info("VideoGen frame {}/{}: {}", frameB64s.size(), totalFrames,
+                    promptImg.substring(0, Math.min(50, promptImg.length())));
+            }
+
+            long frameMs = totalFrames > 0 ? (duration * 1000L / totalFrames) : 1000;
+
+            // STEP 3: Costruisci HTML interattivo con slideshow animato
+            StringBuilder html = new StringBuilder();
+            html.append("<div style='font-family:sans-serif;max-width:700px;margin:0 auto'>");
+            html.append("<h3 style='color:#00d4ff;margin-bottom:8px'>🎬 Video: ")
+                .append(description, 0, Math.min(60, description.length()))
+                .append("</h3>");
+            html.append("<p style='opacity:.7;font-size:.85rem'>")
+                .append(totalFrames).append(" frame · ")
+                .append(duration).append("s · ").append(fps).append(" fps</p>");
+
+            // Player slideshow
+            html.append("<div id='vp' style='position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:16/9'>");
+            for (int i = 0; i < frameB64s.size(); i++) {
+                String b64 = frameB64s.get(i);
+                String disp = i == 0 ? "block" : "none";
+                if (!b64.isEmpty())
+                    html.append("<img id='vf").append(i)
+                        .append("' src='data:image/jpeg;base64,").append(b64)
+                        .append("' style='width:100%;display:").append(disp)
+                        .append(";position:absolute;top:0;left:0'/>");
+            }
+            // Overlay caption
+            html.append("<div id='vcap' style='position:absolute;bottom:0;left:0;right:0;")
+                .append("background:rgba(0,0,0,.6);color:#fff;padding:8px 12px;font-size:.85rem'>")
+                .append(frameDescs.isEmpty() ? "" : frameDescs.get(0)).append("</div>");
+            html.append("</div>");
+
+            // Controlli
+            html.append("<div style='display:flex;gap:8px;margin-top:10px;align-items:center'>");
+            html.append("<button id='vbtn' onclick='toggleVideo()' style='padding:8px 18px;")
+                .append("border-radius:8px;border:none;background:#00d4ff;color:#000;cursor:pointer;font-weight:700'>▶ Play</button>");
+            html.append("<input type='range' id='vslider' min='0' max='")
+                .append(Math.max(0, frameB64s.size()-1))
+                .append("' value='0' oninput='goFrame(this.value)' style='flex:1'>");
+            html.append("<span id='vcount' style='font-size:.8rem;opacity:.7'>1/")
+                .append(frameB64s.size()).append("</span>");
+            html.append("</div>");
+
+            // Thumbnails
+            html.append("<div style='display:flex;gap:6px;margin-top:8px;overflow-x:auto;padding-bottom:4px'>");
+            for (int i = 0; i < frameB64s.size(); i++) {
+                String b64 = frameB64s.get(i);
+                if (!b64.isEmpty())
+                    html.append("<img onclick='goFrame(").append(i).append(")' src='data:image/jpeg;base64,")
+                        .append(b64.substring(0, Math.min(200, b64.length()))).append("...' ")
+                        .append("style='height:50px;border-radius:4px;cursor:pointer;opacity:.6;")
+                        .append("border:2px solid transparent' id='vth").append(i).append("'/>");
+            }
+            html.append("</div>");
+
+            // JavaScript player
+            html.append("<script>");
+            html.append("(function(){");
+            html.append("var frames=").append(frameB64s.size()).append(";");
+            html.append("var cur=0,playing=false,timer=null;");
+            html.append("var frameMs=").append(frameMs).append(";");
+            html.append("var descs=").append(MAPPER.writeValueAsString(frameDescs)).append(";");
+            html.append("function showFrame(i){");
+            html.append("  for(var j=0;j<frames;j++){");
+            html.append("    var el=document.getElementById('vf'+j);");
+            html.append("    var th=document.getElementById('vth'+j);");
+            html.append("    if(el)el.style.display=j===i?'block':'none';");
+            html.append("    if(th)th.style.opacity=j===i?'1':'.5';");
+            html.append("    if(th)th.style.borderColor=j===i?'#00d4ff':'transparent';");
+            html.append("  }");
+            html.append("  var cap=document.getElementById('vcap');");
+            html.append("  if(cap)cap.textContent=descs[i]||'';");
+            html.append("  var sl=document.getElementById('vslider');");
+            html.append("  if(sl)sl.value=i;");
+            html.append("  var vc=document.getElementById('vcount');");
+            html.append("  if(vc)vc.textContent=(i+1)+'/'+frames;");
+            html.append("  cur=i;");
+            html.append("}");
+            html.append("window.goFrame=function(i){showFrame(parseInt(i));};");
+            html.append("window.toggleVideo=function(){");
+            html.append("  var btn=document.getElementById('vbtn');");
+            html.append("  if(playing){clearInterval(timer);playing=false;if(btn)btn.textContent='▶ Play';}");
+            html.append("  else{playing=true;if(btn)btn.textContent='⏸ Pausa';");
+            html.append("    timer=setInterval(function(){showFrame((cur+1)%frames);},frameMs);}");
+            html.append("};");
+            html.append("showFrame(0);");
+            html.append("})();");
+            html.append("</script></div>");
+
+            return html.toString();
+
+        } catch (Exception e) {
+            log.warn("generateVideo error: {}", e.getMessage());
+            return "Errore generazione video: " + e.getMessage();
+        }
+    }
+
+    @PostMapping("/video/generate")
+    public ResponseEntity<Object> videoGenerate(@RequestBody Map<String,String> body) {
+        String description = body.getOrDefault("description", body.getOrDefault("goal","")).trim();
+        String sessionId   = body.getOrDefault("sessionId", "global");
+        String baseUrl     = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey      = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model       = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        if (description.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error","Fornisci una descrizione del video"));
+        String html = generateVideoHtml(description, sessionId, baseUrl, apiKey, model);
+        return ResponseEntity.ok(Map.of(
+            "html",        html,
+            "status",      "ok",
+            "mode",        "video_gen",
+            "description", description,
+            "date",        today()
+        ));
+    }
+
     @GetMapping("/tools/status")
     public ResponseEntity<Object> toolsStatus() {
         Map<String,Object> status = new LinkedHashMap<>();
@@ -2759,7 +3007,13 @@ public class ChatController {
             case "language": return "Sei LANGUAGE di SPACE AI. Data:" + d + ". Metodi accelerati,grammatica,pronuncia. Rispondi in italiano.";
             case "mindmap": return "Sei MINDMAP di SPACE AI. Data:" + d + ". Mappe mentali,knowledge graphs,brainstorming. Rispondi in italiano.";
             case "prompt_eng": return "Sei PROMPT_ENGINEER di SPACE AI. Data:" + d + ". Chain-of-thought,few-shot,ReAct. Rispondi in italiano.";
-            case "video_gen": return "Sei VIDEO_GEN di SPACE AI. Data:" + d + ". RunwayML,Sora,Pika,storyboard,script. Rispondi in italiano.";
+            case "video_gen":
+                return "Sei VIDEO_GEN di SPACE AI. Data:" + d + ". " +
+                       "Ricevi una descrizione di scena animata e devi restituire SOLO JSON valido senza testo extra:\n" +
+                       "{\"storyboard\":[{\"frame\":1,\"description\":\"...\",\"prompt_image\":\"...\"}],\"duration_seconds\":5,\"fps\":2}\n" +
+                       "Regole: max 5 frame, ogni prompt_image in INGLESE dettagliato per Pollinations, " +
+                       "ogni frame deve mostrare un momento diverso della scena animata. " +
+                       "Rispondi SOLO con JSON valido, zero testo fuori dal JSON.";
             case "audio_gen": return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". ElevenLabs,Suno,voice cloning,podcast. Rispondi in italiano.";
             case "aegis":
                 return "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data:" + d + ". " +
@@ -3058,6 +3312,27 @@ public class ChatController {
                     return ResponseEntity.ok(vr);
                 } catch (Exception ve) {
                     log.warn("Visual creative: {}", ve.getMessage());
+                }
+            }
+
+            // ── VIDEO GENERATION ────────────────────────────────────────────
+            String ql = userMessage.toLowerCase();
+            boolean isVideo = ql.contains("crea un video") || ql.contains("genera video") ||
+                ql.contains("crea video") || ql.contains("animazione di") ||
+                ql.contains("video di") || ql.contains("fai un video");
+            if (isVideo) {
+                try {
+                    String videoHtml = generateVideoHtml(userMessage, sessionId, baseUrl, apiKey, model);
+                    saveMessages(sessionId, userMessage, "Video generato.", supabaseUrl, supabaseKey);
+                    Map<String,Object> vResp = new HashMap<>();
+                    vResp.put("response", "🎬 Ecco il tuo video animato!");
+                    vResp.put("videoHtml", videoHtml);
+                    vResp.put("status", "ok");
+                    vResp.put("mode", "video_gen");
+                    vResp.put("sessionId", sessionId);
+                    return ResponseEntity.ok(vResp);
+                } catch (Exception ve) {
+                    log.warn("Video gen failed: {}", ve.getMessage());
                 }
             }
 
