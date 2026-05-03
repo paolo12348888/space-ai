@@ -2618,9 +2618,8 @@ public class ChatController {
             while (fm.find() && fCount++ < 10) {
                 Map<String,String> field = new LinkedHashMap<>();
                 field.put("name", fm.group(1));
-                field.put("type", rawHtml.substring(Math.max(0,fm.start()-50),
-                field.put("type", rawHtml.substring(Math.max(0,fm.start()-50),
-                    Math.min(rawHtml.length(),fm.end()+10)).contains("type=\"password\"") ? "password" : "text");
+                String ctx = rawHtml.substring(Math.max(0,fm.start()-50), Math.min(rawHtml.length(),fm.end()+10));
+                field.put("type", ctx.contains("password") ? "password" : "text");
             }
 
             Map<String,Object> r = new LinkedHashMap<>();
