@@ -190,6 +190,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
+          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
           <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
           <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
           <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
@@ -633,6 +634,19 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
+        // ── Video Gen ─────────────────────────────────────────────────
+        if(data.videoHtml){
+          addRow("🎬 **Video generato!** Clicca ▶ Play per avviare l'animazione.","ai");
+          var vrow=document.createElement("div");
+          vrow.className="row ai";
+          var vav=document.createElement("div");vav.className="av";
+          var vim=document.createElement("img");vim.src=LOGO;vav.appendChild(vim);
+          var vbub=document.createElement("div");vbub.className="bubble";
+          vbub.style.cssText="padding:8px;max-width:96%;width:700px";
+          vbub.innerHTML=data.videoHtml;
+          vrow.appendChild(vav);vrow.appendChild(vbub);
+          msgsEl.appendChild(vrow);msgsEl.scrollTop=msgsEl.scrollHeight;
+        }
         // ── Visual Creative: immagine realistica + SVG ────────────────
         if(data.mode==="visual_creative"){
           if(data.image){
@@ -768,11 +782,40 @@ async function sendMsg(){
 
   // ── GitHub Connector ───────────────────────────────────────────────────
   function showManusTab(tab){
-    ["task","code","browse"].forEach(function(t){
+    ["task","code","browse","video"].forEach(function(t){
       document.getElementById("manusTab"+t.charAt(0).toUpperCase()+t.slice(1)).style.display=t===tab?"block":"none";
       var btn=document.getElementById("tab"+t.charAt(0).toUpperCase()+t.slice(1));
       if(btn){btn.style.background=t===tab?"var(--accent)":"transparent";btn.style.color=t===tab?"#000":"var(--text)";}
     });
+  }
+  function manusGenVideo(){
+    var desc=document.getElementById("manusVideoDesc").value.trim();
+    if(!desc){alert("Inserisci una descrizione");return;}
+    var sid=typeof sessionId!=="undefined"?sessionId:"global";
+    closeManusPanel();
+    addRow("🎬 Generazione video in corso... (30-60 secondi)","ai");
+    var formData={description:desc,sessionId:sid};
+    var base=document.getElementById("baseUrlInput");
+    var key=document.getElementById("apiKeyInput");
+    if(base&&base.value)formData.baseUrl=base.value;
+    if(key&&key.value)formData.apiKey=key.value;
+    fetch("/api/video/generate",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(formData)})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){addRow("❌ Errore video: "+d.error,"err");return;}
+        if(d.videoHtml){
+          addRow("🎬 **Video completato!** Clicca ▶ Play per avviarlo.","ai");
+          var vrow=document.createElement("div");vrow.className="row ai";
+          var vav=document.createElement("div");vav.className="av";
+          var vim=document.createElement("img");vim.src=LOGO;vav.appendChild(vim);
+          var vbub=document.createElement("div");vbub.className="bubble";
+          vbub.style.cssText="padding:8px;max-width:96%;width:700px";
+          vbub.innerHTML=d.videoHtml;
+          vrow.appendChild(vav);vrow.appendChild(vbub);
+          msgsEl.appendChild(vrow);msgsEl.scrollTop=msgsEl.scrollHeight;
+        }
+      }).catch(function(e){addRow("❌ Errore: "+e,"err");});
   }
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
   function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
@@ -826,6 +869,7 @@ async function sendMsg(){
       <button onclick="showManusTab('task')" id="tabTask" style="flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:.85rem">🎯 Task</button>
       <button onclick="showManusTab('code')" id="tabCode" style="flex:1;padding:8px;border-radius:8px;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:.85rem">⚙️ Codice</button>
       <button onclick="showManusTab('browse')" id="tabBrowse" style="flex:1;padding:8px;border-radius:8px;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:.85rem">🌐 Browser</button>
+      <button onclick="showManusTab('video')" id="tabVideo" style="flex:1;padding:8px;border-radius:8px;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:.85rem">🎬 Video</button>
     </div>
 
     <!-- Task tab -->
@@ -851,6 +895,13 @@ async function sendMsg(){
       </select>
       <textarea id="manusCode" placeholder="# Scrivi il tuo codice qui&#10;print('Hello from SPACE AI!')" style="width:100%;height:140px;padding:10px;border-radius:10px;border:1px solid #444;background:var(--bg);color:var(--text);resize:vertical;font-family:monospace;font-size:.85rem;box-sizing:border-box;margin-bottom:12px"></textarea>
       <button onclick="manusExecCode()" style="width:100%;padding:12px;border-radius:10px;border:none;background:#238636;color:#fff;cursor:pointer;font-weight:700;font-size:1rem">▶ Esegui Codice</button>
+    </div>
+
+    <!-- Video tab -->
+    <div id="manusTabVideo" style="display:none">
+      <p style="font-size:.85rem;opacity:.7;margin:0 0 12px">Descrivi una scena e SPACE AI genera uno storyboard + immagini frame per frame.</p>
+      <textarea id="manusVideoDesc" placeholder="es. La Terra che ruota intorno al Sole con astronauta in primo piano" style="width:100%;height:90px;padding:10px;border-radius:10px;border:1px solid #444;background:var(--bg);color:var(--text);resize:vertical;font-size:.9rem;box-sizing:border-box;margin-bottom:12px"></textarea>
+      <button onclick="manusGenVideo()" style="width:100%;padding:12px;border-radius:10px;border:none;background:linear-gradient(90deg,#00d4ff,#a855f7);color:#fff;cursor:pointer;font-weight:700;font-size:1rem">🎬 Genera Video</button>
     </div>
 
     <!-- Browse tab -->
