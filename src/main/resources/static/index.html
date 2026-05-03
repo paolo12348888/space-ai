@@ -10,7 +10,7 @@
 :root{
   --bg:#0a0c10;--sidebar:#0e1117;--surface:#161b24;--surface2:#1c2230;
   --border:rgba(255,255,255,0.07);--accent:#00c8ff;--accent-dim:rgba(0,200,255,0.12);
-  --text:#e2eaf4;--muted:rgba(180,200,230,0.4);
+  --text:#e2eaf4;--muted:rgba(180,200,230,0.4);--bg2:#161b24;
   --user-bg:rgba(0,180,230,0.1);--user-border:rgba(0,200,255,0.25);
 }
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter",sans-serif;overflow:hidden}
@@ -186,6 +186,9 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
           <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
           <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
+          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
+          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
+          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
           <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
           <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
@@ -475,29 +478,26 @@ function addSVGRow(svgDataUrl, caption, svgCode){
   var im=document.createElement("img");im.src=LOGO;av.appendChild(im);
   var bub=document.createElement("div");bub.className="bubble";
   bub.style.cssText="padding:8px;max-width:92%";
-  // Immagine SVG
   var img=document.createElement("img");
   img.src=svgDataUrl;
   img.style.cssText="max-width:100%;border-radius:10px;display:block;cursor:zoom-in;margin-bottom:8px";
   img.onclick=function(){window.open(img.src,"_blank");};
   bub.appendChild(img);
-  // Caption testo
   if(caption){
     var cap=document.createElement("p");
     cap.style.cssText="margin:4px 0 8px 0;font-size:.85rem;opacity:.8";
     cap.textContent=caption;
     bub.appendChild(cap);
   }
-  // Pulsanti azione
   var acts=document.createElement("div");acts.className="acts";
-  // Scarica SVG come immagine
-  var dlImg=document.createElement("a");
-  dlImg.href=svgDataUrl;
-  dlImg.download="space-ai-visual-"+Date.now()+".svg";
-  dlImg.className="abtn";dlImg.style.textDecoration="none";
-  dlImg.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica SVG';
-  acts.appendChild(dlImg);
-  // Scarica PNG (conversione canvas)
+  // Scarica SVG
+  var dlSvg=document.createElement("a");
+  dlSvg.href=svgDataUrl;
+  dlSvg.download="space-ai-"+Date.now()+".svg";
+  dlSvg.className="abtn";dlSvg.style.textDecoration="none";
+  dlSvg.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica SVG';
+  acts.appendChild(dlSvg);
+  // Scarica PNG via canvas
   var dlPng=document.createElement("button");
   dlPng.className="abtn";
   dlPng.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica PNG';
@@ -509,29 +509,13 @@ function addSVGRow(svgDataUrl, caption, svgCode){
     tmpImg.onload=function(){
       ctx2.drawImage(tmpImg,0,0,900,600);
       var a=document.createElement("a");
-      a.download="space-ai-visual-"+Date.now()+".png";
+      a.download="space-ai-"+Date.now()+".png";
       a.href=canvas.toDataURL("image/png");
       a.click();
     };
     tmpImg.src=svgDataUrl;
   };
   acts.appendChild(dlPng);
-  // Visualizza codice SVG se disponibile
-  if(svgCode){
-    var showCode=document.createElement("button");
-    showCode.className="abtn";showCode.textContent="</> Codice";
-    showCode.onclick=function(){
-      var pre=document.getElementById("svgCodeBlock_"+Date.now());
-      var existing=bub.querySelector(".svgCodePre");
-      if(existing){existing.remove();showCode.textContent="</> Codice";return;}
-      var codeDiv=document.createElement("details");codeDiv.className="svgCodePre";
-      codeDiv.style.cssText="margin-top:8px;font-size:.7rem;max-height:200px;overflow:auto";
-      codeDiv.innerHTML="<summary style='cursor:pointer;color:var(--accent)'>Codice SVG</summary><pre style='white-space:pre-wrap;word-break:break-all'>"+svgCode.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</pre>";
-      bub.insertBefore(codeDiv,acts);
-      showCode.textContent="Chiudi";
-    };
-    acts.appendChild(showCode);
-  }
   bub.appendChild(acts);
   row.appendChild(av);row.appendChild(bub);
   msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
@@ -648,36 +632,38 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
-        // ── Gestione risposte Visual Creative (SVG + realistica) ──────
+        // ── Visual Creative: immagine realistica + SVG ────────────────
         if(data.mode==="visual_creative"){
           if(data.image){
-            // Immagine realistica (Pollinations) - scaricabile come JPEG
             addImgRow(data.image, data.imageType||"image/jpeg");
             if(data.svgCode){
-              // Mostra anche bottone SVG se disponibile
               var svgBlob=new Blob([data.svgCode],{type:"image/svg+xml"});
               var svgUrl=URL.createObjectURL(svgBlob);
-              var svgBtn=document.createElement("div");svgBtn.className="row ai";
               var svgA=document.createElement("a");
               svgA.href=svgUrl;svgA.download="space-ai-"+Date.now()+".svg";
               svgA.className="abtn";svgA.style.cssText="text-decoration:none;display:inline-block;margin:4px 0 0 56px";
-              svgA.innerHTML="</> Scarica anche SVG";
-              svgBtn.appendChild(svgA);msgsEl.appendChild(svgBtn);
+              svgA.innerHTML="&#60;/&#62; Scarica anche SVG";
+              msgsEl.appendChild(svgA);
             }
           } else if(data.svgImage){
-            // Solo SVG generato dal LLM
             addSVGRow(data.svgImage, data.response||"Immagine generata!", data.svgCode||"");
           } else if(data.response){
             addRow(data.response,"ai");
           }
-        // ── Gestione risposta testo normale ──────────────────────────
+        // ── Agent Loop: badge speciale ─────────────────────────────────
+        } else if(data.agentLoop && data.response){
+          addRow("🤖 **Agent Loop**\n\n"+data.response,"ai");
+          if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
+        // ── SVG standalone ─────────────────────────────────────────────
         } else if(data.svgImage){
           addSVGRow(data.svgImage, data.response||"Immagine SVG generata!", data.svgCode||"");
+        // ── Risposta testo normale (+ badge Live se da web search) ─────
         } else if(data.response){
           if(data.response.startsWith("ERRORE_IMMAGINE:")){
             addRow("⚠️ Generazione immagine non riuscita. Riprova tra qualche secondo.","err");
           } else {
-            addRow(data.response,"ai");
+            var prefix=data.webSearch==="true"?"🌐 **Live** · ":"";
+            addRow(prefix+data.response,"ai");
             if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
           }
         }
@@ -687,7 +673,7 @@ async function sendMsg(){
           var ei=document.getElementById("emotionIndicator");
           if(ei)ei.textContent=eMap[data.emotion]||"😐";
         }
-        // Immagine da altri agenti (image_gen, ecc.)
+        // Immagine da altri agenti (image_gen)
         if(data.image && data.mode!=="visual_creative")addImgRow(data.image,data.imageType||"image/jpeg");
       }
     }
@@ -699,6 +685,73 @@ async function sendMsg(){
     btnEl.disabled=false;
     inpEl.focus();
   }
-}</script>
+}
+  // ── GitHub Connector ───────────────────────────────────────────────────
+  function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
+  function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
+  function githubRepoInfo(){
+    var owner=document.getElementById("ghOwner").value.trim();
+    var repo=document.getElementById("ghRepo").value.trim();
+    if(!owner||!repo){alert("Inserisci owner e repo");return;}
+    fetch("/api/github/repo?owner="+encodeURIComponent(owner)+"&repo="+encodeURIComponent(repo))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        addRow("📦 **"+d.name+"**\n⭐ "+d.stars+" stars | 🍴 "+d.forks+" forks\n📝 "+(d.description||"—")+"\n🔤 "+d.language+"\n🔄 "+d.updated,"ai");
+        closeGithubPanel();
+      }).catch(function(e){alert("Errore: "+e);});
+  }
+  function githubReadFile(){
+    var owner=document.getElementById("ghOwner").value.trim();
+    var repo=document.getElementById("ghRepo").value.trim();
+    var path=document.getElementById("ghPath").value.trim();
+    if(!owner||!repo||!path){alert("Inserisci owner, repo e path");return;}
+    fetch("/api/github/file?owner="+encodeURIComponent(owner)+"&repo="+encodeURIComponent(repo)+"&path="+encodeURIComponent(path))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        addRow("📄 File **"+path+"** letto!\n🧩 "+d.ragChunks+" chunk RAG indicizzati\n\n✅ Puoi ora fare domande sul contenuto!","ai");
+        closeGithubPanel();
+      }).catch(function(e){alert("Errore lettura file: "+e);});
+  }
+  function githubIssues(){
+    var owner=document.getElementById("ghOwner").value.trim();
+    var repo=document.getElementById("ghRepo").value.trim();
+    if(!owner||!repo){alert("Inserisci owner e repo");return;}
+    fetch("/api/github/issues?owner="+encodeURIComponent(owner)+"&repo="+encodeURIComponent(repo))
+      .then(function(r){return r.json();})
+      .then(function(d){
+        var txt="🐛 **Issues aperte: "+d.count+"**\n\n";
+        (d.issues||[]).forEach(function(i){txt+="#"+i.number+" — "+i.title+" [@"+i.author+"]\n";});
+        addRow(txt,"ai");closeGithubPanel();
+      }).catch(function(e){alert("Errore issues: "+e);});
+  }
+</script>
+
+<!-- GitHub Panel Modal -->
+<div id="githubPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border-radius:16px;padding:24px;width:90%;max-width:480px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;color:var(--accent)">&#128049; GitHub Connector</h3>
+      <button onclick="closeGithubPanel()" style="background:none;border:none;color:var(--text);font-size:1.5rem;cursor:pointer">&#10005;</button>
+    </div>
+    <p style="font-size:.85rem;opacity:.7;margin:0 0 16px">Configura <code>GITHUB_TOKEN</code> nelle env vars di Render per abilitare.</p>
+    <div style="margin-bottom:12px">
+      <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Owner</label>
+      <input id="ghOwner" placeholder="es. paolo12348888" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Repository</label>
+      <input id="ghRepo" placeholder="es. space-ai" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Path file (per Leggi File)</label>
+      <input id="ghPath" placeholder="es. src/main/java/com/spaceai/web/ChatController.java" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="githubRepoInfo()" style="padding:8px 14px;border-radius:8px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600">&#128270; Info Repo</button>
+      <button onclick="githubReadFile()" style="padding:8px 14px;border-radius:8px;border:none;background:#238636;color:#fff;cursor:pointer;font-weight:600">&#128196; Leggi File</button>
+      <button onclick="githubIssues()" style="padding:8px 14px;border-radius:8px;border:1px solid #555;background:transparent;color:var(--text);cursor:pointer">&#128030; Issues</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
