@@ -2619,8 +2619,8 @@ public class ChatController {
                 Map<String,String> field = new LinkedHashMap<>();
                 field.put("name", fm.group(1));
                 field.put("type", rawHtml.substring(Math.max(0,fm.start()-50),
-                    Math.min(rawHtml.length(),fm.end()+10)).contains("type="password"") ? "password" : "text");
-                formFields.add(field);
+                field.put("type", rawHtml.substring(Math.max(0,fm.start()-50),
+                    Math.min(rawHtml.length(),fm.end()+10)).contains("type=\"password\"") ? "password" : "text");
             }
 
             Map<String,Object> r = new LinkedHashMap<>();
