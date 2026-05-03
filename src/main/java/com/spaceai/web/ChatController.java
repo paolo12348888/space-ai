@@ -1512,6 +1512,11 @@ public class ChatController {
                q.contains("fai un report") || q.contains("scrivi un articolo") ||
                q.contains("github") || q.contains("leggi il file") ||
                q.contains("cerca e poi") || q.contains("trova e") ||
+               q.contains("vai su ") || q.contains("apri il sito") ||
+               q.contains("naviga") || q.contains("scraping") ||
+               q.contains("esegui") || q.contains("calcola") ||
+               q.contains("scrivi codice") || q.contains("programma") ||
+               q.contains("crea uno script") || q.contains("sviluppa") ||
                (q.contains("cerca") && q.contains("e") && q.length() > 60);
     }
 
@@ -1830,9 +1835,11 @@ public class ChatController {
         tools.put("rag_retrieval", true);                                    // sempre attivo
         tools.put("github_read",   !env("GITHUB_TOKEN","").isEmpty());      // richiede token
         tools.put("github_write",  !env("GITHUB_TOKEN","").isEmpty());      // richiede token
-        tools.put("memory_read",   true);                                    // sempre attivo
-        tools.put("image_gen",     true);                                    // sempre attivo
-        tools.put("math_eval",     true);                                    // sempre attivo
+        tools.put("memory_read",   true);
+        tools.put("image_gen",     true);
+        tools.put("math_eval",     true);
+        tools.put("code_exec",     true);    // Piston API - sempre disponibile
+        tools.put("web_scrape",    true);    // Browser agent - sempre disponibile
         return tools;
     }
 
@@ -1862,9 +1869,50 @@ public class ChatController {
                     }
                     return "Formato params: owner/repo/path";
                 case "math_eval":
-                    // Valutazione espressioni matematiche semplici via LLM
                     return callLLM("Sei un calcolatore. Rispondi SOLO con il numero risultato.",
                         params, new ArrayList<>(), baseUrl, apiKey, model, 100);
+                case "code_exec":
+                    // Esegui codice Python via Piston sandbox
+                    // params formato: "python\n<codice>"
+                    try {
+                        String lang = "python";
+                        String code = params;
+                        if (params.contains("\n")) {
+                            lang = params.substring(0, params.indexOf("\n")).trim();
+                            code = params.substring(params.indexOf("\n")+1);
+                        }
+                        Map<String,String> execBody = new HashMap<>();
+                        execBody.put("language", lang);
+                        execBody.put("code", code);
+                        ResponseEntity<Object> execResp = manusExecCode(execBody);
+                        Object execResult = execResp.getBody();
+                        if (execResult instanceof Map) {
+                            Map<?,?> er = (Map<?,?>)execResult;
+                            return "OUTPUT: " + er.get("output") +
+                                (er.get("stderr") != null ? "\nSTDERR: " + er.get("stderr") : "");
+                        }
+                        return execResult != null ? execResult.toString() : "Nessun output";
+                    } catch (Exception ce) { return "Code exec error: " + ce.getMessage(); }
+                case "web_scrape":
+                    // Naviga e scrape un URL
+                    try {
+                        Map<String,String> browseBody = new HashMap<>();
+                        browseBody.put("url", params);
+                        browseBody.put("task", "Estrai le informazioni principali");
+                        browseBody.put("sessionId", sessionId);
+                        browseBody.put("baseUrl", baseUrl);
+                        browseBody.put("apiKey",  apiKey);
+                        browseBody.put("model",   model);
+                        ResponseEntity<Object> browseResp = manusBrowse(browseBody);
+                        Object browseResult = browseResp.getBody();
+                        if (browseResult instanceof Map) {
+                            Map<?,?> br = (Map<?,?>)browseResult;
+                            return "PAGINA: " + params + "\n" + br.get("analysis");
+                        }
+                        return browseResult != null ? browseResult.toString() : "";
+                    } catch (Exception we) { return "Browse error: " + we.getMessage(); }
+                case "image_gen":
+                    return generateImage(params);
                 default:
                     return "Tool sconosciuto: " + tool;
             }
@@ -1962,6 +2010,370 @@ public class ChatController {
         return callLLM(agentSystemPrompt, finalPrompt, new ArrayList<>(), baseUrl, apiKey, model, 2500);
     }
 
+
+
+    // ════════════════════════════════════════════════════════════════════
+    // MANUS-STYLE AUTONOMOUS AGENT
+    // 1. Task Executor: goal → subtasks → execute → report
+    // 2. Code Executor: Python/JS sandbox via Piston API
+    // 3. Web Browser Agent: naviga, estrae dati, compila form
+    // ════════════════════════════════════════════════════════════════════
+
+    // Task status lifecycle
+    private enum TaskStatus { PENDING, RUNNING, DONE, FAILED }
+
+    private static class SubTask {
+        String id, description, tool, params, result;
+        TaskStatus status = TaskStatus.PENDING;
+        SubTask(String id, String description, String tool, String params) {
+            this.id=id; this.description=description; this.tool=tool; this.params=params;
+        }
+    }
+    private static class ManusTask {
+        String id, goal, sessionId, finalReport;
+        TaskStatus status = TaskStatus.PENDING;
+        List<SubTask> subtasks = new ArrayList<>();
+        long createdAt = System.currentTimeMillis();
+        long completedAt = 0;
+    }
+
+    // Store for all tasks (taskId → ManusTask)
+    private final Map<String, ManusTask> taskStore = new ConcurrentHashMap<>();
+
+    // ── TASK EXECUTOR: decompone obiettivo in subtask ed esegue ─────────
+    @PostMapping("/manus/task")
+    public ResponseEntity<Object> manusCreateTask(@RequestBody Map<String,String> body) {
+        String goal      = body.getOrDefault("goal", "").trim();
+        String sessionId = body.getOrDefault("sessionId", "global");
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+
+        if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Fornisci un goal"));
+
+        String taskId = "task_" + System.currentTimeMillis();
+        ManusTask task = new ManusTask();
+        task.id = taskId; task.goal = goal; task.sessionId = sessionId;
+        task.status = TaskStatus.RUNNING;
+        taskStore.put(taskId, task);
+
+        // Pianifica i subtask in un thread separato (non blocca la risposta)
+        CompletableFuture.runAsync(() -> {
+            try {
+                executeManusTask(task, baseUrl, apiKey, model);
+            } catch (Exception e) {
+                task.status = TaskStatus.FAILED;
+                task.finalReport = "Errore: " + e.getMessage();
+                log.error("ManusTask {} failed: {}", taskId, e.getMessage());
+            }
+        });
+
+        return ResponseEntity.ok(Map.of(
+            "taskId",   taskId,
+            "goal",     goal,
+            "status",   "RUNNING",
+            "message",  "Task avviato. Usa GET /api/manus/task/" + taskId + " per monitorare.",
+            "pollUrl",  "/api/manus/task/" + taskId
+        ));
+    }
+
+    @GetMapping("/manus/task/{taskId}")
+    public ResponseEntity<Object> manusGetTask(@PathVariable String taskId) {
+        ManusTask task = taskStore.get(taskId);
+        if (task == null) return ResponseEntity.status(404).body(Map.of("error","Task non trovato"));
+        Map<String,Object> resp = new LinkedHashMap<>();
+        resp.put("taskId",    task.id);
+        resp.put("goal",      task.goal);
+        resp.put("status",    task.status.name());
+        resp.put("progress",  task.subtasks.isEmpty() ? 0 :
+            (int)(100.0 * task.subtasks.stream().filter(s -> s.status==TaskStatus.DONE||s.status==TaskStatus.FAILED).count() / task.subtasks.size()));
+        List<Map<String,Object>> subs = new ArrayList<>();
+        for (SubTask s : task.subtasks) {
+            Map<String,Object> sm = new LinkedHashMap<>();
+            sm.put("id",          s.id);
+            sm.put("description", s.description);
+            sm.put("tool",        s.tool);
+            sm.put("status",      s.status.name());
+            sm.put("result",      s.result != null ? s.result.substring(0, Math.min(300, s.result.length())) : null);
+            subs.add(sm);
+        }
+        resp.put("subtasks",    subs);
+        resp.put("finalReport", task.finalReport);
+        resp.put("elapsed",     (System.currentTimeMillis() - task.createdAt) / 1000 + "s");
+        return ResponseEntity.ok(resp);
+    }
+
+    @GetMapping("/manus/tasks")
+    public ResponseEntity<Object> manusListTasks() {
+        List<Map<String,Object>> list = taskStore.values().stream()
+            .sorted(Comparator.comparingLong(t -> -t.createdAt))
+            .limit(20)
+            .map(t -> {
+                Map<String,Object> m = new LinkedHashMap<>();
+                m.put("taskId",  t.id);
+                m.put("goal",    t.goal.substring(0, Math.min(80, t.goal.length())));
+                m.put("status",  t.status.name());
+                m.put("subtasks",t.subtasks.size());
+                m.put("elapsed", (System.currentTimeMillis() - t.createdAt)/1000 + "s");
+                return m;
+            }).collect(Collectors.toList());
+        return ResponseEntity.ok(Map.of("tasks", list, "total", taskStore.size()));
+    }
+
+    private void executeManusTask(ManusTask task, String baseUrl, String apiKey, String model) throws Exception {
+        Map<String,Boolean> tools = getAvailableTools();
+        String toolsList = tools.entrySet().stream()
+            .filter(Map.Entry::getValue).map(Map.Entry::getKey)
+            .collect(Collectors.joining(", "));
+
+        // STEP 1: Pianificazione — LLM decompone il goal in subtask JSON
+        String planPrompt =
+            "Sei un pianificatore AI. Ricevi un obiettivo e devi decomporlo in subtask eseguibili.\n" +
+            "Strumenti disponibili: " + toolsList + "\n\n" +
+            "Per ogni subtask specifica: id, description, tool, params.\n" +
+            "Strumenti tool validi: web_search, google_search, rag_retrieval, github_read, " +
+            "code_exec, web_scrape, image_gen, math_eval, memory_read.\n\n" +
+            "Rispondi SOLO con JSON valido, nessun testo prima o dopo:\n" +
+            "{\"subtasks\": [{\"id\":\"1\", \"description\":\"...\", " +
+            "\"tool\":\"web_search\", \"params\":\"...\"}]}\n\n" +
+            "OBIETTIVO: " + task.goal;
+
+        String planJson = callLLM("Sei un pianificatore JSON. Rispondi SOLO con JSON valido.",
+            planPrompt, new ArrayList<>(), baseUrl, apiKey, model, 1500);
+
+        // Parse JSON subtasks
+        try {
+            String cleaned = planJson.replaceAll("```json","").replaceAll("```","").trim();
+            JsonNode plan = MAPPER.readTree(cleaned);
+            JsonNode subs = plan.path("subtasks");
+            if (subs.isArray()) {
+                for (JsonNode s : subs) {
+                    task.subtasks.add(new SubTask(
+                        s.path("id").asText("" + (task.subtasks.size()+1)),
+                        s.path("description").asText(),
+                        s.path("tool").asText("web_search"),
+                        s.path("params").asText(task.goal)
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Plan parse failed, creo subtask defaults: {}", e.getMessage());
+            task.subtasks.add(new SubTask("1","Ricerca web",    "web_search",   task.goal));
+            task.subtasks.add(new SubTask("2","Analisi RAG",    "rag_retrieval",task.goal));
+            task.subtasks.add(new SubTask("3","Report finale",  "memory_read",  task.goal));
+        }
+
+        log.info("ManusTask {}: {} subtasks pianificati", task.id, task.subtasks.size());
+
+        // STEP 2: Esecuzione subtask in sequenza
+        StringBuilder allResults = new StringBuilder();
+        for (SubTask sub : task.subtasks) {
+            sub.status = TaskStatus.RUNNING;
+            log.info("Eseguo subtask {}: {} con tool {}", sub.id, sub.description, sub.tool);
+            try {
+                sub.result = executeTool(sub.tool, sub.params, task.sessionId, baseUrl, apiKey, model);
+                if (sub.result == null || sub.result.isBlank())
+                    sub.result = "Nessun risultato disponibile";
+                sub.status = TaskStatus.DONE;
+                allResults.append("### Subtask ").append(sub.id).append(": ").append(sub.description).append("\n");
+                allResults.append(sub.result, 0, Math.min(600, sub.result.length())).append("\n\n");
+                // Indicizza nel RAG per report finale
+                ragIndexDocument(task.id + "/sub_" + sub.id, sub.result);
+            } catch (Exception e) {
+                sub.result  = "Errore: " + e.getMessage();
+                sub.status  = TaskStatus.FAILED;
+                log.warn("Subtask {} fallito: {}", sub.id, e.getMessage());
+            }
+        }
+
+        // STEP 3: Sintesi finale
+        String reportPrompt =
+            "Hai eseguito i seguenti subtask per raggiungere questo obiettivo:\n" +
+            "OBIETTIVO: " + task.goal + "\n\n" +
+            "RISULTATI:\n" + allResults +
+            "\nScrivi un report finale completo, strutturato e professionale in italiano. " +
+            "Includi: riepilogo, risultati chiave, conclusioni e prossimi passi consigliati.";
+
+        task.finalReport = callLLM(
+            "Sei un assistente che scrive report professionali. Rispondi in italiano.",
+            reportPrompt, new ArrayList<>(), baseUrl, apiKey, model, 2500);
+
+        task.status      = TaskStatus.DONE;
+        task.completedAt = System.currentTimeMillis();
+        log.info("ManusTask {} completato in {}ms", task.id, task.completedAt - task.createdAt);
+
+        // Salva il report nel RAG
+        ragIndexDocument(task.id + "/final_report", task.finalReport);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // CODE EXECUTOR — esegui Python/JS/Bash via Piston API (sandbox)
+    // Gratuito, no key richiesta: https://emkc.org/api/v2/piston
+    // ════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/manus/exec")
+    public ResponseEntity<Object> manusExecCode(@RequestBody Map<String,String> body) {
+        String language = body.getOrDefault("language", "python").toLowerCase();
+        String code     = body.getOrDefault("code", "");
+        String stdin    = body.getOrDefault("stdin", "");
+        if (code.isBlank()) return ResponseEntity.badRequest().body(Map.of("error","Codice vuoto"));
+
+        // Mappa linguaggio -> runtime Piston
+        Map<String,String[]> runtimes = new HashMap<>();
+        runtimes.put("python",     new String[]{"python",     "3.10.0"});
+        runtimes.put("javascript", new String[]{"javascript", "18.15.0"});
+        runtimes.put("js",         new String[]{"javascript", "18.15.0"});
+        runtimes.put("java",       new String[]{"java",       "15.0.2"});
+        runtimes.put("bash",       new String[]{"bash",       "5.2.0"});
+        runtimes.put("ruby",       new String[]{"ruby",       "3.0.1"});
+        runtimes.put("php",        new String[]{"php",        "8.2.3"});
+        runtimes.put("rust",       new String[]{"rust",       "1.68.2"});
+        runtimes.put("go",         new String[]{"go",         "1.16.2"});
+        runtimes.put("cpp",        new String[]{"c++",        "10.2.0"});
+        runtimes.put("c",          new String[]{"c",          "10.2.0"});
+
+        String[] runtime = runtimes.getOrDefault(language, new String[]{"python","3.10.0"});
+
+        try {
+            org.springframework.web.client.RestTemplate pistonClient =
+                new org.springframework.web.client.RestTemplate();
+            org.springframework.http.client.SimpleClientHttpRequestFactory pf =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            pf.setConnectTimeout(10000); pf.setReadTimeout(30000);
+            pistonClient.setRequestFactory(pf);
+
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+
+            ObjectNode payload = MAPPER.createObjectNode();
+            payload.put("language", runtime[0]);
+            payload.put("version",  runtime[1]);
+            ArrayNode files = MAPPER.createArrayNode();
+            ObjectNode file = MAPPER.createObjectNode();
+            file.put("name", "main." + language);
+            file.put("content", code);
+            files.add(file);
+            payload.set("files", files);
+            if (!stdin.isBlank()) payload.put("stdin", stdin);
+            payload.put("compile_timeout", 10000);
+            payload.put("run_timeout",     5000);
+
+            ResponseEntity<String> resp = pistonClient.postForEntity(
+                "https://emkc.org/api/v2/piston/execute",
+                new HttpEntity<>(MAPPER.writeValueAsString(payload), h),
+                String.class);
+
+            JsonNode result = MAPPER.readTree(resp.getBody());
+            JsonNode run    = result.path("run");
+            String output   = run.path("stdout").asText();
+            String stderr   = run.path("stderr").asText();
+            int    exitCode = run.path("code").asInt();
+
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("language", language);
+            r.put("exitCode", exitCode);
+            r.put("output",   output.isEmpty() ? "(nessun output)" : output);
+            r.put("stderr",   stderr.isEmpty()  ? null : stderr);
+            r.put("success",  exitCode == 0);
+            r.put("date",     today());
+            return ResponseEntity.ok(r);
+
+        } catch (Exception e) {
+            log.warn("Code exec failed: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of(
+                "error",   "Sandbox non raggiungibile: " + e.getMessage(),
+                "hint",    "Il servizio Piston API potrebbe essere temporaneamente offline"
+            ));
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // WEB BROWSER AGENT — naviga URL, estrae dati strutturati, scraping
+    // ════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/manus/browse")
+    public ResponseEntity<Object> manusBrowse(@RequestBody Map<String,String> body) {
+        String url       = body.getOrDefault("url", "").trim();
+        String task      = body.getOrDefault("task", "Estrai il contenuto principale");
+        String sessionId = body.getOrDefault("sessionId", "global");
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+
+        if (url.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","URL obbligatorio"));
+        if (!url.startsWith("http")) url = "https://" + url;
+
+        try {
+            // STEP 1: Scarica la pagina
+            org.springframework.web.client.RestTemplate browser =
+                new org.springframework.web.client.RestTemplate();
+            org.springframework.http.client.SimpleClientHttpRequestFactory bf =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            bf.setConnectTimeout(10000); bf.setReadTimeout(20000);
+            browser.setRequestFactory(bf);
+            HttpHeaders bh = new HttpHeaders();
+            bh.set("User-Agent","Mozilla/5.0 (compatible; SPACE-AI/4.0)");
+            bh.set("Accept","text/html,application/xhtml+xml,*/*");
+            ResponseEntity<String> pageResp = browser.exchange(
+                url, HttpMethod.GET, new HttpEntity<>(bh), String.class);
+            String rawHtml = pageResp.getBody() != null ? pageResp.getBody() : "";
+
+            // STEP 2: Pulisci HTML — rimuovi script, style, tag
+            String cleanText = rawHtml
+                .replaceAll("(?s)<script[^>]*>.*?</script>", " ")
+                .replaceAll("(?s)<style[^>]*>.*?</style>",   " ")
+                .replaceAll("(?s)<nav[^>]*>.*?</nav>",       " ")
+                .replaceAll("(?s)<footer[^>]*>.*?</footer>", " ")
+                .replaceAll("(?s)<header[^>]*>.*?</header>", " ")
+                .replaceAll("<[^>]+>",                       " ")
+                .replaceAll("&nbsp;",                        " ")
+                .replaceAll("&amp;",                         "&")
+                .replaceAll("&lt;",                          "<")
+                .replaceAll("&gt;",                          ">")
+                .replaceAll("\s{3,}",                       " ")
+                .trim();
+
+            // Limita a 6000 caratteri per il contesto LLM
+            String pageContent = cleanText.substring(0, Math.min(6000, cleanText.length()));
+
+            // STEP 3: Indicizza nel RAG
+            String docId = sessionId + "/browse_" + url.replaceAll("[^a-zA-Z0-9]","_").substring(0, Math.min(50, url.length()));
+            int chunks = ragIndexDocument(docId, pageContent);
+
+            // STEP 4: LLM analizza e risponde al task
+            String analysis = callLLM(
+                "Sei un web agent. Analizza il contenuto della pagina ed esegui il task richiesto. " +
+                "Rispondi in italiano in modo strutturato.",
+                "URL: " + url + "\nTASK: " + task + "\n\nCONTENUTO PAGINA:\n" + pageContent,
+                new ArrayList<>(), baseUrl, apiKey, model, 2000);
+
+            // STEP 5: Estrai link presenti nella pagina
+            List<String> links = new ArrayList<>();
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("href=[\"\'](.[^\"\'#]{6,98})[\"\']").matcher(rawHtml);
+            int lCount = 0;
+            while (m.find() && lCount++ < 15) {
+                String href = m.group(1);
+                if (href.startsWith("http")) links.add(href);
+            }
+
+            Map<String,Object> r = new LinkedHashMap<>();
+            r.put("url",        url);
+            r.put("task",       task);
+            r.put("analysis",   analysis);
+            r.put("pageLength", cleanText.length());
+            r.put("ragChunks",  chunks);
+            r.put("links",      links);
+            r.put("indexed",    true);
+            r.put("date",       today());
+            return ResponseEntity.ok(r);
+
+        } catch (Exception e) {
+            log.warn("Browse failed {}: {}", url, e.getMessage());
+            return ResponseEntity.status(503).body(Map.of(
+                "error", "Impossibile navigare " + url + ": " + e.getMessage()));
+        }
+    }
 
     @GetMapping("/tools/status")
     public ResponseEntity<Object> toolsStatus() {
