@@ -2488,37 +2488,37 @@ public class ChatController {
             int fps           = json.path("fps").asInt(2);
             int totalFrames   = frames.isArray() ? frames.size() : 0;
 
+            // Dichiara le liste PRIMA del fallback
+            List<String> frameB64s    = new ArrayList<>();
+            List<String> frameDescs   = new ArrayList<>();
+            List<String> framePrompts = new ArrayList<>();
+
             // Check error key from LLM
             if (!json.path("error").asText("").isEmpty()) {
                 log.warn("VideoGen: LLM reported error: {}", json.path("error").asText());
             }
+
             if (totalFrames == 0) {
-                // FALLBACK: genera almeno 3 frame dalla descrizione originale
+                // FALLBACK: genera 3 frame dalla descrizione originale
                 log.warn("VideoGen: storyboard vuoto, uso fallback con 3 frame");
-                List<String> fallbackPrompts = new ArrayList<>();
                 String engDesc = enhancePromptForSD(description);
-                fallbackPrompts.add(engDesc + ", opening scene, wide shot");
-                fallbackPrompts.add(engDesc + ", main action, medium shot");
-                fallbackPrompts.add(engDesc + ", final scene, cinematic closeup");
-                for (int fi = 0; fi < fallbackPrompts.size(); fi++) {
-                    String fp = fallbackPrompts.get(fi);
-                    frameDescs.add("Scena " + (fi+1));
-                    framePrompts.add(fp);
-                    String imgR = generateImage(fp);
+                String[] fallbackPrompts = {
+                    engDesc + ", opening scene, wide shot",
+                    engDesc + ", main action, medium shot",
+                    engDesc + ", final scene, cinematic closeup"
+                };
+                for (int fi = 0; fi < fallbackPrompts.length; fi++) {
+                    frameDescs.add("Scena " + (fi + 1));
+                    framePrompts.add(fallbackPrompts[fi]);
+                    String imgR = generateImage(fallbackPrompts[fi]);
                     frameB64s.add(imgR.startsWith("IMAGE:") ? imgR.substring(6) : "");
                 }
                 duration = 6; fps = 2;
-            }
-
-            // STEP 2: Genera immagine per ogni frame
-            List<String> frameB64s     = new ArrayList<>();
-            List<String> frameDescs    = new ArrayList<>();
-            List<String> framePrompts  = new ArrayList<>();
-
-            if (totalFrames > 0) {
+            } else {
+                // STEP 2: Genera immagine per ogni frame dello storyboard
                 for (JsonNode frame : frames) {
                     String promptImg = frame.path("prompt_image").asText(description);
-                    String frameDesc = frame.path("description").asText("Frame " + (frameB64s.size()+1));
+                    String frameDesc = frame.path("description").asText("Frame " + (frameB64s.size() + 1));
                     frameDescs.add(frameDesc);
                     framePrompts.add(promptImg);
                     String imgResult = generateImage(promptImg);
@@ -2527,6 +2527,7 @@ public class ChatController {
                         promptImg.substring(0, Math.min(50, promptImg.length())));
                 }
             }
+
 
             long frameMs = totalFrames > 0 ? (duration * 1000L / totalFrames) : 1000;
 
