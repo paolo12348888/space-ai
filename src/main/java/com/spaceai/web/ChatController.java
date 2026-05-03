@@ -1186,7 +1186,6 @@ public class ChatController {
     }
 
     private String buildSystemPrompt(String mode, String sessionId, String query) {
-    private String buildSystemPrompt(String mode, String sessionId, String query) {
         String kgTop   = getTopKGConcepts(sessionId);
         String emotion = emotionState.getOrDefault(sessionId, "neutral");
         int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
@@ -1359,6 +1358,7 @@ public class ChatController {
     }
     private String cacheKey(String msg, String agent) {
         return (agent + ":" + msg).substring(0, Math.min(120, (agent + ":" + msg).length()));
+    }
     private boolean isRateLimited(String sessionId) {
         long now = System.currentTimeMillis();
         Long window = sessionWindows.get(sessionId);
