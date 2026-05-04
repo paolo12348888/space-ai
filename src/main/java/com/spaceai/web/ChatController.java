@@ -4893,7 +4893,7 @@ public class ChatController {
     }
 
     @PostMapping("/manus/browser")
-    public ResponseEntity<Object> manusBrowserControl(@RequestBody Map<String,Object> body) {(@RequestBody Map<String,Object> body) {
+    public ResponseEntity<Object> manusBrowserControl(@RequestBody Map<String,Object> body) {
         String action    = (String) body.getOrDefault("action", "navigate");
         String url       = (String) body.getOrDefault("url", "");
         String selector  = (String) body.getOrDefault("selector", "");
@@ -5023,30 +5023,6 @@ public class ChatController {
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PUNTO 12: MoE Routing — instrada query complesse a modelli diversi
-    // GROQ_MODEL_COMPLEX e GROQ_MODEL_FAST configurabili su Render
-    // ══════════════════════════════════════════════════════════════════
-    private String selectModel(String query, String defaultModel) {
-        String q = query.toLowerCase();
-        boolean isCode    = q.contains("codice") || q.contains("java") ||
-            q.contains("python") || q.contains("javascript") || q.contains("debug") ||
-            q.contains("algoritmo") || q.contains("programma");
-        boolean isComplex = q.length() > 200 || q.contains("analisi approfondita") ||
-            q.contains("ragionamento") || q.contains("filosofia") || q.contains("matematica avanzata");
-        boolean isSimple  = q.length() < 30 && !q.contains("?") && !q.contains("spiega");
-        String complexModel = env("GROQ_MODEL_COMPLEX", "");
-        String fastModel    = env("GROQ_MODEL_FAST",    "");
-        if ((isCode || isComplex) && !complexModel.isEmpty()) {
-            log.debug("MoE: routing a modello complex={}", complexModel);
-            return complexModel;
-        }
-        if (isSimple && !fastModel.isEmpty()) {
-            log.debug("MoE: routing a modello fast={}", fastModel);
-            return fastModel;
-        }
-        return defaultModel;
-    }
 
     private String callLLM(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
@@ -5110,7 +5086,7 @@ public class ChatController {
                 // Estrai "Please try again in Xm Ys" dal messaggio
                 try {
                     java.util.regex.Matcher m429 = java.util.regex.Pattern
-                        .compile("try again in (\d+)m(\d+\.?\d*)s").matcher(body);
+                        .compile("try again in (\\d+)m(\\d+\\.?\\d*)s").matcher(body);
                     if (m429.find()) {
                         long mins = Long.parseLong(m429.group(1));
                         double secs = Double.parseDouble(m429.group(2));
