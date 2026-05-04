@@ -15,6 +15,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +50,13 @@ public class ChatController {
     private final Map<String, Long> sessionWindows = new ConcurrentHashMap<>();
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
     private final AtomicInteger failureCount = new AtomicInteger(0);
-    private volatile long circuitOpenTime = 0;
+    private volatile long circuitOpenTime   = 0;
+    // Rate limit tracker — 429 da Groq
+    private volatile long rateLimitUntil    = 0;        // timestamp fino a cui Groq è bloccato
+    private volatile long rateLimitResetAt  = 0;        // quando resettare (da Retry-After)
+    private final AtomicInteger groqCallsToday = new AtomicInteger(0);
+    private final AtomicInteger localFallbacks = new AtomicInteger(0);
+    private volatile long groqDayStart = System.currentTimeMillis();
     private static final int FAILURE_THRESHOLD = 5;
     private static final long CIRCUIT_RESET_MS = 30000; // 30 secondi
     private final AtomicInteger totalTokensEstimate = new AtomicInteger(0);
@@ -1920,7 +1927,11 @@ public class ChatController {
         tools.put("image_gen",      true);
         tools.put("math_eval",      true);
         tools.put("code_exec",      true);
-        tools.put("web_scrape",     true);
+        tools.put("web_scrape",      true);
+        tools.put("browser_control", !env("BROWSERLESS_TOKEN","").isEmpty());
+        tools.put("video_analyze",   true);
+        tools.put("qdrant_store",    qdrantEnabled());
+        tools.put("qdrant_search",   qdrantEnabled());
         return tools;
     }
 
@@ -1928,6 +1939,159 @@ public class ChatController {
      * Esegue un singolo tool dal loop agente.
      * Restituisce il risultato dell'esecuzione come stringa.
      */
+    // ════════════════════════════════════════════════════════════════════════
+    // VECTOR DB — Qdrant per memoria persistente scalabile
+    // Configurazione: QDRANT_URL e QDRANT_API_KEY nelle env vars di Render
+    // Qdrant Cloud gratuito: https://cloud.qdrant.io (1GB gratis)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private static final String QDRANT_COLLECTION = "spaceai_memory";
+
+    private boolean qdrantEnabled() {
+        return !env("QDRANT_URL","").isEmpty();
+    }
+
+    private void qdrantUpsert(String id, float[] vector, Map<String,String> payload) {
+        if (!qdrantEnabled()) return;
+        try {
+            String qdrantUrl = env("QDRANT_URL","");
+            String qdrantKey = env("QDRANT_API_KEY","");
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+            if (!qdrantKey.isEmpty()) h.set("api-key", qdrantKey);
+
+            // Build point
+            ObjectNode point = MAPPER.createObjectNode();
+            point.put("id", Math.abs(id.hashCode()) % 1_000_000_000L);
+            ArrayNode vec = MAPPER.createArrayNode();
+            for (float v : vector) vec.add(v);
+            point.set("vector", vec);
+            ObjectNode pl = MAPPER.createObjectNode();
+            payload.forEach(pl::put);
+            point.set("payload", pl);
+
+            ObjectNode body = MAPPER.createObjectNode();
+            ArrayNode points = MAPPER.createArrayNode();
+            points.add(point);
+            body.set("points", points);
+
+            restTemplate.exchange(
+                qdrantUrl + "/collections/" + QDRANT_COLLECTION + "/points",
+                HttpMethod.PUT,
+                new HttpEntity<>(MAPPER.writeValueAsString(body), h),
+                String.class);
+        } catch (Exception e) {
+            log.debug("Qdrant upsert skip: {}", e.getMessage());
+        }
+    }
+
+    private List<Map<String,Object>> qdrantSearch(float[] queryVector, int topK) {
+        if (!qdrantEnabled()) return new ArrayList<>();
+        try {
+            String qdrantUrl = env("QDRANT_URL","");
+            String qdrantKey = env("QDRANT_API_KEY","");
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+            if (!qdrantKey.isEmpty()) h.set("api-key", qdrantKey);
+
+            ObjectNode req = MAPPER.createObjectNode();
+            ArrayNode vec = MAPPER.createArrayNode();
+            for (float v : queryVector) vec.add(v);
+            req.set("vector", vec);
+            req.put("limit", topK);
+            req.put("with_payload", true);
+
+            ResponseEntity<String> resp = restTemplate.exchange(
+                qdrantUrl + "/collections/" + QDRANT_COLLECTION + "/points/search",
+                HttpMethod.POST,
+                new HttpEntity<>(MAPPER.writeValueAsString(req), h),
+                String.class);
+
+            JsonNode results = MAPPER.readTree(resp.getBody()).path("result");
+            List<Map<String,Object>> hits = new ArrayList<>();
+            for (JsonNode r : results) {
+                Map<String,Object> hit = new LinkedHashMap<>();
+                hit.put("score",   r.path("score").asDouble());
+                hit.put("payload", r.path("payload").toString());
+                hits.add(hit);
+            }
+            return hits;
+        } catch (Exception e) {
+            log.debug("Qdrant search skip: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    private void qdrantEnsureCollection() {
+        if (!qdrantEnabled()) return;
+        try {
+            String qdrantUrl = env("QDRANT_URL","");
+            String qdrantKey = env("QDRANT_API_KEY","");
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+            if (!qdrantKey.isEmpty()) h.set("api-key", qdrantKey);
+
+            ObjectNode body = MAPPER.createObjectNode();
+            ObjectNode params = MAPPER.createObjectNode();
+            params.put("size", EMBED_DIM);
+            params.put("distance", "Cosine");
+            body.set("vectors", params);
+
+            restTemplate.exchange(
+                qdrantUrl + "/collections/" + QDRANT_COLLECTION,
+                HttpMethod.PUT,
+                new HttpEntity<>(MAPPER.writeValueAsString(body), h),
+                String.class);
+            log.info("Qdrant collection ensured: {}", QDRANT_COLLECTION);
+        } catch (Exception e) {
+            log.debug("Qdrant collection setup: {}", e.getMessage());
+        }
+    }
+
+    @PostMapping("/qdrant/store")
+    public ResponseEntity<Object> qdrantStore(@RequestBody Map<String,String> body) {
+        String text      = body.getOrDefault("text","").trim();
+        String sessionId = body.getOrDefault("sessionId","global");
+        String category  = body.getOrDefault("category","memory");
+        if (text.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","text obbligatorio"));
+        float[] vec = embed(text);
+        String id = sessionId + "_" + System.currentTimeMillis();
+        Map<String,String> payload = new LinkedHashMap<>();
+        payload.put("text", text.substring(0, Math.min(500, text.length())));
+        payload.put("sessionId", sessionId);
+        payload.put("category", category);
+        payload.put("date", today());
+        qdrantUpsert(id, vec, payload);
+        // Salva anche in LTM locale come fallback
+        consolidateToLTM(sessionId, text);
+        return ResponseEntity.ok(Map.of(
+            "status",   "stored",
+            "id",       id,
+            "qdrant",   qdrantEnabled(),
+            "vecDim",   vec.length,
+            "date",     today()
+        ));
+    }
+
+    @PostMapping("/qdrant/search")
+    public ResponseEntity<Object> qdrantSearchEndpoint(@RequestBody Map<String,String> body) {
+        String query     = body.getOrDefault("query","").trim();
+        String sessionId = body.getOrDefault("sessionId","global");
+        int topK         = Integer.parseInt(body.getOrDefault("topK","5"));
+        if (query.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","query obbligatoria"));
+        float[] vec = embed(query);
+        // Search Qdrant first, fallback to local MSA
+        List<Map<String,Object>> qdrantHits = qdrantSearch(vec, topK);
+        String localMsa = msaRetrieveUnified(query, sessionId);
+        return ResponseEntity.ok(Map.of(
+            "qdrantHits",  qdrantHits,
+            "localMsa",    localMsa,
+            "qdrantActive",qdrantEnabled(),
+            "query",       query,
+            "date",        today()
+        ));
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // PUNTO 4: Tool Schema — definizione JSON strutturata per ogni tool
     // Usata per validare e documentare i tool disponibili
@@ -2021,16 +2185,31 @@ public class ChatController {
                     }
                     return "Formato params: owner/repo/path";
                 case "memory_store":
-                    // Salva un fatto esplicitamente nella LTM della sessione
                     consolidateToLTM(sessionId, params);
                     storeFactDifferential(sessionId,
                         params.contains("::") ? params.split("::")[0] : params.substring(0, Math.min(30, params.length())),
                         params.contains("::") ? params.split("::")[1] : params);
                     updateVocab(tokenize(params));
-                    return "Fatto memorizzato: " + params.substring(0, Math.min(80, params.length()));
+                    // Salva anche su Qdrant se disponibile
+                    if (qdrantEnabled()) {
+                        Map<String,String> pl = new HashMap<>();
+                        pl.put("text", params); pl.put("sessionId", sessionId); pl.put("date", today());
+                        qdrantUpsert(sessionId + "_" + System.currentTimeMillis(), embed(params), pl);
+                    }
+                    return "Fatto memorizzato" + (qdrantEnabled() ? " (Qdrant + LTM)" : " (LTM)") +
+                        ": " + params.substring(0, Math.min(80, params.length()));
                 case "memory_retrieve":
-                    // Cerca semanticamente nella memoria
                     String memResult = msaRetrieveUnified(params, sessionId);
+                    // Cerca anche su Qdrant se disponibile
+                    if (qdrantEnabled()) {
+                        List<Map<String,Object>> qHits = qdrantSearch(embed(params), 3);
+                        if (!qHits.isEmpty()) {
+                            StringBuilder qCtx = new StringBuilder();
+                            qHits.forEach(hit -> qCtx.append(hit.get("payload")).append(" "));
+                            if (!memResult.isEmpty()) memResult += " | ";
+                            memResult += "[Qdrant]: " + qCtx.toString().substring(0, Math.min(200, qCtx.length()));
+                        }
+                    }
                     return memResult.isEmpty() ? "Nessun fatto trovato per: " + params : memResult;
                 case "math_eval":
                     return callLLM("Sei un calcolatore. Rispondi SOLO con il numero risultato.",
@@ -2077,6 +2256,35 @@ public class ChatController {
                     } catch (Exception we) { return "Browse error: " + we.getMessage(); }
                 case "image_gen":
                     return generateImage(params);
+                case "browser_control":
+                    try {
+                        Map<String,Object> bBody = new HashMap<>();
+                        bBody.put("action",    "extract");
+                        bBody.put("url",       params);
+                        bBody.put("sessionId", sessionId);
+                        ResponseEntity<Object> bResp = manusBrowserControl(bBody);
+                        Object bResult = bResp.getBody();
+                        if (bResult instanceof Map) {
+                            Map<?,?> bm = (Map<?,?>)bResult;
+                            Object res = bm.get("result");
+                            return res != null ? res.toString() : bResult.toString();
+                        }
+                        return bResult != null ? bResult.toString() : "Browser: nessun risultato";
+                    } catch (Exception be) { return "Browser error: " + be.getMessage(); }
+                case "qdrant_store":
+                    if (qdrantEnabled()) {
+                        Map<String,String> qpl = new HashMap<>();
+                        qpl.put("text", params); qpl.put("sessionId", sessionId); qpl.put("date", today());
+                        qdrantUpsert(sessionId+"_"+System.currentTimeMillis(), embed(params), qpl);
+                        return "Stored in Qdrant: " + params.substring(0, Math.min(60, params.length()));
+                    }
+                    return "Qdrant non configurato";
+                case "qdrant_search":
+                    List<Map<String,Object>> qHits = qdrantSearch(embed(params), 5);
+                    if (qHits.isEmpty()) return "Nessun risultato Qdrant per: " + params;
+                    StringBuilder qSb = new StringBuilder();
+                    qHits.forEach(h -> qSb.append(h.get("payload")).append("\n"));
+                    return qSb.toString();
                 default:
                     return "Tool sconosciuto: " + tool;
             }
@@ -2876,6 +3084,134 @@ public class ChatController {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // ANALISI VIDEO — estrai frame da video base64, analizza con vision
+    // Supporta: MP4, WebM, GIF (come sequenza frame JPEG)
+    // ════════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/video/analyze")
+    public ResponseEntity<Object> analyzeVideo(@RequestBody Map<String,Object> body) {
+        String videoBase64 = (String) body.getOrDefault("videoBase64","");
+        String frameBase64 = (String) body.getOrDefault("frameBase64","");  // singolo frame JPEG
+        String task        = (String) body.getOrDefault("task","Descrivi cosa vedi in questo video");
+        String sessionId   = (String) body.getOrDefault("sessionId","global");
+        String baseUrl2    = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2     = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
+        String model2      = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+
+        // Caso 1: singolo frame JPEG inviato direttamente
+        if (!frameBase64.isEmpty()) {
+            try {
+                String analysis = analyzeImageBase64(frameBase64, task, baseUrl2, apiKey2, model2);
+                ragIndexDocument(sessionId + "/video_frame_" + System.currentTimeMillis(), analysis);
+                return ResponseEntity.ok(Map.of(
+                    "analysis",   analysis,
+                    "mode",       "frame_analysis",
+                    "ragIndexed", true,
+                    "date",       today()
+                ));
+            } catch (Exception e) {
+                return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        // Caso 2: video base64 — estrazione frame simulata
+        // (senza ffmpeg sul server, estraiamo il primo e l'ultimo "frame" dal base64)
+        if (!videoBase64.isEmpty()) {
+            try {
+                byte[] videoBytes = java.util.Base64.getDecoder().decode(
+                    videoBase64.contains(",") ? videoBase64.split(",")[1] : videoBase64);
+
+                // Analisi strutturale del video (dimensione, tipo, durata stimata)
+                int sizeKb = videoBytes.length / 1024;
+                String videoType = videoBytes.length > 4 &&
+                    (char)videoBytes[4]=='f' && (char)videoBytes[5]=='t' ? "MP4" :
+                    videoBytes.length > 3 && videoBytes[0]==(byte)0x1a ? "WebM" : "Video";
+
+                // Usa LLM per descrivere il task anche senza frame (dall'header/metadata)
+                String contextAnalysis = callLLM(
+                    "Sei un analizzatore video AI. Rispondi in italiano.",
+                    "Task utente: " + task + "\n" +
+                    "File video ricevuto: " + videoType + ", " + sizeKb + " KB\n" +
+                    "Non ho estratto frame individuali (richiede ffmpeg). " +
+                    "Fornisci una guida su come analizzare questo tipo di video " +
+                    "e chiedi all'utente di inviarti uno screenshot/frame specifico.",
+                    new ArrayList<>(), baseUrl2, apiKey2, model2, 500);
+
+                return ResponseEntity.ok(Map.of(
+                    "analysis",     contextAnalysis,
+                    "videoType",    videoType,
+                    "sizeKb",       sizeKb,
+                    "mode",         "video_metadata",
+                    "hint",         "Per analisi frame: usa il chip Screenshot e invia l'immagine",
+                    "date",         today()
+                ));
+            } catch (Exception e) {
+                return ResponseEntity.status(400).body(Map.of("error","Video non valido: " + e.getMessage()));
+            }
+        }
+
+        return ResponseEntity.badRequest().body(Map.of(
+            "error",    "Invia frameBase64 (JPEG) o videoBase64 (MP4/WebM)",
+            "example",  "POST /api/video/analyze con {frameBase64: '<jpeg_base64>', task: 'Descrivi la scena'}"
+        ));
+    }
+
+    @PostMapping("/video/analyze-frames")
+    public ResponseEntity<Object> analyzeVideoFrames(@RequestBody Map<String,Object> body) {
+        @SuppressWarnings("unchecked")
+        List<String> frames  = (List<String>) body.getOrDefault("frames", new ArrayList<>());
+        String task          = (String) body.getOrDefault("task","Descrivi la sequenza");
+        String sessionId     = (String) body.getOrDefault("sessionId","global");
+        String baseUrl2      = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2       = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
+        String model2        = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+
+        if (frames.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error","Lista frames vuota"));
+
+        List<Map<String,Object>> frameResults = new ArrayList<>();
+        StringBuilder fullTranscript = new StringBuilder();
+
+        for (int i = 0; i < Math.min(frames.size(), 5); i++) {
+            try {
+                String frameB64 = frames.get(i);
+                String frameTask = "Frame " + (i+1) + "/" + frames.size() + ": " + task;
+                String analysis = analyzeImageBase64(frameB64, frameTask, baseUrl2, apiKey2, model2);
+                Map<String,Object> fr = new LinkedHashMap<>();
+                fr.put("frame",    i+1);
+                fr.put("analysis", analysis);
+                frameResults.add(fr);
+                fullTranscript.append("Frame ").append(i+1).append(": ").append(analysis).append("\n\n");
+            } catch (Exception e) {
+                frameResults.add(Map.of("frame", i+1, "error", e.getMessage()));
+            }
+        }
+
+        // Sintesi finale della sequenza
+        String summary = "";
+        if (fullTranscript.length() > 0) {
+            try {
+                summary = callLLM(
+                    "Sei un analizzatore video. Sintetizza la sequenza di frame in italiano.",
+                    "Task: " + task + "\n\nAnalisi frame:\n" + fullTranscript,
+                    new ArrayList<>(), baseUrl2, apiKey2, model2, 800);
+                ragIndexDocument(sessionId + "/video_analysis_" + System.currentTimeMillis(), summary);
+            } catch (Exception e) {
+                summary = "Sintesi non disponibile: " + e.getMessage();
+            }
+        }
+
+        return ResponseEntity.ok(Map.of(
+            "frames",    frameResults,
+            "summary",   summary,
+            "total",     frames.size(),
+            "analyzed",  frameResults.size(),
+            "ragIndexed",!summary.isBlank(),
+            "date",      today()
+        ));
+    }
+
     @PostMapping("/video/generate")
     public ResponseEntity<Object> videoGenerate(@RequestBody Map<String,String> body) {
         String description = body.getOrDefault("description", body.getOrDefault("goal","")).trim();
@@ -3484,11 +3820,57 @@ public class ChatController {
         } catch (Exception e) { log.warn("Ollama: {}", e.getMessage()); return null; }
     }
 
-    // calculateReward con interazione utente
+    // ── RLHF AUTOMATICO: valutatore LLM assegna reward senza intervento umano ──
+    private final java.util.concurrent.ExecutorService rlhfExecutor =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
+
     private double calculateReward(String sid, String query, String resp, String agent, boolean interacted) {
         double r = computeReward(query, resp, agent);
         if (interacted) r += 0.3;
-        return Math.max(-0.5, Math.min(1.0, r));
+        double finalReward = Math.max(-0.5, Math.min(1.0, r));
+        // Avvia RLHF automatico in background (non blocca la risposta)
+        rlhfExecutor.submit(() -> autoRLHF(sid, query, resp, agent, finalReward));
+        return finalReward;
+    }
+
+    private void autoRLHF(String sid, String query, String response, String agent, double baseReward) {
+        // Skip se Groq è in rate limit
+        if (rateLimitUntil > System.currentTimeMillis()) return;
+        try {
+            String baseUrl = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
+            String apiKey  = env("AI_API_KEY",  "");
+            String model   = env("AI_MODEL",    "llama-3.3-70b-versatile");
+            if (apiKey.isEmpty()) return;
+
+            // Prompt valutatore compatto (max 200 token per risparmiare quota)
+            String evalPrompt =
+                "Valuta questa risposta AI da 0.0 a 1.0. Rispondi SOLO con il numero decimale.\n" +
+                "Criteri: accuratezza(0.4) + completezza(0.3) + chiarezza(0.3)\n" +
+                "Domanda: " + query.substring(0, Math.min(100, query.length())) + "\n" +
+                "Risposta: " + response.substring(0, Math.min(200, response.length())) + "\n" +
+                "Score:";
+
+            String scoreStr = callLLM("Sei un valutatore AI. Rispondi SOLO con un numero da 0.0 a 1.0.",
+                evalPrompt, new ArrayList<>(), baseUrl, apiKey, model, 10);
+
+            double autoReward = Double.parseDouble(scoreStr.trim().replaceAll("[^0-9.]","").substring(0, Math.min(4, scoreStr.trim().length())));
+            autoReward = Math.max(0.0, Math.min(1.0, autoReward));
+
+            // Media pesata: 70% auto, 30% base
+            double finalReward = autoReward * 0.7 + baseReward * 0.3;
+            backpropagate(agent, query, finalReward);
+            log.debug("RLHF auto: agent={} autoScore={} base={} final={}", agent,
+                String.format("%.2f", autoReward), String.format("%.2f", baseReward),
+                String.format("%.2f", finalReward));
+
+            // Salva in LTM se reward alta (risposta di qualita)
+            if (finalReward > 0.75) {
+                String fact = "buona_risposta::" + query.substring(0, Math.min(50, query.length()));
+                consolidateToLTM(sid, fact);
+            }
+        } catch (Exception e) {
+            log.debug("RLHF auto skip: {}", e.getMessage());
+        }
     }
 
     private String synthesizerPrompt() {
@@ -3886,6 +4268,144 @@ public class ChatController {
         if (q.contains("strategia")) return List.of("strategist");
         return List.of("reasoner");
     }
+    // ════════════════════════════════════════════════════════════════════════
+    // PUPPETEER BROWSER AGENT — controllo browser completo
+    // Usa Browserless API: BROWSERLESS_TOKEN env var
+    // Gratuito: https://www.browserless.io (6h/mese)
+    // Supporta: navigate, click, type, screenshot, evaluate JS, fill form
+    // ════════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/manus/browser")
+    public ResponseEntity<Object> manusBrowserControl(@RequestBody Map<String,Object> body) {
+        String action    = (String) body.getOrDefault("action", "navigate");
+        String url       = (String) body.getOrDefault("url", "");
+        String selector  = (String) body.getOrDefault("selector", "");
+        String value     = (String) body.getOrDefault("value", "");
+        String jsCode    = (String) body.getOrDefault("js", "");
+        String sessionId = (String) body.getOrDefault("sessionId", "global");
+        String token     = env("BROWSERLESS_TOKEN", "");
+        String baseUrl2  = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
+        String apiKey2   = env("AI_API_KEY",  "");
+        String model2    = env("AI_MODEL",    "llama-3.3-70b-versatile");
+
+        // Se Browserless non disponibile, usa manusBrowse come fallback
+        if (token.isEmpty() && !url.isEmpty()) {
+            Map<String,String> browseBody = new HashMap<>();
+            browseBody.put("url", url);
+            browseBody.put("task", "Estrai il contenuto principale e i link");
+            browseBody.put("sessionId", sessionId);
+            browseBody.put("baseUrl", baseUrl2);
+            browseBody.put("apiKey", apiKey2);
+            browseBody.put("model", model2);
+            ResponseEntity<Object> fallback = manusBrowse(browseBody);
+            Map<String,Object> fr = new LinkedHashMap<>();
+            Object fb = fallback.getBody();
+            if (fb instanceof Map) fr.putAll((Map<?,?>)fb == null ? new HashMap<>() :
+                ((Map<String,Object>)(Map<?,?>)fb));
+            fr.put("browserlessAvailable", false);
+            fr.put("hint", "Aggiungi BROWSERLESS_TOKEN su Render per controllo browser completo");
+            return ResponseEntity.ok(fr);
+        }
+
+        try {
+            org.springframework.web.client.RestTemplate bt =
+                new org.springframework.web.client.RestTemplate();
+            org.springframework.http.client.SimpleClientHttpRequestFactory bf =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+            bf.setConnectTimeout(15000); bf.setReadTimeout(30000);
+            bt.setRequestFactory(bf);
+
+            HttpHeaders h = new HttpHeaders();
+            h.setContentType(MediaType.APPLICATION_JSON);
+
+            String browserlessEndpoint;
+            ObjectNode payload = MAPPER.createObjectNode();
+
+            switch (action) {
+                case "screenshot": {
+                    browserlessEndpoint = "https://chrome.browserless.io/screenshot?token=" + token;
+                    payload.put("url", url);
+                    ObjectNode opts = MAPPER.createObjectNode();
+                    opts.put("fullPage", false);
+                    opts.put("type", "jpeg");
+                    opts.put("quality", 80);
+                    payload.set("options", opts);
+                    ResponseEntity<byte[]> ss = bt.postForEntity(browserlessEndpoint,
+                        new HttpEntity<>(MAPPER.writeValueAsString(payload), h), byte[].class);
+                    if (ss.getBody() != null) {
+                        String b64 = java.util.Base64.getEncoder().encodeToString(ss.getBody());
+                        return ResponseEntity.ok(Map.of(
+                            "action", "screenshot", "url", url,
+                            "image", b64, "imageType", "image/jpeg",
+                            "bytes", ss.getBody().length, "date", today()
+                        ));
+                    }
+                    break;
+                }
+                case "evaluate":
+                case "click":
+                case "type":
+                case "navigate":
+                default: {
+                    browserlessEndpoint = "https://chrome.browserless.io/function?token=" + token;
+                    // Build JS function based on action
+                    String script;
+                    if (!jsCode.isEmpty()) {
+                        script = "module.exports = async ({ page }) => { " + jsCode + " }";
+                    } else if (action.equals("click")) {
+                        script = "module.exports = async ({ page }) => { await page.goto('" + url + "'); " +
+                            "await page.waitForSelector('" + selector + "', {timeout:5000}); " +
+                            "await page.click('" + selector + "'); " +
+                            "await page.waitForTimeout(1000); " +
+                            "return { clicked: true, url: page.url(), title: await page.title() }; }";
+                    } else if (action.equals("type")) {
+                        script = "module.exports = async ({ page }) => { await page.goto('" + url + "'); " +
+                            "await page.waitForSelector('" + selector + "', {timeout:5000}); " +
+                            "await page.type('" + selector + "', '" + value.replace("'","\'") + "'); " +
+                            "return { typed: true, selector: '" + selector + "' }; }";
+                    } else if (action.equals("extract")) {
+                        script = "module.exports = async ({ page }) => { await page.goto('" + url + "'); " +
+                            "await page.waitForTimeout(2000); " +
+                            "const content = await page.evaluate(() => document.body.innerText); " +
+                            "const title = await page.title(); " +
+                            "const links = await page.evaluate(() => Array.from(document.links).slice(0,20).map(a => a.href)); " +
+                            "return { title, content: content.substring(0, 3000), links }; }";
+                    } else {
+                        script = "module.exports = async ({ page }) => { await page.goto('" + url + "'); " +
+                            "await page.waitForTimeout(2000); " +
+                            "return { url: page.url(), title: await page.title() }; }";
+                    }
+                    payload.put("code", script);
+                    ResponseEntity<String> fn = bt.postForEntity(browserlessEndpoint,
+                        new HttpEntity<>(MAPPER.writeValueAsString(payload), h), String.class);
+                    JsonNode result = MAPPER.readTree(fn.getBody());
+
+                    // Indicizza il contenuto estratto nel RAG
+                    String pageContent = result.path("content").asText("");
+                    if (!pageContent.isBlank())
+                        ragIndexDocument(sessionId + "/browser_" + System.currentTimeMillis(), pageContent);
+
+                    Map<String,Object> r = new LinkedHashMap<>();
+                    r.put("action",  action);
+                    r.put("url",     url);
+                    r.put("result",  result);
+                    r.put("ragIndexed", !pageContent.isBlank());
+                    r.put("date",    today());
+                    return ResponseEntity.ok(r);
+                }
+            }
+
+            return ResponseEntity.ok(Map.of("status","completed","action",action,"date",today()));
+
+        } catch (Exception e) {
+            log.warn("Puppeteer browser error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of(
+                "error",  "Browser agent error: " + e.getMessage(),
+                "hint",   "Verifica BROWSERLESS_TOKEN su Render"
+            ));
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // PUNTO 12: MoE Routing — instrada query complesse a modelli diversi
     // GROQ_MODEL_COMPLEX e GROQ_MODEL_FAST configurabili su Render
@@ -3917,6 +4437,21 @@ public class ChatController {
     }
     private String callLLMWithTemp(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens, double temperature) throws Exception {
+
+        // ── Rate limit check: se Groq è bloccato, usa fallback autonomo ──
+        long now = System.currentTimeMillis();
+        if (rateLimitUntil > now) {
+            log.warn("Groq rate limited fino a {}, uso fallback autonomo", new java.util.Date(rateLimitUntil));
+            localFallbacks.incrementAndGet();
+            return autonomousFallback(system, userMsg, history);
+        }
+
+        // Resetta contatore giornaliero
+        if (now - groqDayStart > 86_400_000L) {
+            groqCallsToday.set(0);
+            groqDayStart = now;
+        }
+
         ObjectNode req = MAPPER.createObjectNode();
         req.put("model", model); req.put("max_tokens", maxTokens);
         req.put("temperature", temperature); req.put("top_p", 0.95);
@@ -3934,10 +4469,144 @@ public class ChatController {
         req.set("messages", messages);
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         if (!apiKey.isEmpty()) h.setBearerAuth(apiKey);
-        h.set("HTTP-Referer","https://space-ai-940e.onrender.com"); h.set("X-Title","SPACE AI"); h.set("User-Agent","SPACE-AI/2.0");
+        h.set("HTTP-Referer","https://space-ai-940e.onrender.com");
+        h.set("X-Title","SPACE AI"); h.set("User-Agent","SPACE-AI/4.0");
         String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
-        ResponseEntity<String> response = restTemplate.postForEntity(endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
-        return MAPPER.readTree(response.getBody()).path("choices").get(0).path("message").path("content").asText();
+
+        try {
+            groqCallsToday.incrementAndGet();
+            ResponseEntity<String> response = restTemplate.postForEntity(
+                endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+            return MAPPER.readTree(response.getBody()).path("choices").get(0)
+                .path("message").path("content").asText();
+
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            String body = e.getResponseBodyAsString();
+
+            // ── 429 Rate Limit: calcola quando Groq si resetta ─────────────
+            if (e.getStatusCode().value() == 429) {
+                long retryMs = 2_100_000L; // default 35 minuti
+                // Estrai "Please try again in Xm Ys" dal messaggio
+                try {
+                    java.util.regex.Matcher m429 = java.util.regex.Pattern
+                        .compile("try again in (\d+)m(\d+\.?\d*)s").matcher(body);
+                    if (m429.find()) {
+                        long mins = Long.parseLong(m429.group(1));
+                        double secs = Double.parseDouble(m429.group(2));
+                        retryMs = (long)(mins * 60_000 + secs * 1000) + 5000; // +5s buffer
+                    }
+                } catch (Exception ignored) {}
+                rateLimitUntil = System.currentTimeMillis() + retryMs;
+                log.error("Groq 429 — rate limit. Riprovo tra {}ms. Uso fallback autonomo.", retryMs);
+                localFallbacks.incrementAndGet();
+                return autonomousFallback(system, userMsg, history);
+            }
+
+            // ── 503 / 502: circuit breaker ─────────────────────────────────
+            if (e.getStatusCode().value() >= 500) {
+                circuitOpenTime = System.currentTimeMillis();
+                log.error("Groq {}. Circuit breaker aperto.", e.getStatusCode().value());
+                return autonomousFallback(system, userMsg, history);
+            }
+            throw e;
+        } catch (Exception e) {
+            // Qualsiasi altro errore di rete — fallback autonomo
+            log.error("Groq unreachable: {}. Uso fallback autonomo.", e.getMessage());
+            return autonomousFallback(system, userMsg, history);
+        }
+    }
+
+    /**
+     * AUTONOMOUS FALLBACK — risponde senza LLM usando:
+     * 1. KNN Cache (risposta semanticamente simile già data)
+     * 2. MSA Memory (fatti dalla memoria)
+     * 3. RAG (documenti indicizzati)
+     * 4. Neural routing + risposta basata su agente selezionato
+     * 5. Risposta di emergenza con informazioni di stato
+     */
+    private String autonomousFallback(String system, String userMsg, List<Map<String,String>> history) {
+        String query = userMsg != null ? userMsg : "";
+        String sessionId = "global"; // best effort
+
+        log.info("AutonomousFallback attivo per: {}", query.substring(0, Math.min(60, query.length())));
+
+        // 1. KNN Cache — risposta semanticamente simile
+        String knnHit = knnCacheGet(query);
+        if (knnHit != null && !knnHit.isBlank()) {
+            log.info("AutonomousFallback: KNN cache hit");
+            return "\u26A1 *[Risposta dalla memoria semantica - Groq temporaneamente non disponibile]*\n\n" + knnHit;
+        }
+
+        // 2. MSA Memory — fatti rilevanti dalla memoria
+        String msaMem = msaRetrieveUnified(query, sessionId);
+        if (!msaMem.isBlank()) {
+            log.info("AutonomousFallback: MSA memory hit");
+            return buildAutonomousResponse(query, msaMem, "memoria MSA");
+        }
+
+        // 3. RAG — documenti indicizzati
+        String ragCtx = ragRetrieve(query, sessionId);
+        if (!ragCtx.isBlank()) {
+            log.info("AutonomousFallback: RAG hit");
+            return buildAutonomousResponse(query, ragCtx, "documenti RAG");
+        }
+
+        // 4. Web search come fonte dati (non richiede LLM)
+        try {
+            String webData = searchGoogle(query);
+            if (!webData.isBlank()) {
+                log.info("AutonomousFallback: web search hit");
+                return buildAutonomousResponse(query, webData, "ricerca web live");
+            }
+        } catch (Exception we) { log.debug("Web search in fallback: {}", we.getMessage()); }
+
+        // 5. Risposta di stato con info sul rate limit
+        long resetIn = (rateLimitUntil - System.currentTimeMillis()) / 1000;
+        String resetStr = resetIn > 60
+            ? String.format("%dm %ds", resetIn/60, resetIn%60)
+            : resetIn + " secondi";
+        long resetIn = (rateLimitUntil - System.currentTimeMillis()) / 1000;
+        String resetStr = resetIn > 60
+            ? String.format("%dm %ds", resetIn/60, resetIn%60)
+            : resetIn + " secondi";
+        return "\u26A0\uFE0F **SPACE AI - Modalita Autonoma Attiva**\n\n"
+             + "Il provider LLM (Groq) ha raggiunto il limite giornaliero di token.\n"
+             + "**Ripristino automatico tra:** " + resetStr + "\n\n"
+             + "In questa modalita SPACE AI risponde usando:\n"
+             + "- \uD83E\uDDE0 Memoria semantica MSA\n"
+             + "- \uD83D\uDCDA RAG (" + ragStore.size() + " documenti)\n"
+             + "- \uD83C\uDF10 Ricerca web live\n"
+             + "- \uD83D\uDCBE Cache KNN\n\n"
+             + "**Domanda ricevuta:** " + query.substring(0, Math.min(100, query.length())) + "\n\n"
+             + "*Riprova tra " + resetStr + " per la risposta completa.*\n"
+             + "*(Fallback autonomi oggi: " + localFallbacks.get() + ")*";
+    }
+
+    private String buildAutonomousResponse(String query, String context, String source) {
+        // Costruisce una risposta strutturata dal contesto senza LLM
+        String[] sentences = context.split("[.!?\n]+");
+        StringBuilder resp = new StringBuilder();
+        resp.append("\uD83E\uDD16 **SPACE AI - Risposta Autonoma** *(fonte: ").append(source).append(")*\n\n");
+        // Trova le frasi più rilevanti per la query
+        String q = query.toLowerCase();
+        String[] qWords = q.split("\s+");
+        List<String> relevant = new ArrayList<>();
+        for (String sent : sentences) {
+            if (sent.trim().length() < 15) continue;
+            long score = Arrays.stream(qWords)
+                .filter(w -> w.length() > 3 && sent.toLowerCase().contains(w))
+                .count();
+            if (score > 0) relevant.add(sent.trim());
+        }
+        if (relevant.isEmpty()) {
+            // Usa prime frasi del contesto
+            Arrays.stream(sentences).limit(5)
+                .filter(s -> s.trim().length() > 20)
+                .forEach(s -> resp.append(s.trim()).append("\n\n"));
+        } else {
+            relevant.stream().limit(6).forEach(s -> resp.append("\u2022 ").append(s).append("\n"));
+        }
+        resp.append("\n*\u26A1 Risposta generata autonomamente - LLM ripristino automatico in corso*");
     }
     private List<Map<String,String>> loadHistory(String sessionId, String url, String key) {
         List<Map<String,String>> history = new ArrayList<>();
@@ -4532,6 +5201,29 @@ public class ChatController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @GetMapping("/status")
+    public ResponseEntity<Object> systemStatus() {
+        long now = System.currentTimeMillis();
+        boolean rateLimited = rateLimitUntil > now;
+        long resetInSec = rateLimited ? (rateLimitUntil - now) / 1000 : 0;
+        Map<String,Object> s = new LinkedHashMap<>();
+        s.put("status",          rateLimited ? "AUTONOMOUS_MODE" : "OK");
+        s.put("groqAvailable",   !rateLimited);
+        s.put("rateLimited",     rateLimited);
+        s.put("resetInSeconds",  resetInSec);
+        s.put("resetAt",         rateLimited ? new java.util.Date(rateLimitUntil).toString() : "N/A");
+        s.put("groqCallsToday",  groqCallsToday.get());
+        s.put("localFallbacks",  localFallbacks.get());
+        s.put("knnCacheSize",    (int)Arrays.stream(ringCache).filter(e -> e != null).count());
+        s.put("ragDocs",         ragStore.size());
+        s.put("ragChunks",       ragStore.values().stream().mapToInt(List::size).sum());
+        s.put("sharedKnowledge", sharedKnowledge.size());
+        s.put("embedVocab",      vocabSize.get());
+        s.put("circuitOpen",     circuitOpenTime > now - 30000);
+        s.put("date",            today());
+        return ResponseEntity.ok(s);
     }
 
     @GetMapping("/health")
