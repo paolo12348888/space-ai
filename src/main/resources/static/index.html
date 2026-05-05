@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>SPACE AI</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
@@ -13,7 +15,7 @@
   --text:#e2eaf4;--muted:rgba(180,200,230,0.4);--bg2:#161b24;
   --user-bg:rgba(0,180,230,0.1);--user-border:rgba(0,200,255,0.25);
 }
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter",sans-serif;overflow:hidden}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter",sans-serif;overflow:hidden;overscroll-behavior-y:auto}
 .layout{height:100dvh;display:flex;position:relative}
 .sidebar{width:260px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 12px;gap:6px;transition:transform .3s ease;z-index:200;overflow-y:auto}
 @media(max-width:768px){.sidebar{position:fixed;top:0;left:0;height:100%;transform:translateX(-100%)}}
@@ -276,6 +278,91 @@ var attachedFiles=[];
 var isRec=false,recog=null,curSpeech=null;
 var curMode="auto";
 var spacesOn=false;
+var spacesWaiting=false;
+
+// ── CHAT PERSISTENCE — salva/carica conversazioni da localStorage ─────────
+var MAX_STORED_CHATS=20;
+function saveChatToStorage(){
+  try{
+    var msgs=[];
+    msgsEl.querySelectorAll(".row").forEach(function(row){
+      var isUser=row.classList.contains("user");
+      var bubble=row.querySelector(".bubble");
+      if(bubble&&bubble.textContent.trim()){
+        msgs.push({role:isUser?"user":"ai",text:bubble.innerHTML,ts:Date.now()});
+      }
+    });
+    if(msgs.length===0)return;
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    var existing=chats.findIndex(function(c){return c.id===SID;});
+    var entry={id:SID,ts:Date.now(),title:msgs[0]?msgs[0].text.replace(/<[^>]*>/g,"").slice(0,40):"Chat",msgs:msgs};
+    if(existing>=0)chats[existing]=entry;
+    else chats.unshift(entry);
+    if(chats.length>MAX_STORED_CHATS)chats=chats.slice(0,MAX_STORED_CHATS);
+    localStorage.setItem("spaceai_chats",JSON.stringify(chats));
+  }catch(e){console.warn("saveChatToStorage:",e);}
+}
+function loadChatFromStorage(chatId){
+  try{
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    var chat=chats.find(function(c){return c.id===chatId;});
+    if(!chat)return false;
+    msgsEl.innerHTML="";
+    SID=chat.id;
+    chat.msgs.forEach(function(m){
+      var row=document.createElement("div");row.className="row "+(m.role==="user"?"user":"ai");
+      var bub=document.createElement("div");bub.className="bubble";
+      bub.innerHTML=m.text;
+      if(m.role==="ai"){
+        var av=document.createElement("div");av.className="av";
+        var img=document.createElement("img");img.src=LOGO;av.appendChild(img);
+        row.appendChild(av);
+      }
+      row.appendChild(bub);msgsEl.appendChild(row);
+    });
+    msgsEl.scrollTop=msgsEl.scrollHeight;
+    return true;
+  }catch(e){return false;}
+}
+function renderChatHistory(){
+  var histList=document.getElementById("chatHistoryList");
+  if(!histList)return;
+  histList.innerHTML="";
+  try{
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    if(chats.length===0){
+      histList.innerHTML="<div style='font-size:.75rem;opacity:.4;padding:8px 12px'>Nessuna chat salvata</div>";
+      return;
+    }
+    chats.forEach(function(c){
+      var d=new Date(c.ts);
+      var dateStr=d.toLocaleDateString("it-IT",{day:"numeric",month:"short"})+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
+      var item=document.createElement("div");item.className="sbi"+(c.id===SID?" on":"");
+      item.style.cssText="flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px";
+      item.innerHTML="<span style='font-size:.8rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%'>"+
+        (c.title||"Chat")+"</span>"+
+        "<span style='font-size:.7rem;opacity:.5'>"+dateStr+"</span>";
+      item.onclick=function(){loadChatFromStorage(c.id);renderChatHistory();closeSB();};
+      // Bottone elimina
+      var del=document.createElement("button");
+      del.style.cssText="position:absolute;right:8px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:.9rem;opacity:0;transition:.2s";
+      del.innerHTML="&#128465;";del.title="Elimina";
+      del.onclick=function(e){e.stopPropagation();deleteChatFromStorage(c.id);renderChatHistory();};
+      item.style.position="relative";
+      item.onmouseenter=function(){del.style.opacity="1";};
+      item.onmouseleave=function(){del.style.opacity="0";};
+      item.appendChild(del);
+      histList.appendChild(item);
+    });
+  }catch(e){console.warn("renderChatHistory:",e);}
+}
+function deleteChatFromStorage(chatId){
+  try{
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    chats=chats.filter(function(c){return c.id!==chatId;});
+    localStorage.setItem("spaceai_chats",JSON.stringify(chats));
+  }catch(e){}
+}
 var SID="s"+Math.random().toString(36).slice(2,10)+Date.now();
 var lastAgent="reasoner";
 var lastQuery="";
@@ -339,24 +426,69 @@ function setMode(m){
   };
   inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
+var spacesWaiting=false; // true mentre aspetta risposta AI o parla
 function startSpaces(){
-  curMode="spaces";spacesOn=true;setMode("spaces");closeSB();
+  curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
   addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
   speak("SPACES attivato. Sono pronto.",null);
-  listenLoop();
 }
 function listenLoop(){
-  if(!spacesOn)return;
+  if(!spacesOn||spacesWaiting)return; // NON riascoltare se in attesa risposta
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return;
-  var r=new SR();r.lang="it-IT";r.continuous=false;r.interimResults=false;
-  r.onstart=function(){document.getElementById("recBar").classList.add("on");document.getElementById("recTxt").textContent="&#127756; SPACES in ascolto...";};
-  r.onresult=function(e){var t=e.results[0][0].transcript.trim();if(t){inpEl.value=t;sendMsg();}};
-  r.onend=function(){document.getElementById("recBar").classList.remove("on");if(spacesOn)setTimeout(listenLoop,1500);};
-  r.onerror=function(){document.getElementById("recBar").classList.remove("on");if(spacesOn)setTimeout(listenLoop,2000);};
-  r.start();
+  if(!SR){addRow("Browser non supportato. Usa Chrome.","err");return;}
+  var r=new SR();
+  r.lang="it-IT";r.continuous=false;r.interimResults=false;
+  r.maxAlternatives=1;
+  r.onstart=function(){
+    document.getElementById("recBar").classList.add("on");
+    document.getElementById("recTxt").textContent="&#127756; SPACES in ascolto...";
+  };
+  r.onresult=function(e){
+    var t=e.results[0][0].transcript.trim();
+    if(t&&t.length>1){
+      spacesWaiting=true; // blocca il riascolto finché non risponde
+      document.getElementById("recBar").classList.remove("on");
+      document.getElementById("recTxt").textContent="&#8987; Elaborazione...";
+      inpEl.value=t;
+      sendMsg(); // sendMsg richiama listenLoop alla fine via speak.onend
+    }
+  };
+  r.onend=function(){
+    document.getElementById("recBar").classList.remove("on");
+    // Riavvia SOLO se non stiamo aspettando risposta
+    if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1000);
+  };
+  r.onerror=function(ev){
+    document.getElementById("recBar").classList.remove("on");
+    // no-speech = normale, non è un errore
+    if(ev.error==="no-speech"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,800);
+    else if(ev.error!=="aborted"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,2500);
+  };
+  try{r.start();}catch(e){if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1500);}
 }
 inpEl.addEventListener("input",function(){inpEl.style.height="auto";inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";});
+// Carica cronologia chat all'avvio
+renderChatHistory();
+// Ripristina ultima chat se esiste
+(function(){
+  try{
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    if(chats.length>0&&chats[0].msgs&&chats[0].msgs.length>0){
+      // Mostra pulsante "Riprendi ultima chat"
+      var resumeBtn=document.createElement("div");
+      resumeBtn.style.cssText="margin-top:12px;padding:8px 16px;border-radius:10px;background:var(--accent-dim);border:1px solid rgba(0,200,255,0.2);color:var(--accent);font-size:.82rem;cursor:pointer;text-align:center";
+      resumeBtn.innerHTML="&#9654; Riprendi ultima chat";
+      resumeBtn.onclick=function(){
+        loadChatFromStorage(chats[0].id);
+        renderChatHistory();
+        var w=document.getElementById("welcome");if(w)w.remove();
+        resumeBtn.remove();
+      };
+      var welcome=document.getElementById("welcome");
+      if(welcome)welcome.appendChild(resumeBtn);
+    }
+  }catch(e){}
+})();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 function handleFiles(f){for(var i=0;i<f.length;i++){if(!attachedFiles.find(function(x){return x.name===f[i].name;}))attachedFiles.push(f[i]);}renderFiles();}
 function getFileIcon(f){
@@ -400,7 +532,14 @@ function speak(text,btn){
   for(var p of pref){var iv=vs.find(function(v){return v.name.includes(p)&&v.lang.startsWith("it");});if(iv){u.voice=iv;break;}}
   if(!u.voice){var it=vs.filter(function(v){return v.lang.startsWith("it");});if(it.length)u.voice=it[0];}
   u.onstart=function(){curSpeech=u;if(btn)btn.classList.add("on");};
-  u.onend=u.onerror=function(){curSpeech=null;if(btn)btn.classList.remove("on");if(spacesOn&&!btnEl.disabled)setTimeout(listenLoop,800);};
+  u.onend=u.onerror=function(){
+    curSpeech=null;
+    if(btn)btn.classList.remove("on");
+    if(spacesOn){
+      spacesWaiting=false; // risposta finita, si può riascoltare
+      setTimeout(listenLoop,600); // pausa naturale prima di riascoltare
+    }
+  };
   window.speechSynthesis.speak(u);
 }
 function renderMD(text){
@@ -420,7 +559,7 @@ function renderMD(text){
   return t;
 }
 function cpCode(btn){var c=btn.previousElementSibling.textContent;navigator.clipboard.writeText(c).then(function(){btn.textContent="OK";setTimeout(function(){btn.textContent="Copia";},1500);});}
-function newChat(){SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
+function newChat(){saveChatToStorage();SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;spacesWaiting=false;msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
 function removeWelcome(){var w=document.getElementById("welcome");if(w)w.remove();}
 function qs(t){inpEl.value=t;sendMsg();}
 function addRow(text,type){
@@ -698,13 +837,15 @@ async function sendMsg(){
         }
         // Immagine da altri agenti (image_gen)
         if(data.image && data.mode!=="visual_creative")addImgRow(data.image,data.imageType||"image/jpeg");
+        // SPACES: se non ha parlato (nessun testo da sintetizzare), sblocca ascolto
+        if(spacesOn&&!curSpeech){spacesWaiting=false;setTimeout(listenLoop,800);}
       }
     }
   }catch(e){
     removeTyping();
     addRow("Errore di rete: "+e.message,"err");
+    if(spacesOn){spacesWaiting=false;setTimeout(listenLoop,1500);}
   }finally{
-    // SEMPRE sblocca
     btnEl.disabled=false;
     inpEl.focus();
   }
@@ -936,6 +1077,31 @@ async function sendMsg(){
         addRow(txt,"ai");
       }).catch(function(e){addRow("\u274C Status non disponibile: "+e,"err");});
   }
+
+  // ── Pull-to-Refresh ─────────────────────────────────────────────────────
+  (function(){
+    var startY=0,ptrActive=false,ptrBar=null;
+    function createPTRBar(){
+      if(ptrBar)return;
+      ptrBar=document.createElement("div");
+      ptrBar.id="ptrBar";
+      ptrBar.style.cssText="position:fixed;top:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transition:transform .3s;z-index:9999;transform-origin:left";
+      document.body.appendChild(ptrBar);
+    }
+    createPTRBar();
+    document.addEventListener("touchstart",function(e){
+      if(window.scrollY===0)startY=e.touches[0].clientY;
+    },{passive:true});
+    document.addEventListener("touchmove",function(e){
+      if(!startY)return;
+      var dy=e.touches[0].clientY-startY;
+      if(dy>60&&window.scrollY===0){ptrActive=true;if(ptrBar)ptrBar.style.transform="scaleX("+(Math.min(dy,150)/150)+")";}
+    },{passive:true});
+    document.addEventListener("touchend",function(){
+      if(ptrActive){if(ptrBar)ptrBar.style.transform="scaleX(1)";setTimeout(function(){window.location.reload();},200);}
+      startY=0;ptrActive=false;
+    },{passive:true});
+  })();
 
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
   function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
