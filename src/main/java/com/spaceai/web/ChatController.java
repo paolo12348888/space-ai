@@ -5334,8 +5334,102 @@ public class ChatController {
     @GetMapping("/history/{sessionId}")
     public ResponseEntity<Object> getHistory(@PathVariable String sessionId) {
         String url = env("SUPABASE_URL",""); String key = env("SUPABASE_KEY","");
-        if (url.isEmpty()) return ResponseEntity.ok(Map.of("messages", List.of()));
-        return ResponseEntity.ok(Map.of("messages", loadHistory(sessionId, url, key)));
+        if (url.isEmpty()) {
+            // Fallback: usa neuralMemory in-memory
+            List<Map<String,String>> mem = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
+            return ResponseEntity.ok(Map.of("messages", mem, "source", "memory"));
+        }
+        List<Map<String,String>> msgs = loadHistory(sessionId, url, key);
+        return ResponseEntity.ok(Map.of("messages", msgs, "source", "supabase", "count", msgs.size()));
+    }
+
+    // Lista di tutte le sessioni con anteprima — per la cronologia sidebar
+    @GetMapping("/sessions")
+    public ResponseEntity<Object> getSessions() {
+        String url = env("SUPABASE_URL",""); String key = env("SUPABASE_KEY","");
+        List<Map<String,Object>> sessions = new ArrayList<>();
+
+        if (!url.isEmpty()) {
+            try {
+                HttpHeaders h = new HttpHeaders();
+                h.set("apikey", key); h.set("Authorization", "Bearer " + key);
+                // Prendi le ultime 20 sessioni distinte con il primo/ultimo messaggio
+                ResponseEntity<String> r = restTemplate.exchange(
+                    url + "/rest/v1/messages?select=session_id,content,role,created_at" +
+                    "&order=created_at.desc&limit=200",
+                    HttpMethod.GET, new HttpEntity<>(h), String.class);
+                JsonNode arr = MAPPER.readTree(r.getBody());
+
+                // Raggruppa per session_id
+                Map<String,Map<String,Object>> sessionMap = new java.util.LinkedHashMap<>();
+                for (JsonNode n : arr) {
+                    String sid    = n.path("session_id").asText();
+                    String role   = n.path("role").asText();
+                    String text   = n.path("content").asText();
+                    String ts     = n.path("created_at").asText();
+                    if (!sessionMap.containsKey(sid)) {
+                        Map<String,Object> s = new java.util.LinkedHashMap<>();
+                        s.put("sessionId", sid);
+                        s.put("lastMessage", text.substring(0, Math.min(60, text.length())));
+                        s.put("lastRole", role);
+                        s.put("timestamp", ts);
+                        s.put("messageCount", 1);
+                        // Prima userMessage come titolo
+                        if (role.equals("user"))
+                            s.put("title", text.substring(0, Math.min(50, text.length())));
+                        sessionMap.put(sid, s);
+                    } else {
+                        Map<String,Object> s = sessionMap.get(sid);
+                        s.put("messageCount", (int)s.get("messageCount") + 1);
+                        if (!s.containsKey("title") && role.equals("user"))
+                            s.put("title", text.substring(0, Math.min(50, text.length())));
+                    }
+                }
+                sessions.addAll(sessionMap.values().stream().limit(20).collect(Collectors.toList()));
+            } catch (Exception e) {
+                log.warn("Sessions list: {}", e.getMessage());
+            }
+        }
+
+        // Aggiungi anche sessioni in-memory non ancora su Supabase
+        neuralMemory.forEach((sid, msgs) -> {
+            if (sessions.stream().noneMatch(s -> sid.equals(s.get("sessionId"))) && !msgs.isEmpty()) {
+                Map<String,Object> s = new java.util.LinkedHashMap<>();
+                s.put("sessionId", sid);
+                String firstUser = msgs.stream()
+                    .filter(m -> "user".equals(m.get("role")))
+                    .map(m -> m.get("content"))
+                    .findFirst().orElse("Chat");
+                s.put("title", firstUser.substring(0, Math.min(50, firstUser.length())));
+                s.put("lastMessage", msgs.get(msgs.size()-1).get("content"));
+                s.put("messageCount", msgs.size());
+                s.put("timestamp", today());
+                s.put("source", "memory");
+                sessions.add(s);
+            }
+        });
+
+        return ResponseEntity.ok(Map.of("sessions", sessions, "total", sessions.size(), "date", today()));
+    }
+
+    // Elimina una sessione da Supabase
+    @DeleteMapping("/sessions/{sessionId}")
+    public ResponseEntity<Object> deleteSession(@PathVariable String sessionId) {
+        String url = env("SUPABASE_URL",""); String key = env("SUPABASE_KEY","");
+        neuralMemory.remove(sessionId);
+        if (!url.isEmpty()) {
+            try {
+                HttpHeaders h = new HttpHeaders();
+                h.set("apikey", key); h.set("Authorization", "Bearer " + key);
+                restTemplate.exchange(
+                    url + "/rest/v1/messages?session_id=eq." + sessionId,
+                    HttpMethod.DELETE, new HttpEntity<>(h), String.class);
+                return ResponseEntity.ok(Map.of("status","deleted","sessionId",sessionId));
+            } catch (Exception e) {
+                return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+            }
+        }
+        return ResponseEntity.ok(Map.of("status","deleted_from_memory","sessionId",sessionId));
     }
         @GetMapping("/neural/profile/{sessionId}")
     public ResponseEntity<Object> getNeuralProfile(@PathVariable String sessionId) {
