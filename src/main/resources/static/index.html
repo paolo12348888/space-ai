@@ -15,7 +15,7 @@
   --text:#e2eaf4;--muted:rgba(180,200,230,0.4);--bg2:#161b24;
   --user-bg:rgba(0,180,230,0.1);--user-border:rgba(0,200,255,0.25);
 }
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter",sans-serif;overflow:hidden;overscroll-behavior-y:auto}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter",sans-serif;overflow:hidden;overscroll-behavior-y:none}
 .layout{height:100dvh;display:flex;position:relative}
 .sidebar{width:260px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:16px 12px;gap:6px;transition:transform .3s ease;z-index:200;overflow-y:auto}
 @media(max-width:768px){.sidebar{position:fixed;top:0;left:0;height:100%;transform:translateX(-100%)}}
@@ -327,34 +327,88 @@ function loadChatFromStorage(chatId){
 function renderChatHistory(){
   var histList=document.getElementById("chatHistoryList");
   if(!histList)return;
-  histList.innerHTML="";
-  try{
-    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    if(chats.length===0){
-      histList.innerHTML="<div style='font-size:.75rem;opacity:.4;padding:8px 12px'>Nessuna chat salvata</div>";
-      return;
-    }
-    chats.forEach(function(c){
-      var d=new Date(c.ts);
-      var dateStr=d.toLocaleDateString("it-IT",{day:"numeric",month:"short"})+" "+d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"});
-      var item=document.createElement("div");item.className="sbi"+(c.id===SID?" on":"");
-      item.style.cssText="flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px";
-      item.innerHTML="<span style='font-size:.8rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%'>"+
-        (c.title||"Chat")+"</span>"+
-        "<span style='font-size:.7rem;opacity:.5'>"+dateStr+"</span>";
-      item.onclick=function(){loadChatFromStorage(c.id);renderChatHistory();closeSB();};
-      // Bottone elimina
-      var del=document.createElement("button");
-      del.style.cssText="position:absolute;right:8px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:.9rem;opacity:0;transition:.2s";
-      del.innerHTML="&#128465;";del.title="Elimina";
-      del.onclick=function(e){e.stopPropagation();deleteChatFromStorage(c.id);renderChatHistory();};
-      item.style.position="relative";
-      item.onmouseenter=function(){del.style.opacity="1";};
-      item.onmouseleave=function(){del.style.opacity="0";};
-      item.appendChild(del);
-      histList.appendChild(item);
+  // Carica dal backend prima, fallback a localStorage
+  fetch("/api/sessions")
+    .then(function(r){return r.json();})
+    .then(function(d){buildHistList(d.sessions||[]);})
+    .catch(function(){
+      // Fallback localStorage
+      var cache=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+      var sess=cache.map(function(c){
+        return {sessionId:c.id,title:c.title,timestamp:c.ts,messageCount:(c.msgs||[]).length};
+      });
+      buildHistList(sess);
     });
-  }catch(e){console.warn("renderChatHistory:",e);}
+}
+function buildHistList(sessions){
+  var histList=document.getElementById("chatHistoryList");
+  if(!histList)return;
+  histList.innerHTML="";
+  if(!sessions||sessions.length===0){
+    histList.innerHTML="<div style='font-size:.75rem;opacity:.4;padding:8px 12px'>Nessuna conversazione</div>";
+    return;
+  }
+  sessions.forEach(function(s){
+    var ts=s.timestamp?new Date(s.timestamp).toLocaleDateString("it-IT",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"-";
+    var item=document.createElement("div");
+    item.className="sbi"+(s.sessionId===SID?" on":"");
+    item.style.cssText="flex-direction:column;align-items:flex-start;gap:3px;padding:10px 12px;position:relative;cursor:pointer";
+    var title=(s.title||s.lastMessage||"Chat").replace(/[<>]/g,"");
+    item.innerHTML="<span style='font-size:.82rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 28px);display:block'>"+
+      title.slice(0,45)+"</span>"+
+      "<span style='font-size:.7rem;opacity:.45'>"+ts+(s.messageCount?" &middot; "+s.messageCount+" msg":"")+"</span>";
+    item.onclick=function(){loadChatFromBackend(s.sessionId);};
+    var del=document.createElement("button");
+    del.innerHTML="&#128465;";del.title="Elimina";
+    del.style.cssText="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:#ef4444;cursor:pointer;font-size:.9rem;opacity:0;transition:.2s;padding:2px 4px";
+    del.onclick=function(e){
+      e.stopPropagation();
+      if(!confirm("Elimina questa conversazione?"))return;
+      fetch("/api/sessions/"+s.sessionId,{method:"DELETE"})
+        .then(function(){
+          // rimuovi anche da localStorage
+          var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+          localStorage.setItem("spaceai_chats",JSON.stringify(chats.filter(function(c){return c.id!==s.sessionId;})));
+          if(s.sessionId===SID)newChat();
+          renderChatHistory();
+        }).catch(function(){renderChatHistory();});
+    };
+    item.onmouseenter=function(){del.style.opacity="1";};
+    item.onmouseleave=function(){del.style.opacity="0";};
+    item.appendChild(del);
+    histList.appendChild(item);
+  });
+}
+function loadChatFromBackend(sid){
+  SID=sid;
+  msgsEl.innerHTML="";
+  var welcome=document.getElementById("welcome");if(welcome)welcome.remove();
+  fetch("/api/history/"+sid)
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var msgs=d.messages||[];
+      if(msgs.length===0){
+        // Prova localStorage fallback
+        var cache=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+        var c=cache.find(function(x){return x.id===sid;});
+        if(c&&c.msgs){c.msgs.forEach(function(m){addRow(m.text||m.content||"",m.role==="user"?"user":"ai");});}
+        else addRow("Conversazione vuota.","ai");
+      } else {
+        msgs.forEach(function(m){
+          addRow(m.content||"",m.role==="user"?"user":"ai");
+        });
+      }
+      msgsEl.scrollTop=msgsEl.scrollHeight;
+      renderChatHistory();
+      closeSB();
+    })
+    .catch(function(e){
+      // Fallback locale
+      var cache=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+      var c=cache.find(function(x){return x.id===sid;});
+      if(c&&c.msgs){c.msgs.forEach(function(m){addRow(m.text||m.content||"",m.role==="user"?"user":"ai");});}
+      closeSB();
+    });
 }
 function deleteChatFromStorage(chatId){
   try{
@@ -467,26 +521,33 @@ function listenLoop(){
   try{r.start();}catch(e){if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1500);}
 }
 inpEl.addEventListener("input",function(){inpEl.style.height="auto";inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";});
-// Carica cronologia chat all'avvio
+// ── Avvio: carica sessioni e offri di riprendere l'ultima chat ───────────
 renderChatHistory();
-// Ripristina ultima chat se esiste
 (function(){
   try{
-    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    if(chats.length>0&&chats[0].msgs&&chats[0].msgs.length>0){
-      // Mostra pulsante "Riprendi ultima chat"
-      var resumeBtn=document.createElement("div");
-      resumeBtn.style.cssText="margin-top:12px;padding:8px 16px;border-radius:10px;background:var(--accent-dim);border:1px solid rgba(0,200,255,0.2);color:var(--accent);font-size:.82rem;cursor:pointer;text-align:center";
-      resumeBtn.innerHTML="&#9654; Riprendi ultima chat";
-      resumeBtn.onclick=function(){
-        loadChatFromStorage(chats[0].id);
-        renderChatHistory();
-        var w=document.getElementById("welcome");if(w)w.remove();
-        resumeBtn.remove();
-      };
-      var welcome=document.getElementById("welcome");
-      if(welcome)welcome.appendChild(resumeBtn);
-    }
+    var lastSid=localStorage.getItem("spaceai_last_sid");
+    fetch("/api/sessions").then(function(r){return r.json();}).then(function(d){
+      var sessions=d.sessions||[];
+      var toResume=lastSid&&sessions.find(function(s){return s.sessionId===lastSid;})?lastSid:
+                   sessions.length>0?sessions[0].sessionId:null;
+      if(toResume){
+        var btn=document.createElement("div");
+        btn.style.cssText="margin-top:14px;padding:10px 18px;border-radius:12px;background:rgba(0,200,255,0.08);border:1px solid rgba(0,200,255,0.25);color:var(--accent);font-size:.85rem;cursor:pointer;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px";
+        btn.innerHTML="&#9654; Riprendi ultima conversazione";
+        btn.onclick=function(){loadChatFromBackend(toResume);btn.remove();};
+        var welcome=document.getElementById("welcome");if(welcome)welcome.appendChild(btn);
+      }
+    }).catch(function(){
+      // Fallback localStorage
+      var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+      if(chats.length>0){
+        var btn=document.createElement("div");
+        btn.style.cssText="margin-top:14px;padding:10px 18px;border-radius:12px;background:rgba(0,200,255,0.08);border:1px solid rgba(0,200,255,0.25);color:var(--accent);font-size:.85rem;cursor:pointer;text-align:center";
+        btn.innerHTML="&#9654; Riprendi ultima conversazione";
+        btn.onclick=function(){loadChatFromBackend(chats[0].id);btn.remove();};
+        var welcome=document.getElementById("welcome");if(welcome)welcome.appendChild(btn);
+      }
+    });
   }catch(e){}
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
@@ -571,33 +632,52 @@ function addRow(text,type){
   var bub=document.createElement("div");bub.className="bubble";
   if(type==="user"){bub.textContent=text;}
   else{
-    bub.innerHTML=renderMD(text);
-    var acts=document.createElement("div");acts.className="acts";
-    var ab=document.createElement("button");ab.className="abtn";
-    ab.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Ascolta';
-    (function(t,b){ab.onclick=function(){speak(t,b);};})(text,ab);
-    acts.appendChild(ab);
-    var cb=document.createElement("button");cb.className="abtn";
-    cb.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copia';
-    (function(t,b){cb.onclick=function(){navigator.clipboard.writeText(t).then(function(){b.innerHTML=b.innerHTML.replace("Copia","OK");setTimeout(function(){b.innerHTML=b.innerHTML.replace("OK","Copia");},1500);});};})(text,cb);
-    acts.appendChild(cb);
-    // 👍 👎 Feedback per backpropagation
-    var tu=document.createElement("button");tu.className="abtn";tu.innerHTML="&#128077;";tu.title="Risposta utile";
-    var td=document.createElement("button");td.className="abtn";td.innerHTML="&#128078;";td.title="Risposta da migliorare";
-    (function(b1,b2){
-      b1.onclick=function(){
-        b1.style.color="var(--accent)";b1.disabled=true;b2.disabled=true;
-        fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"up"})});
-      };
-      b2.onclick=function(){
-        b2.style.color="#ff4444";b1.disabled=true;b2.disabled=true;
-        fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"down"})});
-      };
-    })(tu,td);
-    acts.appendChild(tu);acts.appendChild(td);
-    bub.appendChild(acts);
+    // ── Typewriter effect: risposta che appare lettera per lettera ──────
+    function buildActsBubble(bub2, text2){
+      var acts=document.createElement("div");acts.className="acts";
+      var ab=document.createElement("button");ab.className="abtn";
+      ab.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> Ascolta';
+      (function(t,b){ab.onclick=function(){speak(t,b);};})(text2,ab);
+      acts.appendChild(ab);
+      var cb=document.createElement("button");cb.className="abtn";
+      cb.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copia';
+      (function(t,b){cb.onclick=function(){navigator.clipboard.writeText(t).then(function(){b.innerHTML=b.innerHTML.replace("Copia","OK");setTimeout(function(){b.innerHTML=b.innerHTML.replace("OK","Copia");},1500);});};})(text2,cb);
+      acts.appendChild(cb);
+      var tu=document.createElement("button");tu.className="abtn";tu.innerHTML="&#128077;";tu.title="Risposta utile";
+      var td=document.createElement("button");td.className="abtn";td.innerHTML="&#128078;";td.title="Risposta da migliorare";
+      (function(b1,b2){
+        b1.onclick=function(){b1.style.color="var(--accent)";b1.disabled=true;b2.disabled=true;
+          fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"up"})});};
+        b2.onclick=function(){b2.style.color="#ff4444";b1.disabled=true;b2.disabled=true;
+          fetch("/api/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:SID,agent:lastAgent||"reasoner",query:lastQuery||"",thumbs:"down"})});};
+      })(tu,td);
+      acts.appendChild(tu);acts.appendChild(td);
+      bub2.appendChild(acts);
+    }
+    if(type==="err"){
+      bub.innerHTML=renderMD(text);
+      buildActsBubble(bub,text);
+    } else {
+      // Typewriter: mostra testo progressivamente
+      var rendered=renderMD(text);
+      var tmp=document.createElement("div");tmp.innerHTML=rendered;
+      var plain=tmp.textContent||tmp.innerText||"";
+      var speed=plain.length>600?4:plain.length>300?7:10; // ms per step
+      var step=Math.max(1,Math.floor(plain.length/200));   // caratteri per tick
+      var idx=0;
+      bub.textContent="▋";
+      var tw=setInterval(function(){
+        idx=Math.min(idx+step, plain.length);
+        bub.textContent=plain.slice(0,idx)+(idx<plain.length?"▋":"");
+        msgsEl.scrollTop=msgsEl.scrollHeight;
+        if(idx>=plain.length){
+          clearInterval(tw);
+          bub.innerHTML=rendered;       // sostituisce con HTML completo
+          buildActsBubble(bub,text);    // aggiunge pulsanti azione
+          msgsEl.scrollTop=msgsEl.scrollHeight;
+        }
+      },speed);
+    }
   }
   row.appendChild(av);row.appendChild(bub);msgsEl.appendChild(row);msgsEl.scrollTop=msgsEl.scrollHeight;
 }
@@ -1078,30 +1158,7 @@ async function sendMsg(){
       }).catch(function(e){addRow("\u274C Status non disponibile: "+e,"err");});
   }
 
-  // ── Pull-to-Refresh ─────────────────────────────────────────────────────
-  (function(){
-    var startY=0,ptrActive=false,ptrBar=null;
-    function createPTRBar(){
-      if(ptrBar)return;
-      ptrBar=document.createElement("div");
-      ptrBar.id="ptrBar";
-      ptrBar.style.cssText="position:fixed;top:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transition:transform .3s;z-index:9999;transform-origin:left";
-      document.body.appendChild(ptrBar);
-    }
-    createPTRBar();
-    document.addEventListener("touchstart",function(e){
-      if(window.scrollY===0)startY=e.touches[0].clientY;
-    },{passive:true});
-    document.addEventListener("touchmove",function(e){
-      if(!startY)return;
-      var dy=e.touches[0].clientY-startY;
-      if(dy>60&&window.scrollY===0){ptrActive=true;if(ptrBar)ptrBar.style.transform="scaleX("+(Math.min(dy,150)/150)+")";}
-    },{passive:true});
-    document.addEventListener("touchend",function(){
-      if(ptrActive){if(ptrBar)ptrBar.style.transform="scaleX(1)";setTimeout(function(){window.location.reload();},200);}
-      startY=0;ptrActive=false;
-    },{passive:true});
-  })();
+  
 
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
   function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
