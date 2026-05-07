@@ -5345,7 +5345,8 @@ public class ChatController {
 
     // Lista di tutte le sessioni con anteprima — per la cronologia sidebar
     @GetMapping("/sessions")
-    public ResponseEntity<Object> getSessions() {
+    public ResponseEntity<Object> getSessions(
+            @RequestParam(value="userId", required=false, defaultValue="") String userId) {
         String url = env("SUPABASE_URL",""); String key = env("SUPABASE_KEY","");
         List<Map<String,Object>> sessions = new ArrayList<>();
 
@@ -5353,10 +5354,12 @@ public class ChatController {
             try {
                 HttpHeaders h = new HttpHeaders();
                 h.set("apikey", key); h.set("Authorization", "Bearer " + key);
-                // Prendi le ultime 20 sessioni distinte con il primo/ultimo messaggio
+                // Se userId fornito, filtra per sessioni che iniziano con userId
+                String filter = userId.isEmpty() ? "" :
+                    "&session_id=like." + userId + "_*";
                 ResponseEntity<String> r = restTemplate.exchange(
                     url + "/rest/v1/messages?select=session_id,content,role,created_at" +
-                    "&order=created_at.desc&limit=200",
+                    "&order=created_at.desc&limit=200" + filter,
                     HttpMethod.GET, new HttpEntity<>(h), String.class);
                 JsonNode arr = MAPPER.readTree(r.getBody());
 
@@ -5392,7 +5395,9 @@ public class ChatController {
         }
 
         // Aggiungi anche sessioni in-memory non ancora su Supabase
+        // Filtra per userId se specificato
         neuralMemory.forEach((sid, msgs) -> {
+            if (!userId.isEmpty() && !sid.startsWith(userId)) return; // skip altri utenti
             if (sessions.stream().noneMatch(s -> sid.equals(s.get("sessionId"))) && !msgs.isEmpty()) {
                 Map<String,Object> s = new java.util.LinkedHashMap<>();
                 s.put("sessionId", sid);
