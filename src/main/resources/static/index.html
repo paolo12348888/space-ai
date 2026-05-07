@@ -294,8 +294,8 @@ function saveChatToStorage(){
     });
     if(msgs.length===0)return;
     var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    var existing=chats.findIndex(function(c){return c.id===SID;});
-    var entry={id:SID,ts:Date.now(),title:msgs[0]?msgs[0].text.replace(/<[^>]*>/g,"").slice(0,40):"Chat",msgs:msgs};
+    var existing=cache.findIndex(function(c){return c.id===SID;});
+    var entry={id:SID,userId:USER_ID,ts:Date.now(),title:msgs[0]?msgs[0].text.replace(/<[^>]*>/g,"").slice(0,40):"Chat",msgs:msgs};
     if(existing>=0)chats[existing]=entry;
     else chats.unshift(entry);
     if(chats.length>MAX_STORED_CHATS)chats=chats.slice(0,MAX_STORED_CHATS);
@@ -327,17 +327,23 @@ function loadChatFromStorage(chatId){
 function renderChatHistory(){
   var histList=document.getElementById("chatHistoryList");
   if(!histList)return;
-  // Carica dal backend prima, fallback a localStorage
-  fetch("/api/sessions")
+  // Passa USER_ID come filtro — il backend restituisce SOLO le sessioni di questo utente
+  fetch("/api/sessions?userId="+encodeURIComponent(USER_ID))
     .then(function(r){return r.json();})
-    .then(function(d){buildHistList(d.sessions||[]);})
-    .catch(function(){
-      // Fallback localStorage
-      var cache=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-      var sess=cache.map(function(c){
-        return {sessionId:c.id,title:c.title,timestamp:c.ts,messageCount:(c.msgs||[]).length};
+    .then(function(d){
+      // Filtra lato frontend per sicurezza extra: solo sessioni che iniziano con USER_ID
+      var mySessions=(d.sessions||[]).filter(function(s){
+        return !s.sessionId||s.sessionId.startsWith(USER_ID)||
+               localStorage.getItem("spaceai_chats_"+s.sessionId)===USER_ID;
       });
-      buildHistList(sess);
+      buildHistList(mySessions);
+    })
+    .catch(function(){
+      // Fallback: mostra solo chat locali di questo utente
+      var cache=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+      var mySess=cache.filter(function(c){return c.id&&c.id.startsWith(USER_ID);})
+        .map(function(c){return {sessionId:c.id,title:c.title,timestamp:c.ts,messageCount:(c.msgs||[]).length};});
+      buildHistList(mySess);
     });
 }
 function buildHistList(sessions){
@@ -417,7 +423,27 @@ function deleteChatFromStorage(chatId){
     localStorage.setItem("spaceai_chats",JSON.stringify(chats));
   }catch(e){}
 }
-var SID="s"+Math.random().toString(36).slice(2,10)+Date.now();
+// ── USER_ID PERSISTENTE — univoco per dispositivo/browser ───────────────
+// Generato una volta sola e salvato in localStorage PERMANENTEMENTE
+// Garantisce che ogni utente veda SOLO le proprie conversazioni
+var USER_ID=(function(){
+  var stored=localStorage.getItem("spaceai_user_id");
+  if(stored&&stored.length>8)return stored;
+  // Genera ID univoco basato su: random + timestamp + fingerprint browser
+  var fp=[
+    navigator.language||"",
+    screen.width+"x"+screen.height,
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency||0
+  ].join("|");
+  var hash=0;for(var i=0;i<fp.length;i++){hash=(hash*31+fp.charCodeAt(i))&0x7fffffff;}
+  var uid="u"+Math.abs(hash).toString(36)+Math.random().toString(36).slice(2,8)+Date.now().toString(36);
+  localStorage.setItem("spaceai_user_id",uid);
+  return uid;
+})();
+
+// SID = USER_ID + session suffix → ogni chat appartiene ad un utente specifico
+var SID=USER_ID+"_s"+Math.random().toString(36).slice(2,8)+Date.now().toString(36);
 var lastAgent="reasoner";
 var lastQuery="";
 var SUPABASE_URL="";
@@ -526,8 +552,10 @@ renderChatHistory();
 (function(){
   try{
     var lastSid=localStorage.getItem("spaceai_last_sid");
-    fetch("/api/sessions").then(function(r){return r.json();}).then(function(d){
-      var sessions=d.sessions||[];
+    // IMPORTANTE: ripristina SOLO l'ultima sessione di QUESTO utente
+    if(lastSid&&!lastSid.startsWith(USER_ID))lastSid=null; // ignora sessioni di altri utenti
+    fetch("/api/sessions?userId="+encodeURIComponent(USER_ID)).then(function(r){return r.json();}).then(function(d){
+      var sessions=(d.sessions||[]).filter(function(s){return s.sessionId&&s.sessionId.startsWith(USER_ID);});
       var toResume=lastSid&&sessions.find(function(s){return s.sessionId===lastSid;})?lastSid:
                    sessions.length>0?sessions[0].sessionId:null;
       if(toResume){
