@@ -3219,6 +3219,115 @@ public class ChatController {
 
 
     // ════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════════
+    // AUDIO GENERATOR — Google TTS + ElevenLabs + VoiceRSS + Web Speech fallback
+    // Config: GOOGLE_TTS_API_KEY o ELEVENLABS_API_KEY su Render
+    // ════════════════════════════════════════════════════════════════════════
+
+    private String generateAudio(String text, String lang, String voiceHint) throws Exception {
+        if (text == null || text.isBlank()) return null;
+        String cleanText = text.replaceAll("```[\s\S]*?```","")
+            .replaceAll("\\*\\*|\\*|__|_|~~|`","")
+            .replaceAll("#+ ","").trim();
+        if (cleanText.length() > 3000) cleanText = cleanText.substring(0, 3000);
+        boolean female = voiceHint == null || voiceHint.toLowerCase().contains("femminile") ||
+            voiceHint.toLowerCase().contains("female") || voiceHint.toLowerCase().contains("donna");
+
+        // ── Google TTS ────────────────────────────────────────────────────
+        String googleKey = env("GOOGLE_TTS_API_KEY","");
+        if (!googleKey.isEmpty()) {
+            try {
+                ObjectNode body = MAPPER.createObjectNode();
+                ObjectNode input = MAPPER.createObjectNode(); input.put("text", cleanText); body.set("input", input);
+                ObjectNode voice = MAPPER.createObjectNode();
+                String langCode = lang != null && !lang.isEmpty() ? lang : "it-IT";
+                voice.put("languageCode", langCode);
+                voice.put("name", langCode.startsWith("zh") ? "cmn-CN-Wavenet-A" :
+                    langCode.startsWith("en") ? (female ? "en-US-Wavenet-F" : "en-US-Wavenet-D") :
+                    female ? "it-IT-Wavenet-A" : "it-IT-Wavenet-B");
+                voice.put("ssmlGender", female ? "FEMALE" : "MALE");
+                body.set("voice", voice);
+                ObjectNode cfg = MAPPER.createObjectNode();
+                cfg.put("audioEncoding","MP3"); cfg.put("speakingRate",1.0); cfg.put("pitch",0.0);
+                body.set("audioConfig", cfg);
+                HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+                ResponseEntity<String> resp = restTemplate.postForEntity(
+                    "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + googleKey,
+                    new HttpEntity<>(MAPPER.writeValueAsString(body), h), String.class);
+                String b64 = MAPPER.readTree(resp.getBody()).path("audioContent").asText();
+                if (!b64.isEmpty()) return "AUDIO_MP3:" + b64;
+            } catch (Exception e) { log.warn("Google TTS: {}", e.getMessage()); }
+        }
+
+        // ── ElevenLabs ────────────────────────────────────────────────────
+        String elKey = env("ELEVENLABS_API_KEY","");
+        if (!elKey.isEmpty()) {
+            try {
+                String voiceId = env("ELEVENLABS_VOICE_ID", female ? "21m00Tcm4TlvDq8ikWAM" : "EXAVITQu4vr4xnSDxMaL");
+                HttpHeaders h = new HttpHeaders();
+                h.setContentType(MediaType.APPLICATION_JSON); h.set("xi-api-key", elKey);
+                ObjectNode elBody = MAPPER.createObjectNode();
+                elBody.put("text", cleanText); elBody.put("model_id","eleven_multilingual_v2");
+                ObjectNode vs = MAPPER.createObjectNode(); vs.put("stability",0.5); vs.put("similarity_boost",0.75);
+                elBody.set("voice_settings", vs);
+                ResponseEntity<byte[]> r = restTemplate.postForEntity(
+                    "https://api.elevenlabs.io/v1/text-to-speech/" + voiceId,
+                    new HttpEntity<>(MAPPER.writeValueAsString(elBody), h), byte[].class);
+                if (r.getStatusCode().is2xxSuccessful() && r.getBody() != null && r.getBody().length > 100)
+                    return "AUDIO_MP3:" + java.util.Base64.getEncoder().encodeToString(r.getBody());
+            } catch (Exception e) { log.warn("ElevenLabs: {}", e.getMessage()); }
+        }
+
+        // ── VoiceRSS ──────────────────────────────────────────────────────
+        String vrKey = env("VOICERSS_API_KEY","");
+        if (!vrKey.isEmpty()) {
+            try {
+                String encoded = URLEncoder.encode(cleanText.substring(0, Math.min(500, cleanText.length())), "UTF-8");
+                String vLang = lang != null && !lang.isEmpty() ? lang.replace("-","_").toLowerCase() : "it-it";
+                ResponseEntity<byte[]> r = restTemplate.getForEntity(
+                    "https://api.voicerss.org/?key=" + vrKey + "&hl=" + vLang +
+                    "&v=" + (female ? "Valentina" : "Giorgio") + "&f=44khz_16bit_stereo&src=" + encoded,
+                    byte[].class);
+                if (r.getStatusCode().is2xxSuccessful() && r.getBody() != null && r.getBody().length > 500)
+                    return "AUDIO_MP3:" + java.util.Base64.getEncoder().encodeToString(r.getBody());
+            } catch (Exception e) { log.warn("VoiceRSS: {}", e.getMessage()); }
+        }
+
+        // ── Web Speech API fallback (client-side) ─────────────────────────
+        return "AUDIO_WEBSPEECH:" + cleanText + "|" + (lang != null ? lang : "it-IT") + "|" + (female ? "female" : "male");
+    }
+
+    @PostMapping("/audio/generate")
+    public ResponseEntity<Object> audioGenerateEndpoint(@RequestBody Map<String,String> body) {
+        String text     = ((String)body.getOrDefault("text","")).trim();
+        String lang     = body.getOrDefault("lang","it-IT");
+        String voice    = body.getOrDefault("voice","femminile");
+        if (text.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Testo vuoto"));
+        try {
+            String result = generateAudio(text, lang, voice);
+            if (result == null) return ResponseEntity.status(503).body(Map.of("error","Nessun TTS disponibile"));
+            Map<String,Object> r = new LinkedHashMap<>();
+            if (result.startsWith("AUDIO_MP3:")) {
+                r.put("audioBase64", result.substring(10));
+                r.put("audioType",   "audio/mpeg");
+                r.put("provider",    !env("GOOGLE_TTS_API_KEY","").isEmpty() ? "Google TTS" :
+                    !env("ELEVENLABS_API_KEY","").isEmpty() ? "ElevenLabs" : "VoiceRSS");
+                r.put("downloadable", true);
+            } else {
+                String[] parts = result.substring(16).split("\|");
+                r.put("webSpeech",  true);
+                r.put("text",       parts.length > 0 ? parts[0] : text);
+                r.put("lang",       parts.length > 1 ? parts[1] : lang);
+                r.put("voice",      parts.length > 2 ? parts[2] : voice);
+                r.put("provider",   "Web Speech API (browser)");
+            }
+            r.put("status","ok"); r.put("chars", text.length()); r.put("date", today());
+            return ResponseEntity.ok(r);
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
     // VIDEO GENERATOR — storyboard LLM + frame Pollinations → slideshow HTML
     // ════════════════════════════════════════════════════════════════════
 
@@ -3560,6 +3669,104 @@ public class ChatController {
             "mode",        "video_gen",
             "description", description,
             "date",        today()
+        ));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // AGENT FEDERATION — Cross-instance cache + Message Broker + Swarm Coordination
+    // Ispirato a Claude Code: agenti che comunicano senza passare dal router centrale
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Message Broker in-memory per comunicazione diretta tra agenti
+    private final Map<String, List<java.util.function.Function<String,String>>> agentBroker = new ConcurrentHashMap<>();
+
+    public void registerAgentHandler(String agentName, java.util.function.Function<String,String> handler) {
+        agentBroker.computeIfAbsent(agentName, k -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(handler);
+    }
+
+    public String callAgentDirect(String agentName, String input) {
+        List<java.util.function.Function<String,String>> handlers = agentBroker.get(agentName);
+        if (handlers != null && !handlers.isEmpty()) return handlers.get(0).apply(input);
+        return null;
+    }
+
+    // Comprimi il contesto ogni N messaggi per risparmiare token (come Claude Code)
+    private String compressContext(List<Map<String,String>> history, String query,
+                                   String baseUrl, String apiKey, String model) {
+        if (history.size() < 8) return null; // non serve comprimere conversazioni brevi
+        try {
+            // Prendi i messaggi più vecchi (escludi gli ultimi 4)
+            int oldCount = history.size() - 4;
+            StringBuilder oldMsgs = new StringBuilder();
+            for (int i = 0; i < oldCount; i++) {
+                String role = history.get(i).getOrDefault("role","");
+                String msg  = history.get(i).getOrDefault("content","");
+                oldMsgs.append(role.equals("user") ? "U: " : "A: ")
+                    .append(msg.substring(0, Math.min(200, msg.length()))).append("\n");
+            }
+            // Usa modello veloce per comprimere (risparmia token)
+            String fastModel = env("GROQ_MODEL_FAST", model);
+            String summary = callLLM(
+                "Riassumi questa conversazione in max 3 righe, mantenendo i fatti chiave.",
+                oldMsgs.toString(), new ArrayList<>(), baseUrl, apiKey, fastModel, 150);
+            log.debug("Context compressed: {} msgs -> {} chars", oldCount, summary.length());
+            return summary;
+        } catch (Exception e) {
+            log.debug("Context compression skip: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    // Federation endpoint: condividi cache con altre istanze
+    @PostMapping("/federation/share")
+    public ResponseEntity<Object> federationShare(@RequestBody Map<String,String> body) {
+        String query  = body.getOrDefault("query","");
+        String answer = body.getOrDefault("answer","");
+        String secret = body.getOrDefault("secret","");
+        // Verifica secret token per sicurezza zero-trust
+        String fedSecret = env("FEDERATION_SECRET","");
+        if (!fedSecret.isEmpty() && !fedSecret.equals(secret))
+            return ResponseEntity.status(403).body(Map.of("error","Unauthorized"));
+        if (!query.isEmpty() && !answer.isEmpty()) {
+            knnCachePut(query, answer);
+            log.info("Federation: cached query from peer instance");
+        }
+        return ResponseEntity.ok(Map.of("status","shared","date",today()));
+    }
+
+    @GetMapping("/federation/query")
+    public ResponseEntity<Object> federationQuery(@RequestParam String q,
+                                                   @RequestParam(required=false,defaultValue="") String secret) {
+        String fedSecret = env("FEDERATION_SECRET","");
+        if (!fedSecret.isEmpty() && !fedSecret.equals(secret))
+            return ResponseEntity.status(403).body(Map.of("error","Unauthorized"));
+        String cached = knnCacheGet(q);
+        return ResponseEntity.ok(Map.of(
+            "answer", cached != null ? cached : "not_found",
+            "found",  cached != null,
+            "date",   today()
+        ));
+    }
+
+    @GetMapping("/federation/status")
+    public ResponseEntity<Object> federationStatus() {
+        String[] peers = env("FEDERATION_PEERS","").split(",");
+        List<Map<String,Object>> peerStatus = new ArrayList<>();
+        for (String peer : peers) {
+            if (peer.trim().isEmpty()) continue;
+            Map<String,Object> ps = new LinkedHashMap<>();
+            ps.put("url", peer.trim());
+            try {
+                ResponseEntity<String> r = restTemplate.getForEntity(peer.trim() + "/api/health", String.class);
+                ps.put("online", r.getStatusCode().is2xxSuccessful());
+            } catch (Exception e) { ps.put("online", false); ps.put("error", e.getMessage()); }
+            peerStatus.add(ps);
+        }
+        return ResponseEntity.ok(Map.of(
+            "peers",      peerStatus,
+            "totalPeers", peerStatus.size(),
+            "knnCache",   (int)Arrays.stream(ringCache).filter(e -> e != null).count(),
+            "date",       today()
         ));
     }
 
@@ -4130,7 +4337,16 @@ public class ChatController {
                        "3) Se la descrizione non e chiara, inventa una scena plausibile. " +
                        "4) MAI restituire codice Python o istruzioni testuali. " +
                        "5) Se non puoi fare lo storyboard: {\"error\":\"descrizione non valida\"}";
-            case "audio_gen": return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". ElevenLabs,Suno,voice cloning,podcast. Rispondi in italiano.";
+            case "audio_gen":
+                return "Sei AUDIO_GEN di SPACE AI. Data:" + d + ". " +
+                       "Ricevi una richiesta di audio/voce. Devi: " +
+                       "1) Estrarre SOLO il testo da sintetizzare " +
+                       "2) Identificare la lingua (es: it-IT, zh-CN, en-US) " +
+                       "3) Identificare il tipo di voce (femminile/maschile) " +
+                       "Rispondi SOLO con JSON: " +
+                       "{\"text\":\"testo da sintetizzare\",\"lang\":\"it-IT\",\"voice\":\"femminile\"} " +
+                       "Se la richiesta include traduzione, traduci prima e metti il testo tradotto in 'text'. " +
+                       "Rispondi SOLO con JSON valido, zero spiegazioni.";
             case "aegis":
                 return "Sei AEGIS, il modulo di sicurezza avanzato di SPACE AI. Data:" + d + ". " +
                        "Specializzato in vulnerability assessment DIFENSIVO, CVE, OWASP, SANS, " +
@@ -4352,11 +4568,80 @@ public class ChatController {
                 fullHistory = loadHistory(sessionId, supabaseUrl, supabaseKey);
                 if (!fullHistory.isEmpty()) neuralMemory.put(sessionId, new ArrayList<>(fullHistory));
             }
-            // Punto 13: Sliding window — max 20 messaggi per rispettare limite token Groq
-            List<Map<String,String>> history = fullHistory.size() <= 20 ? fullHistory :
-                fullHistory.subList(fullHistory.size() - 20, fullHistory.size());
-            // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
+            // Sliding window + Context Compression (Claude Code style)
+            List<Map<String,String>> history;
+            if (fullHistory.size() <= 8) {
+                history = fullHistory;
+            } else if (fullHistory.size() <= 20) {
+                history = fullHistory;
+            } else {
+                // Comprimi i messaggi vecchi per risparmiare token
+                String ctxSummary = compressContext(fullHistory, userMessage, baseUrl, apiKey, model);
+                history = new ArrayList<>();
+                if (ctxSummary != null && !ctxSummary.isBlank()) {
+                    Map<String,String> summaryMsg = new HashMap<>();
+                    summaryMsg.put("role", "system");
+                    summaryMsg.put("content", "[RIASSUNTO CONVERSAZIONE PRECEDENTE]: " + ctxSummary);
+                    history.add(summaryMsg);
+                }
+                // Aggiungi ultimi 6 messaggi completi
+                history.addAll(fullHistory.subList(Math.max(0, fullHistory.size() - 6), fullHistory.size()));
+            }
+            // ── AUDIO GENERATION — PRIMA del video e dell'Agent Loop ─────────
             String qlv = userMessage.toLowerCase();
+            boolean isAudio = qlv.contains("crea audio") || qlv.contains("genera audio") ||
+                qlv.contains("sintetizza") || qlv.contains("tts") ||
+                qlv.contains("leggi ad alta voce") || qlv.contains("read aloud") ||
+                (qlv.contains("voce") && (qlv.contains("femminile") || qlv.contains("maschile"))) ||
+                (qlv.contains("pronuncia") && qlv.length() > 20) ||
+                qlv.contains("audio di") || qlv.contains("fai sentire");
+            if (isAudio) {
+                try {
+                    // Estrai lingua dalla richiesta
+                    String audioLang = "it-IT";
+                    if (qlv.contains("cinese") || qlv.contains("chinese") || qlv.contains("mandarino")) audioLang = "zh-CN";
+                    else if (qlv.contains("inglese") || qlv.contains("english")) audioLang = "en-US";
+                    else if (qlv.contains("spagnolo") || qlv.contains("spanish")) audioLang = "es-ES";
+                    else if (qlv.contains("francese") || qlv.contains("french")) audioLang = "fr-FR";
+                    else if (qlv.contains("tedesco") || qlv.contains("german")) audioLang = "de-DE";
+                    else if (qlv.contains("giapponese") || qlv.contains("japanese")) audioLang = "ja-JP";
+                    String voiceHint = qlv.contains("maschile") ? "maschile" : "femminile";
+                    // Usa LLM per estrarre il testo da sintetizzare se non è esplicito
+                    String textToSpeak = userMessage;
+                    if (qlv.contains("frase") || qlv.contains("testo") || qlv.contains("parola")) {
+                        // Chiedi all'LLM di estrarre/tradurre il testo
+                        textToSpeak = callLLM(
+                            "Estrai SOLO il testo da sintetizzare in audio dalla richiesta. " +
+                            "Se richiede traduzione, traduci prima. Rispondi con il solo testo, niente altro.",
+                            userMessage, new ArrayList<>(), baseUrl, apiKey, model, 200);
+                    }
+                    String audioResult = generateAudio(textToSpeak, audioLang, voiceHint);
+                    Map<String,Object> aResp = new HashMap<>();
+                    if (audioResult != null && audioResult.startsWith("AUDIO_MP3:")) {
+                        aResp.put("audioBase64", audioResult.substring(10));
+                        aResp.put("audioType",   "audio/mpeg");
+                        aResp.put("response",    "\uD83C\uDFA4 Audio generato con voce " + voiceHint + " in " + audioLang + "!");
+                        aResp.put("downloadable", true);
+                    } else if (audioResult != null && audioResult.startsWith("AUDIO_WEBSPEECH:")) {
+                        String[] wParts = audioResult.substring(16).split("\|");
+                        aResp.put("webSpeech",  true);
+                        aResp.put("text",       wParts.length > 0 ? wParts[0] : textToSpeak);
+                        aResp.put("lang",       wParts.length > 1 ? wParts[1] : audioLang);
+                        aResp.put("voice",      voiceHint);
+                        aResp.put("response",   "\uD83C\uDFA4 Ecco il testo da pronunciare: " + textToSpeak.substring(0, Math.min(80, textToSpeak.length())));
+                    } else {
+                        aResp.put("response", "\uD83C\uDFA4 Configura GOOGLE_TTS_API_KEY su Render per la generazione audio. " +
+                            "Testo: " + textToSpeak.substring(0, Math.min(100, textToSpeak.length())));
+                    }
+                    aResp.put("status","ok"); aResp.put("mode","audio_gen"); aResp.put("sessionId",sessionId);
+                    saveMessages(sessionId, userMessage, (String)aResp.getOrDefault("response","Audio generato"), supabaseUrl, supabaseKey);
+                    return ResponseEntity.ok(aResp);
+                } catch (Exception ae) {
+                    log.warn("AudioGen failed: {}", ae.getMessage());
+                }
+            }
+
+            // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
             boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
                 qlv.contains("crea video") || qlv.contains("animazione di") ||
                 qlv.contains("video di") || qlv.contains("fai un video") ||
@@ -5931,6 +6216,12 @@ public class ChatController {
         s.put("sharedKnowledge", sharedKnowledge.size());
         s.put("embedVocab",      vocabSize.get());
         s.put("circuitOpen",     circuitOpenTime > now - 30000);
+        // Audio provider availability
+        s.put("googleTts",       !env("GOOGLE_TTS_API_KEY","").isEmpty());
+        s.put("elevenLabs",      !env("ELEVENLABS_API_KEY","").isEmpty());
+        s.put("voiceRss",        !env("VOICERSS_API_KEY","").isEmpty());
+        s.put("federationPeers", env("FEDERATION_PEERS","").isEmpty() ? 0 :
+            env("FEDERATION_PEERS","").split(",").length);
         s.put("date",            today());
         return ResponseEntity.ok(s);
     }
