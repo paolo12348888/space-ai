@@ -193,6 +193,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
           <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
+          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
           <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
           <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
           <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
@@ -884,6 +885,74 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
+        // ── Audio Gen ─────────────────────────────────────────────────
+        if(data.mode==="audio_gen"||data.audioBase64||data.webSpeech){
+          addRow(data.response||"\uD83C\uDFA4 Audio generato!","ai");
+          if(data.audioBase64){
+            // Crea player audio + pulsante download
+            var aRow=document.createElement("div");aRow.className="row ai";
+            var aAv=document.createElement("div");aAv.className="av";
+            var aIm=document.createElement("img");aIm.src=LOGO;aAv.appendChild(aIm);
+            var aBub=document.createElement("div");aBub.className="bubble";
+            aBub.style.cssText="padding:10px;min-width:240px";
+            // Audio player
+            var audio=document.createElement("audio");
+            audio.controls=true;audio.style.cssText="width:100%;margin-bottom:8px";
+            var src=document.createElement("source");
+            src.src="data:"+(data.audioType||"audio/mpeg")+";base64,"+data.audioBase64;
+            src.type=data.audioType||"audio/mpeg";
+            audio.appendChild(src);aBub.appendChild(audio);
+            // Download button
+            var dlBtn=document.createElement("a");
+            dlBtn.href="data:"+(data.audioType||"audio/mpeg")+";base64,"+data.audioBase64;
+            dlBtn.download="space-ai-audio-"+Date.now()+".mp3";
+            dlBtn.className="abtn";dlBtn.style.textDecoration="none";
+            dlBtn.innerHTML="\u2B07 Scarica MP3";
+            aBub.appendChild(dlBtn);
+            // Provider info
+            if(data.provider){
+              var pInfo=document.createElement("span");
+              pInfo.style.cssText="font-size:.7rem;opacity:.5;display:block;margin-top:6px";
+              pInfo.textContent="Provider: "+data.provider;
+              aBub.appendChild(pInfo);
+            }
+            aRow.appendChild(aAv);aRow.appendChild(aBub);
+            msgsEl.appendChild(aRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+          } else if(data.webSpeech){
+            // Web Speech fallback: usa browser TTS + pulsante play
+            var wsRow=document.createElement("div");wsRow.className="row ai";
+            var wsAv=document.createElement("div");wsAv.className="av";
+            var wsIm=document.createElement("img");wsIm.src=LOGO;wsAv.appendChild(wsIm);
+            var wsBub=document.createElement("div");wsBub.className="bubble";
+            wsBub.style.cssText="padding:10px";
+            var playBtn=document.createElement("button");
+            playBtn.className="abtn";
+            playBtn.innerHTML="\u25B6 Riproduci con voce browser";
+            var wsText=data.text||"";var wsLang=data.lang||"it-IT";var wsVoice=data.voice||"female";
+            playBtn.onclick=function(){
+              var utt=new SpeechSynthesisUtterance(wsText);
+              utt.lang=wsLang;utt.rate=1.0;utt.pitch=wsVoice==="femminile"?1.2:0.9;
+              var voices=speechSynthesis.getVoices();
+              var fv=voices.find(function(v){
+                return v.lang.startsWith(wsLang.substring(0,2))&&
+                  (wsVoice==="femminile"?v.name.toLowerCase().includes("female")||
+                    v.name.includes("Federica")||v.name.includes("Google"):
+                    !v.name.toLowerCase().includes("female"));
+              });
+              if(fv)utt.voice=fv;
+              speechSynthesis.cancel();speechSynthesis.speak(utt);
+              playBtn.innerHTML="\uD83D\uDD0A Riproduzione...";
+              utt.onend=function(){playBtn.innerHTML="\u25B6 Riproduci con voce browser";};
+            };
+            wsBub.appendChild(playBtn);
+            var hint=document.createElement("p");
+            hint.style.cssText="font-size:.75rem;opacity:.5;margin:6px 0 0";
+            hint.textContent="Configura GOOGLE_TTS_API_KEY su Render per audio scaricabile.";
+            wsBub.appendChild(hint);
+            wsRow.appendChild(wsAv);wsRow.appendChild(wsBub);
+            msgsEl.appendChild(wsRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+          }
+        }
         // ── Video Gen ─────────────────────────────────────────────────
         if(data.videoHtml){
           addRow("🎬 **Video generato!** Clicca ▶ Play per avviare l'animazione.","ai");
@@ -1182,8 +1251,23 @@ async function sendMsg(){
         txt+="\n**SharedKnowledge:** "+d.sharedKnowledge+" nodi";
         txt+="\n**Vocab embedding:** "+d.embedVocab+" termini";
         txt+="\n**Circuit breaker:** "+(d.circuitOpen?"\u26A0\uFE0F aperto":"\u2705 chiuso");
+        // Audio providers
+        var audioProviders=[];
+        if(d.googleTts)audioProviders.push("Google TTS");
+        if(d.elevenLabs)audioProviders.push("ElevenLabs");
+        if(d.voiceRss)audioProviders.push("VoiceRSS");
+        txt+="\n**Audio TTS:** "+(audioProviders.length>0?audioProviders.join(", "):"Web Speech (browser)");
+        txt+="\n**Federation:** "+(d.federationPeers||0)+" peer";
         addRow(txt,"ai");
       }).catch(function(e){addRow("\u274C Status non disponibile: "+e,"err");});
+    // Controlla anche stato federation
+    fetch("/api/federation/status")
+      .then(function(r){return r.json();}).then(function(d){
+        if(d.peers&&d.peers.length>0){
+          var onl=d.peers.filter(function(p){return p.online;}).length;
+          addRow("\uD83D\uDD17 **Federation peers:** "+onl+"/"+d.peers.length+" online","ai");
+        }
+      }).catch(function(){});
   }
 
   
