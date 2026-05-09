@@ -3226,7 +3226,7 @@ public class ChatController {
 
     private String generateAudio(String text, String lang, String voiceHint) throws Exception {
         if (text == null || text.isBlank()) return null;
-        String cleanText = text.replaceAll("```[\s\S]*?```","")
+        String cleanText = text.replaceAll("```[\\s\\S]*?```","")
             .replaceAll("\\*\\*|\\*|__|_|~~|`","")
             .replaceAll("#+ ","").trim();
         if (cleanText.length() > 3000) cleanText = cleanText.substring(0, 3000);
@@ -3314,7 +3314,7 @@ public class ChatController {
                     !env("ELEVENLABS_API_KEY","").isEmpty() ? "ElevenLabs" : "VoiceRSS");
                 r.put("downloadable", true);
             } else {
-                String[] parts = result.substring(16).split("\|");
+                String[] parts = result.substring(16).split("\\|");
                 r.put("webSpeech",  true);
                 r.put("text",       parts.length > 0 ? parts[0] : text);
                 r.put("lang",       parts.length > 1 ? parts[1] : lang);
@@ -3382,16 +3382,31 @@ public class ChatController {
                 }
                 duration = 6; fps = 2;
             } else {
-                // STEP 2: Genera immagine per ogni frame dello storyboard
+                // STEP 2: Genera immagine di riferimento PRIMA (Manus-style: coerenza visiva)
+                String refPrompt = enhancePromptForSD(description) + ", reference frame, establishing shot, high quality";
+                String refResult = generateImage(refPrompt);
+                String refB64    = refResult.startsWith("IMAGE:") ? refResult.substring(6) : "";
+                log.info("VideoGen reference frame: {} bytes", refB64.length());
+
+                // STEP 3: Genera ogni frame con coerenza rispetto al reference
                 for (JsonNode frame : frames) {
-                    String promptImg = frame.path("prompt_image").asText(description);
-                    String frameDesc = frame.path("description").asText("Frame " + (frameB64s.size() + 1));
+                    String basePrompt = frame.path("prompt_image").asText(description);
+                    String frameDesc  = frame.path("description").asText("Frame " + (frameB64s.size() + 1));
                     frameDescs.add(frameDesc);
-                    framePrompts.add(promptImg);
-                    String imgResult = generateImage(promptImg);
+                    // Aggiungi contesto di coerenza: "same scene as", "consistent with"
+                    String coherentPrompt = basePrompt + ", same scene and characters as established reference, " +
+                        "consistent lighting and style, cinematic continuity, highly detailed";
+                    framePrompts.add(coherentPrompt);
+                    String imgResult = generateImage(coherentPrompt);
                     frameB64s.add(imgResult.startsWith("IMAGE:") ? imgResult.substring(6) : "");
                     log.info("VideoGen frame {}/{}: {}", frameB64s.size(), totalFrames,
-                        promptImg.substring(0, Math.min(50, promptImg.length())));
+                        coherentPrompt.substring(0, Math.min(60, coherentPrompt.length())));
+                }
+                // Inserisci il reference frame all'inizio se disponibile
+                if (!refB64.isEmpty()) {
+                    frameB64s.add(0, refB64);
+                    frameDescs.add(0, "Scena di riferimento");
+                    framePrompts.add(0, refPrompt);
                 }
             }
 
@@ -3999,7 +4014,21 @@ public class ChatController {
             .replaceAll("(?i)\bdei\b", "of").replaceAll("(?i)\bdi\b", "of")
             .replaceAll("\\s{2,}", " ").trim();
         if (eng.isBlank() || eng.length() < 5) eng = prompt; // fallback al testo originale
-        return eng + ", highly detailed, photorealistic, cinematic lighting, 4k, sharp focus, masterpiece";
+        // Manus-style quality tokens — adattivi per tipo di immagine
+        String qualityTags;
+        if (eng.contains("portrait") || eng.contains("person") || eng.contains("man") || eng.contains("woman") || eng.contains("face"))
+            qualityTags = ", ultra detailed portrait, photorealistic, studio lighting, 8k, sharp focus, masterpiece, best quality";
+        else if (eng.contains("landscape") || eng.contains("nature") || eng.contains("sky") || eng.contains("mountain"))
+            qualityTags = ", epic landscape, cinematic, golden hour lighting, 8k uhd, ultra detailed, award winning photo";
+        else if (eng.contains("space") || eng.contains("galaxy") || eng.contains("cosmos") || eng.contains("planet"))
+            qualityTags = ", space art, stunning nebula, stars, cinematic, ultra detailed, 8k, digital art, trending on artstation";
+        else if (eng.contains("anime") || eng.contains("cartoon") || eng.contains("manga"))
+            qualityTags = ", anime style, vibrant colors, highly detailed, 4k, studio quality";
+        else if (eng.contains("architecture") || eng.contains("building") || eng.contains("city"))
+            qualityTags = ", architectural visualization, ultra detailed, 8k, photorealistic render, dramatic lighting";
+        else
+            qualityTags = ", highly detailed, photorealistic, cinematic lighting, 4k, sharp focus, masterpiece, best quality";
+        return eng + qualityTags;
     }
 
     private String generateImage(String prompt) {
@@ -4623,7 +4652,7 @@ public class ChatController {
                         aResp.put("response",    "\uD83C\uDFA4 Audio generato con voce " + voiceHint + " in " + audioLang + "!");
                         aResp.put("downloadable", true);
                     } else if (audioResult != null && audioResult.startsWith("AUDIO_WEBSPEECH:")) {
-                        String[] wParts = audioResult.substring(16).split("\|");
+                        String[] wParts = audioResult.substring(16).split("\\|");
                         aResp.put("webSpeech",  true);
                         aResp.put("text",       wParts.length > 0 ? wParts[0] : textToSpeak);
                         aResp.put("lang",       wParts.length > 1 ? wParts[1] : audioLang);
@@ -5594,12 +5623,17 @@ public class ChatController {
         return MAPPER.readTree(resp.getBody()).path("choices").get(0).path("message").path("content").asText();
     }
     private void saveMessages(String sessionId, String userMsg, String aiResp, String url, String key) {
-        List<Map<String,String>> mem = neuralMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        mem.add(Map.of("role","user","content",userMsg));
-        mem.add(Map.of("role","assistant","content",aiResp));
-        if (mem.size() > 30) {
-            List<Map<String,String>> trimmed = new ArrayList<>(mem.subList(mem.size()-30, mem.size()));
-            neuralMemory.put(sessionId, trimmed);
+        // CRITICO: usa una lista MUTABILE per mantenere il contesto tra domande
+        List<Map<String,String>> mem = neuralMemory.computeIfAbsent(sessionId, k -> new java.util.concurrent.CopyOnWriteArrayList<>());
+        // Aggiungi i nuovi messaggi — questo mantiene la memoria tra una domanda e l'altra
+        Map<String,String> userTurn = new HashMap<>(); userTurn.put("role","user"); userTurn.put("content",userMsg);
+        Map<String,String> aiTurn   = new HashMap<>(); aiTurn.put("role","assistant"); aiTurn.put("content",aiResp);
+        mem.add(userTurn);
+        mem.add(aiTurn);
+        // Mantieni massimo 40 messaggi (20 scambi) — sliding window
+        if (mem.size() > 40) {
+            List<Map<String,String>> trimmed = new ArrayList<>(mem.subList(mem.size()-40, mem.size()));
+            neuralMemory.put(sessionId, new java.util.concurrent.CopyOnWriteArrayList<>(trimmed));
         }
         // PRIORITY 4: estrai e comprimi fatti nuovi con bloom filter
         extractAndStoreFacts(sessionId, userMsg, aiResp);
