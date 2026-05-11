@@ -107,6 +107,8 @@ textarea::placeholder{color:var(--muted)}
 .mlbl{margin-left:auto;font-size:.69rem;color:var(--accent);opacity:.75}
 .hint{text-align:center;font-size:.61rem;color:var(--muted);margin:5px auto 0;opacity:.45}
 </style>
+  <!-- ABCJS: renderizza e riproduce notazione ABC (musica) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-basic-min.js"></script>
 </head>
 <body>
 <div class="sb-ov" id="sbOv" onclick="closeSB()"></div>
@@ -194,6 +196,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
           <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
           <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
+          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
           <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
           <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
           <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
@@ -885,6 +888,79 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
+        // ── Music Gen ─────────────────────────────────────────────────
+        if(data.mode==="music_gen"&&data.musicData){
+          var md=data.musicData;
+          addRow("\uD83C\uDFB5 **"+( md.title||"Canzone generata")+"**\n\n"+
+            "\uD83C\uDFB8 Genere: "+md.genre+" | Mood: "+md.mood+" | Tempo: "+md.tempo+" BPM\n\n"+
+            (md.description||""),"ai");
+          // Player ABCJS
+          var mRow=document.createElement("div");mRow.className="row ai";
+          var mAv=document.createElement("div");mAv.className="av";
+          var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
+          var mBub=document.createElement("div");mBub.className="bubble";
+          mBub.style.cssText="padding:12px;max-width:96%;width:680px";
+          // ABC player container
+          var abcDiv=document.createElement("div");abcDiv.id="abc_"+Date.now();
+          abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
+          mBub.appendChild(abcDiv);
+          // Controls
+          var ctrlDiv=document.createElement("div");ctrlDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px";
+          var playMusicBtn=document.createElement("button");
+          playMusicBtn.className="abtn";playMusicBtn.style.cssText="background:var(--accent);color:#000;font-weight:700";
+          playMusicBtn.innerHTML="\u25B6 Riproduci";
+          var stopMusicBtn=document.createElement("button");stopMusicBtn.className="abtn";
+          stopMusicBtn.innerHTML="\u23F9 Stop";
+          var dlAbcBtn=document.createElement("a");
+          dlAbcBtn.className="abtn";dlAbcBtn.style.textDecoration="none";
+          dlAbcBtn.innerHTML="\u2B07 Scarica ABC";
+          ctrlDiv.appendChild(playMusicBtn);ctrlDiv.appendChild(stopMusicBtn);ctrlDiv.appendChild(dlAbcBtn);
+          mBub.appendChild(ctrlDiv);
+          // Lyrics
+          if(md.lyrics){
+            var lyrDiv=document.createElement("div");
+            lyrDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
+            lyrDiv.innerHTML="\uD83C\uDFA4 <strong>Testo:</strong>\n"+md.lyrics;
+            mBub.appendChild(lyrDiv);
+          }
+          mRow.appendChild(mAv);mRow.appendChild(mBub);
+          msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+          // Render ABC notation with ABCJS
+          var abcId=abcDiv.id;var abcText=md.abcNotation||"";
+          setTimeout(function(){
+            if(typeof ABCJS!=="undefined"&&abcText){
+              var visualObj=ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true});
+              // Setup audio
+              var synth=null;
+              playMusicBtn.onclick=function(){
+                ABCJS.renderAbc(abcId,abcText,{responsive:"resize"});
+                if(typeof ABCJS.synth!=="undefined"){
+                  var audioCtx=new AudioContext();
+                  synth=new ABCJS.synth.CreateSynth();
+                  synth.init({audioContext:audioCtx,visualObj:visualObj[0],options:{}})
+                    .then(function(){return synth.prime();})
+                    .then(function(){synth.start();playMusicBtn.innerHTML="\u23F3 Suonando...";})
+                    .catch(function(e){
+                      // Fallback: usa Web Audio API basic tone
+                      playSimpleTones(abcText,audioCtx);
+                    });
+                } else {
+                  playSimpleTones(abcText,new AudioContext());
+                }
+              };
+              stopMusicBtn.onclick=function(){
+                if(synth)synth.stop();
+                playMusicBtn.innerHTML="\u25B6 Riproduci";
+              };
+            } else {
+              abcDiv.innerHTML="<pre style='font-size:.75rem'>"+abcText+"</pre>";
+            }
+            // Download ABC file
+            var blob=new Blob([abcText],{type:"text/plain"});
+            dlAbcBtn.href=URL.createObjectURL(blob);
+            dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+          },500);
+        }
         // ── Audio Gen ─────────────────────────────────────────────────
         if(data.mode==="audio_gen"||data.audioBase64||data.webSpeech){
           addRow(data.response||"\uD83C\uDFA4 Audio generato!","ai");
@@ -1272,6 +1348,74 @@ async function sendMsg(){
 
   
 
+  // ── Music Panel ─────────────────────────────────────────────────────────
+  function showMusicPanel(){document.getElementById("musicPanel").style.display="flex";}
+  function closeMusicPanel(){document.getElementById("musicPanel").style.display="none";}
+  function generateMusicFromPanel(){
+    var desc=document.getElementById("musicDesc").value.trim();
+    if(!desc){alert("Inserisci una descrizione per la canzone");return;}
+    var genre=document.getElementById("musicGenre").value;
+    var mood=document.getElementById("musicMood").value;
+    var tempo=document.getElementById("musicTempo").value;
+    var sid=typeof SID!=="undefined"?SID:"global";
+    closeMusicPanel();
+    addRow("\uD83C\uDFB5 Composizione in corso: "+desc,"ai");
+    fetch("/api/music/generate",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({description:desc,genre:genre,mood:mood,tempo:tempo,sessionId:sid})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d.error){addRow("\u274C Errore: "+d.error,"err");return;}
+        // Simula risposta music_gen
+        var fakeData={mode:"music_gen",musicData:d};
+        // Trigger the music handler manually
+        addRow("\uD83C\uDFB5 **"+d.title+"** generata!\n\n"+d.description,"ai");
+        showAbcPlayer(d);
+      }).catch(function(e){addRow("\u274C Errore musica: "+e,"err");});
+  }
+  function showAbcPlayer(md){
+    var mRow=document.createElement("div");mRow.className="row ai";
+    var mAv=document.createElement("div");mAv.className="av";
+    var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
+    var mBub=document.createElement("div");mBub.className="bubble";
+    mBub.style.cssText="padding:12px;max-width:96%;width:680px";
+    var abcId="abc"+Date.now();
+    var abcDiv=document.createElement("div");abcDiv.id=abcId;
+    abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
+    mBub.appendChild(abcDiv);
+    var dlBtn=document.createElement("a");dlBtn.className="abtn";dlBtn.style.textDecoration="none";
+    dlBtn.innerHTML="\u2B07 Scarica .ABC";
+    var blob=new Blob([md.abcNotation||""],{type:"text/plain"});
+    dlBtn.href=URL.createObjectURL(blob);
+    dlBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+    mBub.appendChild(dlBtn);
+    if(md.lyrics){
+      var lDiv=document.createElement("div");
+      lDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
+      lDiv.innerHTML="\uD83C\uDFA4 <b>Testo:</b>\n"+(md.lyrics||"");
+      mBub.appendChild(lDiv);
+    }
+    mRow.appendChild(mAv);mRow.appendChild(mBub);
+    msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+    setTimeout(function(){
+      if(typeof ABCJS!=="undefined"&&md.abcNotation){
+        ABCJS.renderAbc(abcId,md.abcNotation,{responsive:"resize",add_classes:true,staffwidth:600});
+      } else {
+        document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem'>"+(md.abcNotation||"")+"</pre>";
+      }
+    },300);
+  }
+  function playSimpleTones(abcText,ctx){
+    // Fallback Web Audio: suona toni semplici per 3 secondi
+    var freqs=[261,329,392,523,493,392,329,261,349,440,523,698,659,523,440,349];
+    freqs.forEach(function(f,i){
+      var osc=ctx.createOscillator();var g=ctx.createGain();
+      osc.connect(g);g.connect(ctx.destination);
+      osc.frequency.value=f;g.gain.setValueAtTime(0.3,ctx.currentTime+i*0.4);
+      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+i*0.4+0.35);
+      osc.start(ctx.currentTime+i*0.4);osc.stop(ctx.currentTime+i*0.4+0.4);
+    });
+  }
+
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
   function closeGithubPanel(){document.getElementById("githubPanel").style.display="none";}
   function githubRepoInfo(){
@@ -1310,6 +1454,51 @@ async function sendMsg(){
       }).catch(function(e){alert("Errore issues: "+e);});
   }
 </script>
+
+<!-- Music Generator Panel -->
+<div id="musicPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.82);z-index:1002;align-items:center;justify-content:center">
+  <div style="background:var(--surface,#161b24);border-radius:16px;padding:24px;width:95%;max-width:520px;max-height:90vh;overflow-y:auto;border:1px solid rgba(168,85,247,0.3)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;color:#a855f7">&#127911; Crea Canzone con AI</h3>
+      <button onclick="closeMusicPanel()" style="background:none;border:none;color:var(--text);font-size:1.5rem;cursor:pointer">&#10005;</button>
+    </div>
+    <p style="font-size:.85rem;opacity:.7;margin:0 0 14px">Descrivi la canzone che vuoi creare. SPACE AI comporrà melodia, armonia e testo.</p>
+    <textarea id="musicDesc" placeholder="es. Una ballata romantica sull'amore perduto con chitarra acustica e voce femminile" style="width:100%;height:90px;padding:10px;border-radius:10px;border:1px solid rgba(168,85,247,0.3);background:var(--bg,#0a0c10);color:var(--text);resize:vertical;font-size:.9rem;box-sizing:border-box;margin-bottom:12px"></textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div>
+        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Genere</label>
+        <select id="musicGenre" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+          <option value="pop">Pop</option><option value="rock">Rock</option>
+          <option value="jazz">Jazz</option><option value="classical">Classica</option>
+          <option value="folk">Folk</option><option value="electronic">Elettronica</option>
+          <option value="blues">Blues</option><option value="reggae">Reggae</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Mood</label>
+        <select id="musicMood" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+          <option value="happy">Allegro</option><option value="sad">Malinconico</option>
+          <option value="romantic">Romantico</option><option value="energetic">Energico</option>
+          <option value="calm">Calmo</option><option value="dramatic">Drammatico</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Tempo (BPM)</label>
+        <input id="musicTempo" type="range" min="60" max="200" value="120" oninput="this.nextElementSibling.textContent=this.value+' BPM'" style="width:100%">
+        <span style="font-size:.75rem;opacity:.6">120 BPM</span>
+      </div>
+      <div>
+        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">Tonalità</label>
+        <select id="musicKey" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+          <option value="C">Do (C)</option><option value="G">Sol (G)</option>
+          <option value="D">Re (D)</option><option value="A">La (A)</option>
+          <option value="F">Fa (F)</option><option value="Am">La minore</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="generateMusicFromPanel()" style="width:100%;padding:12px;border-radius:10px;border:none;background:linear-gradient(90deg,#a855f7,#ec4899);color:#fff;cursor:pointer;font-weight:700;font-size:1rem">&#127911; Componi Canzone</button>
+  </div>
+</div>
 
 <!-- Goal Delegation Panel -->
 <div id="goalPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:1001;align-items:center;justify-content:center">
