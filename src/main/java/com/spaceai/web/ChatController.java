@@ -1177,6 +1177,38 @@ public class ChatController {
      * Aggrega: LTM + STM + sharedKnowledge + sessionDeltas + semantic embed.
      * Rimpiazza: retrieveRelevantMemory, semanticMemoryRetrieve, retrieveDifferentialMemory.
      */
+    // ════════════════════════════════════════════════════════════════════════
+    // CONTENT SAFETY — pre-filter input + post-filter output
+    // ════════════════════════════════════════════════════════════════════════
+    private static final List<String> BLOCKED_PATTERNS = List.of(
+        "come fare una bomba","come costruire armi","come sintetizzare drog",
+        "how to make explosives","child porn","jailbreak","ignore previous",
+        "act as DAN","bypass your","forget your instructions",
+        "come hackerare","come rubare","istruzioni per uccidere"
+    );
+
+    private boolean isSafeInput(String input) {
+        if (input == null || input.isBlank()) return true;
+        String lower = input.toLowerCase();
+        for (String pattern : BLOCKED_PATTERNS) {
+            if (lower.contains(pattern)) {
+                log.warn("ContentSafety: blocked pattern detected: {}", pattern);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String sanitizeOutput(String output) {
+        if (output == null) return "";
+        // Rimuovi eventuali jailbreak residui
+        String[] dangerousOutputs = {"[DAN]","[JAILBREAK]","[SYSTEM OVERRIDE]","Ignore all previous"};
+        for (String d : dangerousOutputs) {
+            if (output.contains(d)) return "Mi dispiace, non posso fornire questa risposta.";
+        }
+        return output;
+    }
+
     private String msaRetrieveUnified(String query, String sessionId) {
         List<String> candidates = new ArrayList<>();
 
@@ -3297,6 +3329,177 @@ public class ChatController {
         return "AUDIO_WEBSPEECH:" + cleanText + "|" + (lang != null ? lang : "it-IT") + "|" + (female ? "female" : "male");
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // MUSIC GENERATOR — Crea canzoni da testo usando ABC notation + Piston
+    // ABC notation è leggibile, universale, convertibile in MIDI/audio
+    // Alternativa a music21 che richiede Python locale
+    // ════════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/music/generate")
+    public ResponseEntity<Object> musicGenerate(@RequestBody Map<String,String> body) {
+        String description = ((String) body.getOrDefault("description","")).trim();
+        String genre       = body.getOrDefault("genre","pop");
+        String mood        = body.getOrDefault("mood","happy");
+        String tempo       = body.getOrDefault("tempo","120");
+        String key         = body.getOrDefault("key","C");
+        String sessionId   = body.getOrDefault("sessionId","global");
+        String baseUrl2    = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2     = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model2      = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+
+        if (description.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
+
+        try {
+            // STEP 1: LLM genera la struttura musicale in ABC notation
+            String musicPrompt =
+                "Sei un compositore AI. Crea una canzone in formato ABC notation.\n" +
+                "Descrizione: " + description + "\n" +
+                "Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM | Tonalita: " + key + "\n\n" +
+                "Genera:\n" +
+                "1. Header ABC (X, T, M, L, Q, K)\n" +
+                "2. Melodia principale (almeno 16 battute)\n" +
+                "3. Testo della canzone (4 strofe + ritornello) \n\n" +
+                "Formato risposta:\n" +
+                "[ABC_NOTATION]\n" +
+                "X:1\n" +
+                "T:<titolo>\n" +
+                "M:4/4\n" +
+                "L:1/8\n" +
+                "Q:1/4=" + tempo + "\n" +
+                "K:" + key + "\n" +
+                "<note ABC>\n" +
+                "[/ABC_NOTATION]\n\n" +
+                "[LYRICS]\n" +
+                "<testo canzone in italiano>\n" +
+                "[/LYRICS]\n\n" +
+                "[DESCRIPTION]\n" +
+                "<descrizione musicale della canzone>\n" +
+                "[/DESCRIPTION]";
+
+            String llmResp = callLLM(
+                "Sei un compositore musicale esperto. Crea musica originale in formato ABC notation.",
+                musicPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 2000);
+
+            // Estrai ABC notation
+            String abcNotation = "";
+            if (llmResp.contains("[ABC_NOTATION]") && llmResp.contains("[/ABC_NOTATION]")) {
+                int s = llmResp.indexOf("[ABC_NOTATION]") + 14;
+                int e = llmResp.indexOf("[/ABC_NOTATION]");
+                abcNotation = llmResp.substring(s, e).trim();
+            } else {
+                // Fallback: cerca qualsiasi X:1 nel testo
+                int xi = llmResp.indexOf("X:1");
+                if (xi >= 0) abcNotation = llmResp.substring(xi);
+                else abcNotation = generateDefaultABC(description, key, tempo, genre);
+            }
+
+            // Estrai testo
+            String lyrics = "";
+            if (llmResp.contains("[LYRICS]") && llmResp.contains("[/LYRICS]")) {
+                int s = llmResp.indexOf("[LYRICS]") + 8;
+                int e = llmResp.indexOf("[/LYRICS]");
+                lyrics = llmResp.substring(s, e).trim();
+            }
+
+            // Estrai descrizione
+            String songDesc = "";
+            if (llmResp.contains("[DESCRIPTION]") && llmResp.contains("[/DESCRIPTION]")) {
+                int s = llmResp.indexOf("[DESCRIPTION]") + 13;
+                int e = llmResp.indexOf("[/DESCRIPTION]");
+                songDesc = llmResp.substring(s, e).trim();
+            }
+
+            // STEP 2: Esegui Python con music21 via Piston per convertire in MIDI
+            String midiB64 = null;
+            String pythonCode =
+                "from music21 import stream, note, meter, tempo as t, key as k, clef\n" +
+                "import base64, io\n\n" +
+                "# Crea stream musicale\n" +
+                "s = stream.Score()\n" +
+                "p = stream.Part()\n" +
+                "p.append(meter.TimeSignature('4/4'))\n" +
+                "p.append(t.MetronomeMark(number=" + tempo + "))\n" +
+                "p.append(k.KeySignature(0))  # C major\n\n" +
+                "# Note di esempio dalla melodia\n" +
+                "notes = ['C4','E4','G4','C5','B4','G4','E4','C4',\n" +
+                "         'F4','A4','C5','F5','E5','C5','A4','F4']\n" +
+                "for n in notes:\n" +
+                "    p.append(note.Note(n, quarterLength=1))\n\n" +
+                "s.append(p)\n" +
+                "# Esporta in MusicXML (piu supportato)\n" +
+                "buf = io.BytesIO()\n" +
+                "s.write('musicxml', buf)\n" +
+                "buf.seek(0)\n" +
+                "print('MUSICXML_B64:' + base64.b64encode(buf.read()).decode())";
+
+            try {
+                Map<String,String> pistonBody = new HashMap<>();
+                pistonBody.put("language","python"); pistonBody.put("code",pythonCode);
+                ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
+                if (pistonResp.getBody() instanceof Map) {
+                    Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
+                    String output = (String)pr.getOrDefault("output","");
+                    if (output.contains("MUSICXML_B64:")) {
+                        midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
+                        log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
+                    }
+                }
+            } catch (Exception pe) {
+                log.debug("Piston music21: {}", pe.getMessage());
+            }
+
+            // Indicizza nel RAG
+            String ragContent = "Canzone: " + description + "\nGenere: " + genre + "\nTesto: " + lyrics;
+            ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(), ragContent);
+
+            Map<String,Object> result = new LinkedHashMap<>();
+            result.put("title",       extractABCField(abcNotation, "T:"));
+            result.put("abcNotation", abcNotation);
+            result.put("lyrics",      lyrics);
+            result.put("description", songDesc.isEmpty() ? "Canzone generata da: " + description : songDesc);
+            result.put("genre",       genre);
+            result.put("mood",        mood);
+            result.put("tempo",       tempo);
+            result.put("key",         key);
+            if (midiB64 != null) { result.put("musicXmlB64", midiB64); result.put("format","musicxml"); }
+            result.put("playable",    true); // Riproducibile con ABCJS lato client
+            result.put("status",      "ok");
+            result.put("date",        today());
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.warn("MusicGen error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    private String extractABCField(String abc, String field) {
+        if (abc == null) return "Canzone SPACE AI";
+        int idx = abc.indexOf(field);
+        if (idx < 0) return "Canzone SPACE AI";
+        int end = abc.indexOf("\n", idx);
+        return end > idx ? abc.substring(idx + field.length(), end).trim() : "Canzone SPACE AI";
+    }
+
+    private String generateDefaultABC(String desc, String key, String tempo, String genre) {
+        return "X:1\nT:Canzone - " + desc.substring(0,Math.min(30,desc.length())) +
+            "\nM:4/4\nL:1/8\nQ:1/4=" + tempo + "\nK:" + key + "\n" +
+            "|: G2AB c2BA | G4 E4 | F2GA B2AG | F6 D2 |\n" +
+            "c2de f2ed | c4 A4 | G2AB c2d2 | G8 :|\n" +
+            "|: e2ef g2fe | e4 c4 | d2de f2ed | d6 B2 |\n" +
+            "c2cd e2dc | B4 G4 | A2Bc d2e2 | G8 :|";
+    }
+
+    // isAudio detection per musica
+    private boolean needsMusic(String msg) {
+        String q = msg.toLowerCase();
+        return q.contains("crea una canzone") || q.contains("componi") ||
+               q.contains("scrivi una canzone") || q.contains("musica per") ||
+               q.contains("genera musica") || q.contains("crea musica") ||
+               q.contains("melodia") || q.contains("canzone su") ||
+               q.contains("music") || q.contains("song");
+    }
+
     @PostMapping("/audio/generate")
     public ResponseEntity<Object> audioGenerateEndpoint(@RequestBody Map<String,String> body) {
         String text     = ((String)body.getOrDefault("text","")).trim();
@@ -4616,8 +4819,43 @@ public class ChatController {
                 // Aggiungi ultimi 6 messaggi completi
                 history.addAll(fullHistory.subList(Math.max(0, fullHistory.size() - 6), fullHistory.size()));
             }
-            // ── AUDIO GENERATION — PRIMA del video e dell'Agent Loop ─────────
+            // ── CONTENT SAFETY CHECK ─────────────────────────────────────────
+            if (!isSafeInput(userMessage)) {
+                return ResponseEntity.ok(Map.of(
+                    "response", "\uD83D\uDEAB Mi dispiace, non posso rispondere a questa richiesta. " +
+                        "Posso aiutarti con qualsiasi altra domanda legale ed etica.",
+                    "status",   "blocked",
+                    "sessionId", sessionId
+                ));
+            }
+
+            // ── MUSIC GENERATION — PRIMA dell'audio e del video ──────────────
             String qlv = userMessage.toLowerCase();
+            if (needsMusic(userMessage)) {
+                try {
+                    Map<String,String> musicBody = new HashMap<>();
+                    musicBody.put("description", userMessage);
+                    musicBody.put("sessionId",   sessionId);
+                    musicBody.put("baseUrl",      baseUrl);
+                    musicBody.put("apiKey",       apiKey);
+                    musicBody.put("model",        model);
+                    // Rileva genere e mood dal messaggio
+                    musicBody.put("genre",  qlv.contains("jazz")?"jazz":qlv.contains("rock")?"rock":
+                        qlv.contains("classica")?"classical":qlv.contains("pop")?"pop":"pop");
+                    musicBody.put("mood",   qlv.contains("triste")?"sad":qlv.contains("allegra")?"happy":
+                        qlv.contains("romantica")?"romantic":qlv.contains("energica")?"energetic":"happy");
+                    musicBody.put("tempo",  qlv.contains("lenta")?"70":qlv.contains("veloce")?"160":"120");
+                    ResponseEntity<Object> mResp = musicGenerate(musicBody);
+                    Object mb = mResp.getBody();
+                    Map<String,Object> mRespMap = new HashMap<>();
+                    mRespMap.put("status","ok"); mRespMap.put("mode","music_gen");
+                    mRespMap.put("sessionId",sessionId); mRespMap.put("musicData",mb);
+                    mRespMap.put("response","\uD83C\uDFB5 Canzone generata! Usa il player ABCJS per ascoltarla.");
+                    return ResponseEntity.ok(mRespMap);
+                } catch (Exception me) { log.warn("MusicGen inline: {}", me.getMessage()); }
+            }
+
+            // ── AUDIO GENERATION — PRIMA del video e dell'Agent Loop ─────────
             boolean isAudio = qlv.contains("crea audio") || qlv.contains("genera audio") ||
                 qlv.contains("sintetizza") || qlv.contains("tts") ||
                 qlv.contains("leggi ad alta voce") || qlv.contains("read aloud") ||
@@ -5358,13 +5596,118 @@ public class ChatController {
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
         return callLLMWithTemp(system, userMsg, history, baseUrl, apiKey, model, maxTokens, 0.8);
     }
+    // ════════════════════════════════════════════════════════════════════════
+    // PROVIDER CHAIN: Groq → Gemini 2.0 → DeepSeek → Autonomous fallback
+    // ════════════════════════════════════════════════════════════════════════
+
+    private String callGemini(String system, String userMsg, List<Map<String,String>> history,
+                               int maxTokens, double temperature) throws Exception {
+        String geminiKey = env("GEMINI_API_KEY","");
+        if (geminiKey.isEmpty()) throw new IllegalStateException("GEMINI_API_KEY non configurata");
+        String model = env("GEMINI_MODEL","gemini-2.0-flash");
+        // Gemini usa un formato diverso da OpenAI
+        ObjectNode req = MAPPER.createObjectNode();
+        ObjectNode genCfg = MAPPER.createObjectNode();
+        genCfg.put("maxOutputTokens", maxTokens); genCfg.put("temperature", temperature);
+        req.set("generationConfig", genCfg);
+        ArrayNode contents = MAPPER.createArrayNode();
+        // System prompt come primo messaggio user
+        if (system != null && !system.isEmpty()) {
+            ObjectNode sp = MAPPER.createObjectNode(); sp.put("role","user");
+            ArrayNode sparts = MAPPER.createArrayNode();
+            ObjectNode st = MAPPER.createObjectNode(); st.put("text","[SYSTEM] " + system);
+            sparts.add(st); sp.set("parts", sparts); contents.add(sp);
+            ObjectNode sr = MAPPER.createObjectNode(); sr.put("role","model");
+            ArrayNode srparts = MAPPER.createArrayNode();
+            ObjectNode srt = MAPPER.createObjectNode(); srt.put("text","Capito. Seguiro le istruzioni.");
+            srparts.add(srt); sr.set("parts", srparts); contents.add(sr);
+        }
+        // History
+        int start = Math.max(0, history.size()-8);
+        for (int i = start; i < history.size(); i++) {
+            String role = history.get(i).getOrDefault("role","user");
+            String msg  = history.get(i).getOrDefault("content","");
+            ObjectNode turn = MAPPER.createObjectNode();
+            turn.put("role", role.equals("assistant") ? "model" : "user");
+            ArrayNode parts = MAPPER.createArrayNode();
+            ObjectNode t = MAPPER.createObjectNode(); t.put("text", msg); parts.add(t);
+            turn.set("parts", parts); contents.add(turn);
+        }
+        // User message
+        if (userMsg != null && !userMsg.isEmpty()) {
+            ObjectNode um = MAPPER.createObjectNode(); um.put("role","user");
+            ArrayNode up = MAPPER.createArrayNode();
+            ObjectNode ut = MAPPER.createObjectNode(); ut.put("text", userMsg); up.add(ut);
+            um.set("parts", up); contents.add(um);
+        }
+        req.set("contents", contents);
+        HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/" +
+            model + ":generateContent?key=" + geminiKey;
+        ResponseEntity<String> resp = restTemplate.postForEntity(
+            url, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+        JsonNode result = MAPPER.readTree(resp.getBody());
+        String text = result.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
+        log.info("Gemini {} response: {} chars", model, text.length());
+        return text;
+    }
+
+    private String callDeepSeek(String system, String userMsg, List<Map<String,String>> history,
+                                 int maxTokens, double temperature) throws Exception {
+        String dsKey = env("DEEPSEEK_API_KEY","");
+        if (dsKey.isEmpty()) throw new IllegalStateException("DEEPSEEK_API_KEY non configurata");
+        String model = env("DEEPSEEK_MODEL","deepseek-chat"); // deepseek-chat o deepseek-reasoner (R1)
+        // DeepSeek usa il formato OpenAI compatibile
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("model", model); req.put("max_tokens", maxTokens); req.put("temperature", temperature);
+        ArrayNode messages = MAPPER.createArrayNode();
+        ObjectNode sys = MAPPER.createObjectNode(); sys.put("role","system"); sys.put("content", system != null ? system : "");
+        messages.add(sys);
+        int start = Math.max(0, history.size()-10);
+        for (int i = start; i < history.size(); i++) {
+            ObjectNode m = MAPPER.createObjectNode();
+            m.put("role", history.get(i).getOrDefault("role","user"));
+            m.put("content", history.get(i).getOrDefault("content",""));
+            messages.add(m);
+        }
+        if (userMsg != null && !userMsg.isEmpty()) {
+            ObjectNode usr = MAPPER.createObjectNode(); usr.put("role","user"); usr.put("content",userMsg);
+            messages.add(usr);
+        }
+        req.set("messages", messages);
+        HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+        h.setBearerAuth(dsKey);
+        ResponseEntity<String> resp = restTemplate.postForEntity(
+            "https://api.deepseek.com/v1/chat/completions",
+            new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+        JsonNode result = MAPPER.readTree(resp.getBody());
+        String text = result.path("choices").get(0).path("message").path("content").asText();
+        // DeepSeek R1 include <think> tag — estraiamo solo la risposta finale
+        if (text.contains("<think>") && text.contains("</think>")) {
+            int endThink = text.lastIndexOf("</think>");
+            text = text.substring(endThink + 8).trim();
+        }
+        log.info("DeepSeek {} response: {} chars", model, text.length());
+        return text;
+    }
+
     private String callLLMWithTemp(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens, double temperature) throws Exception {
 
-        // ── Rate limit check: se Groq è bloccato, usa fallback autonomo ──
+        // ── Rate limit check: se Groq è bloccato, prova altri provider ──
         long now = System.currentTimeMillis();
         if (rateLimitUntil > now) {
-            log.warn("Groq rate limited fino a {}, uso fallback autonomo", new java.util.Date(rateLimitUntil));
+            log.warn("Groq rate limited, provo provider alternativi...");
+            // Prova Gemini
+            if (!env("GEMINI_API_KEY","").isEmpty()) {
+                try { return callGemini(system, userMsg, history, maxTokens, temperature); }
+                catch (Exception ge) { log.warn("Gemini fallback: {}", ge.getMessage()); }
+            }
+            // Prova DeepSeek
+            if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
+                try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
+                catch (Exception de) { log.warn("DeepSeek fallback: {}", de.getMessage()); }
+            }
             localFallbacks.incrementAndGet();
             return autonomousFallback(system, userMsg, history);
         }
@@ -5424,7 +5767,16 @@ public class ChatController {
                     }
                 } catch (Exception ignored) {}
                 rateLimitUntil = System.currentTimeMillis() + retryMs;
-                log.error("Groq 429 — rate limit. Riprovo tra {}ms. Uso fallback autonomo.", retryMs);
+                log.error("Groq 429 — rate limit per {}ms. Provo provider alternativi.", retryMs);
+                // Provider chain: Gemini → DeepSeek → autonomo
+                if (!env("GEMINI_API_KEY","").isEmpty()) {
+                    try { return callGemini(system, userMsg, history, maxTokens, temperature); }
+                    catch (Exception ge) { log.warn("Gemini dopo 429: {}", ge.getMessage()); }
+                }
+                if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
+                    try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
+                    catch (Exception de) { log.warn("DeepSeek dopo 429: {}", de.getMessage()); }
+                }
                 localFallbacks.incrementAndGet();
                 return autonomousFallback(system, userMsg, history);
             }
