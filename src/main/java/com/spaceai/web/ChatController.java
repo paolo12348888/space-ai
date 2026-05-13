@@ -59,8 +59,37 @@ public class ChatController {
     // Evita chiamate duplicate alla LLM per domande identiche
     // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
     private static class KnnCacheEntry {
-        final float[] embedding; final String response; final long timestamp;
-        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
+        final byte[] embedding; // INT4 quantizzato: float[512] → byte[256] (-75% RAM)
+        final float  embMin, embMax;
+        final String response;
+        final long   timestamp;
+
+        KnnCacheEntry(float[] e, String r) {
+            float mn = e[0], mx = e[0];
+            for (float v : e) { if (v < mn) mn = v; if (v > mx) mx = v; }
+            this.embMin = mn; this.embMax = mx;
+            float scale = (mx - mn) < 1e-8f ? 1f : (mx - mn) / 15f;
+            byte[] out = new byte[(e.length + 1) / 2];
+            for (int i = 0; i < e.length; i++) {
+                int q = Math.max(0, Math.min(15, Math.round((e[i] - mn) / scale)));
+                if (i % 2 == 0) out[i/2]  = (byte)(q << 4);
+                else             out[i/2] |= (byte)(q & 0x0F);
+            }
+            this.embedding = out;
+            this.response  = r;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        float[] dequantize() {
+            float scale = (embMax - embMin) < 1e-8f ? 1f : (embMax - embMin) / 15f;
+            float[] vec = new float[embedding.length * 2];
+            for (int i = 0; i < embedding.length; i++) {
+                vec[i*2]   = embMin + ((embedding[i] >> 4) & 0x0F) * scale;
+                if (i*2+1 < vec.length)
+                    vec[i*2+1] = embMin + (embedding[i] & 0x0F) * scale;
+            }
+            return vec;
+        }
     }
     private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
     private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
@@ -87,7 +116,8 @@ public class ChatController {
     private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
-    private final double[] quantumState = new double[1 << Math.min(QUBIT_COUNT, 16)]; // 2^16 stati
+    // Ridotto da 2^16 (512KB) a 512 entries (4KB) — nessuna perdita funzionale
+    private final double[] quantumState = new double[512];
     private final Random quantumRng = new Random();
     private volatile boolean quantumInitialized = false;
     private void initQuantumState() {
@@ -507,8 +537,8 @@ public class ChatController {
         if (bloomMightContain(normalized)) return;
         bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
-            String stored = fact.substring(0, Math.min(200, fact.length()));
+        if (fact.length() > 50 && ltm.size() < 50 && !ltm.contains(fact)) {
+            String stored = fact.substring(0, Math.min(150, fact.length()));
             ltm.add(stored);
             // Aggiorna vocabolario embedding con il nuovo fatto
             updateVocab(tokenize(stored));
@@ -1442,7 +1472,7 @@ public class ChatController {
         knnCachePut(key, value);  // salva nel ring buffer KNN
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
-        if (responseCache.size() > 500) cleanExpiredCache();
+        if (responseCache.size() > 100) cleanExpiredCache();
     }
     private String knnCacheGet(String query) {
         float[] qv = embed(query);
@@ -1450,7 +1480,7 @@ public class ChatController {
         for (KnnCacheEntry e : ringCache) {
             if (e == null) continue;
             if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
-            double sim = cosineSimilarity(qv, e.embedding);
+            double sim = cosineSimilarity(qv, e.dequantize());
             if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
         }
         if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
@@ -1486,6 +1516,32 @@ public class ChatController {
             return false;
         }
         return true;
+    }
+    // circuit breaker per provider singolo — true se quel provider va evitato
+    private final Map<String, Long>    providerCircuitOpenTime = new ConcurrentHashMap<>();
+    private final Map<String, Integer> providerCircuitFails    = new ConcurrentHashMap<>();
+    private static final int  PROVIDER_FAIL_THRESHOLD = 3;
+    private static final long PROVIDER_CIRCUIT_RESET_MS = 60_000; // 1 minuto
+
+    private boolean isProviderCircuitOpen(String provider) {
+        int fails = providerCircuitFails.getOrDefault(provider, 0);
+        if (fails < PROVIDER_FAIL_THRESHOLD) return false;
+        long openTime = providerCircuitOpenTime.getOrDefault(provider, 0L);
+        if (System.currentTimeMillis() - openTime > PROVIDER_CIRCUIT_RESET_MS) {
+            providerCircuitFails.put(provider, 0); // reset
+            return false;
+        }
+        return true;
+    }
+    private void recordProviderFailure(String provider) {
+        int fails = providerCircuitFails.merge(provider, 1, Integer::sum);
+        if (fails >= PROVIDER_FAIL_THRESHOLD) {
+            providerCircuitOpenTime.put(provider, System.currentTimeMillis());
+            log.warn("Circuit breaker APERTO per provider: {} dopo {} fallimenti", provider, fails);
+        }
+    }
+    private void recordProviderSuccess(String provider) {
+        providerCircuitFails.put(provider, 0);
     }
     private void recordSuccess() { failureCount.set(0); }
     private void recordFailure() {
@@ -5627,6 +5683,10 @@ public class ChatController {
     // ── Helper: esegue una chiamata HTTP con retry + backoff esponenziale ───
     private ResponseEntity<String> callWithRetry(String providerName,
             java.util.function.Supplier<ResponseEntity<String>> call) throws Exception {
+        // circuit breaker per provider: se è aperto, salta subito
+        if (isProviderCircuitOpen(providerName)) {
+            throw new Exception(providerName + " circuit breaker APERTO — provider temporaneamente escluso");
+        }
         Exception lastEx = null;
         for (int attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
             try {
@@ -5637,20 +5697,22 @@ public class ChatController {
                 }
                 ResponseEntity<String> resp = call.get();
                 providerSuccess.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                recordProviderSuccess(providerName);
                 return resp;
             } catch (org.springframework.web.client.ResourceAccessException rae) {
-                // timeout o connessione rifiutata — vale la pena riprovare
                 lastEx = rae;
                 providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                recordProviderFailure(providerName);
                 log.warn("{} timeout attempt {}: {}", providerName, attempt, rae.getMessage());
             } catch (org.springframework.web.client.HttpServerErrorException hse) {
-                // 5xx — retry
                 lastEx = hse;
                 providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                recordProviderFailure(providerName);
                 log.warn("{} 5xx attempt {}: {}", providerName, attempt, hse.getStatusCode());
             } catch (org.springframework.web.client.HttpClientErrorException hce) {
-                // 4xx (429, 401, ecc.) — NON riprovare, rilancia subito
+                // 4xx (429, 401) — NON riprovare, ma conta come fallimento
                 providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                recordProviderFailure(providerName);
                 throw hce;
             }
         }
