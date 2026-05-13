@@ -3665,7 +3665,7 @@ public class ChatController {
                 String b64 = frameB64s.get(i);
                 if (!b64.isEmpty())
                     html.append("<img onclick='goFrame(").append(i).append(")' src='data:image/jpeg;base64,")
-                        .append(b64.substring(0, Math.min(200, b64.length()))).append("...' ")
+                        .append(b64).append("' ")
                         .append("style='height:50px;border-radius:4px;cursor:pointer;opacity:.6;")
                         .append("border:2px solid transparent' id='vth").append(i).append("'/>");
             }
@@ -3725,11 +3725,14 @@ public class ChatController {
             html.append("  var fi=0;");
             html.append("  function drawNext(){");
             html.append("    showFrame(fi);");
-            html.append("    var img=document.getElementById('vf'+fi);");
-            html.append("    if(img){ctx2.drawImage(img,0,0,canvas.width,canvas.height);}");
-            html.append("    fi++;");
-            html.append("    if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
-            html.append("    else{setTimeout(function(){rec.stop();},200);}");
+            html.append("    var imgEl=document.getElementById('vf'+fi);");
+            html.append("    function doDraw(){");
+            html.append("      if(imgEl){ctx2.clearRect(0,0,canvas.width,canvas.height);ctx2.drawImage(imgEl,0,0,canvas.width,canvas.height);}");
+            html.append("      fi++;");
+            html.append("      if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
+            html.append("      else{setTimeout(function(){rec.stop();},300);}");
+            html.append("    }");
+            html.append("    if(imgEl&&!imgEl.complete){imgEl.onload=doDraw;imgEl.onerror=doDraw;}else{doDraw();}");
             html.append("  }");
             html.append("  drawNext();");
             html.append("};");
