@@ -27,6 +27,29 @@ public class ChatController {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
+
+    // ── RestTemplate dedicato ai provider LLM con timeout espliciti ─────────
+    private static final int LLM_CONNECT_TIMEOUT_MS = 8_000;   // 8s per aprire connessione
+    private static final int LLM_READ_TIMEOUT_MS    = 45_000;  // 45s per risposta completa
+    private static final int LLM_MAX_RETRIES        = 2;       // tentativi per provider
+    private static final long LLM_BACKOFF_BASE_MS   = 1_500;   // backoff: 1.5s, 3s
+
+    private final RestTemplate llmRestTemplate;
+    {
+        org.springframework.http.client.SimpleClientHttpRequestFactory f =
+            new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        f.setConnectTimeout(LLM_CONNECT_TIMEOUT_MS);
+        f.setReadTimeout(LLM_READ_TIMEOUT_MS);
+        llmRestTemplate = new RestTemplate(f);
+    }
+    // ── metriche per ogni provider ──────────────────────────────────────────
+    private final Map<String, AtomicInteger> providerSuccess = new ConcurrentHashMap<>(Map.of(
+        "groq", new AtomicInteger(0), "gemini", new AtomicInteger(0), "deepseek", new AtomicInteger(0)
+    ));
+    private final Map<String, AtomicInteger> providerFailure = new ConcurrentHashMap<>(Map.of(
+        "groq", new AtomicInteger(0), "gemini", new AtomicInteger(0), "deepseek", new AtomicInteger(0)
+    ));
+    // ────────────────────────────────────────────────────────────────────────
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, List<Map<String,String>>> neuralMemory = new ConcurrentHashMap<>();
     private final Map<String, Map<String,Object>> userProfiles = new ConcurrentHashMap<>();
@@ -36,40 +59,8 @@ public class ChatController {
     // Evita chiamate duplicate alla LLM per domande identiche
     // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
     private static class KnnCacheEntry {
-        final byte[] embedding; // INT4 quantizzato: float[512] → byte[256] (-75% RAM)
-        final float  embMin, embMax; // range per dequantizzare
-        final String response;
-        final long   timestamp;
-
-        KnnCacheEntry(float[] e, String r) {
-            // calcola min/max
-            float mn = e[0], mx = e[0];
-            for (float v : e) { if (v < mn) mn = v; if (v > mx) mx = v; }
-            this.embMin = mn; this.embMax = mx;
-            // quantizza a 4 bit: due valori per byte
-            byte[] out = new byte[(e.length + 1) / 2];
-            float scale = (mx - mn) < 1e-8f ? 1f : (mx - mn) / 15f;
-            for (int i = 0; i < e.length; i++) {
-                int q = Math.max(0, Math.min(15, Math.round((e[i] - mn) / scale)));
-                if (i % 2 == 0) out[i/2] = (byte)(q << 4);
-                else            out[i/2] |= (byte)(q & 0x0F);
-            }
-            this.embedding = out;
-            this.response  = r;
-            this.timestamp = System.currentTimeMillis();
-        }
-
-        // de-quantizza per il calcolo della cosine similarity
-        float[] dequantize() {
-            float scale = (embMax - embMin) < 1e-8f ? 1f : (embMax - embMin) / 15f;
-            float[] vec = new float[embedding.length * 2];
-            for (int i = 0; i < embedding.length; i++) {
-                vec[i*2]   = embMin + ((embedding[i] >> 4) & 0x0F) * scale;
-                if (i*2+1 < vec.length)
-                    vec[i*2+1] = embMin + (embedding[i] & 0x0F) * scale;
-            }
-            return vec;
-        }
+        final float[] embedding; final String response; final long timestamp;
+        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
     }
     private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
     private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
@@ -96,8 +87,7 @@ public class ChatController {
     private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
-    // Ridotto da 2^16 (512KB) a 512 entries (4KB) — nessuna perdita funzionale
-    private final double[] quantumState = new double[512];
+    private final double[] quantumState = new double[1 << Math.min(QUBIT_COUNT, 16)]; // 2^16 stati
     private final Random quantumRng = new Random();
     private volatile boolean quantumInitialized = false;
     private void initQuantumState() {
@@ -517,8 +507,8 @@ public class ChatController {
         if (bloomMightContain(normalized)) return;
         bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        if (fact.length() > 50 && ltm.size() < 50 && !ltm.contains(fact)) {
-            String stored = fact.substring(0, Math.min(150, fact.length())); // max 150 char per fatto
+        if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
+            String stored = fact.substring(0, Math.min(200, fact.length()));
             ltm.add(stored);
             // Aggiorna vocabolario embedding con il nuovo fatto
             updateVocab(tokenize(stored));
@@ -1452,7 +1442,7 @@ public class ChatController {
         knnCachePut(key, value);  // salva nel ring buffer KNN
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
-        if (responseCache.size() > 100) cleanExpiredCache();
+        if (responseCache.size() > 500) cleanExpiredCache();
     }
     private String knnCacheGet(String query) {
         float[] qv = embed(query);
@@ -1460,7 +1450,7 @@ public class ChatController {
         for (KnnCacheEntry e : ringCache) {
             if (e == null) continue;
             if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
-            double sim = cosineSimilarity(qv, e.dequantize());
+            double sim = cosineSimilarity(qv, e.embedding);
             if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
         }
         if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
@@ -5634,6 +5624,40 @@ public class ChatController {
     // PROVIDER CHAIN: Groq → Gemini 2.0 → DeepSeek → Autonomous fallback
     // ════════════════════════════════════════════════════════════════════════
 
+    // ── Helper: esegue una chiamata HTTP con retry + backoff esponenziale ───
+    private ResponseEntity<String> callWithRetry(String providerName,
+            java.util.function.Supplier<ResponseEntity<String>> call) throws Exception {
+        Exception lastEx = null;
+        for (int attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+            try {
+                if (attempt > 0) {
+                    long wait = LLM_BACKOFF_BASE_MS * (1L << (attempt - 1)); // 1.5s, 3s
+                    log.warn("{} retry {}/{} dopo {}ms", providerName, attempt, LLM_MAX_RETRIES, wait);
+                    Thread.sleep(wait);
+                }
+                ResponseEntity<String> resp = call.get();
+                providerSuccess.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                return resp;
+            } catch (org.springframework.web.client.ResourceAccessException rae) {
+                // timeout o connessione rifiutata — vale la pena riprovare
+                lastEx = rae;
+                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                log.warn("{} timeout attempt {}: {}", providerName, attempt, rae.getMessage());
+            } catch (org.springframework.web.client.HttpServerErrorException hse) {
+                // 5xx — retry
+                lastEx = hse;
+                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                log.warn("{} 5xx attempt {}: {}", providerName, attempt, hse.getStatusCode());
+            } catch (org.springframework.web.client.HttpClientErrorException hce) {
+                // 4xx (429, 401, ecc.) — NON riprovare, rilancia subito
+                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
+                throw hce;
+            }
+        }
+        throw new Exception(providerName + " fallito dopo " + (LLM_MAX_RETRIES + 1) + " tentativi", lastEx);
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     private String callGemini(String system, String userMsg, List<Map<String,String>> history,
                                int maxTokens, double temperature) throws Exception {
         String geminiKey = env("GEMINI_API_KEY","");
@@ -5678,11 +5702,16 @@ public class ChatController {
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         String url = "https://generativelanguage.googleapis.com/v1beta/models/" +
             model + ":generateContent?key=" + geminiKey;
-        ResponseEntity<String> resp = restTemplate.postForEntity(
-            url, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+        final String body = MAPPER.writeValueAsString(req);
+        final HttpEntity<String> entity = new HttpEntity<>(body, h);
+        // chiamata con retry + timeout
+        ResponseEntity<String> resp = callWithRetry("gemini",
+            () -> llmRestTemplate.postForEntity(url, entity, String.class));
         JsonNode result = MAPPER.readTree(resp.getBody());
         String text = result.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
         log.info("Gemini {} response: {} chars", model, text.length());
+        // salva in cache
+        knnCachePut("[gemini]" + userMsg, text);
         return text;
     }
 
@@ -5690,7 +5719,7 @@ public class ChatController {
                                  int maxTokens, double temperature) throws Exception {
         String dsKey = env("DEEPSEEK_API_KEY","");
         if (dsKey.isEmpty()) throw new IllegalStateException("DEEPSEEK_API_KEY non configurata");
-        String model = env("DEEPSEEK_MODEL","deepseek-chat"); // deepseek-chat o deepseek-reasoner (R1)
+        String model = env("DEEPSEEK_MODEL","deepseek-chat");
         // DeepSeek usa il formato OpenAI compatibile
         ObjectNode req = MAPPER.createObjectNode();
         req.put("model", model); req.put("max_tokens", maxTokens); req.put("temperature", temperature);
@@ -5711,9 +5740,12 @@ public class ChatController {
         req.set("messages", messages);
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         h.setBearerAuth(dsKey);
-        ResponseEntity<String> resp = restTemplate.postForEntity(
-            "https://api.deepseek.com/v1/chat/completions",
-            new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+        final String body = MAPPER.writeValueAsString(req);
+        final HttpEntity<String> entity = new HttpEntity<>(body, h);
+        // chiamata con retry + timeout
+        ResponseEntity<String> resp = callWithRetry("deepseek",
+            () -> llmRestTemplate.postForEntity(
+                "https://api.deepseek.com/v1/chat/completions", entity, String.class));
         JsonNode result = MAPPER.readTree(resp.getBody());
         String text = result.path("choices").get(0).path("message").path("content").asText();
         // DeepSeek R1 include <think> tag — estraiamo solo la risposta finale
@@ -5722,6 +5754,8 @@ public class ChatController {
             text = text.substring(endThink + 8).trim();
         }
         log.info("DeepSeek {} response: {} chars", model, text.length());
+        // salva in cache
+        knnCachePut("[deepseek]" + userMsg, text);
         return text;
     }
 
@@ -6367,6 +6401,17 @@ public class ChatController {
         m.put("failureCount",    failureCount.get());
         m.put("agentUsage",      agentUsage);
         m.put("date",            today());
+        // metriche provider LLM
+        Map<String,Object> providers = new java.util.LinkedHashMap<>();
+        for (String p : new String[]{"groq","gemini","deepseek"}) {
+            Map<String,Integer> pm = new java.util.LinkedHashMap<>();
+            pm.put("success", providerSuccess.getOrDefault(p, new AtomicInteger(0)).get());
+            pm.put("failure", providerFailure.getOrDefault(p, new AtomicInteger(0)).get());
+            int tot = pm.get("success") + pm.get("failure");
+            pm.put("successRate", tot > 0 ? (pm.get("success") * 100 / tot) : 100);
+            providers.put(p, pm);
+        }
+        m.put("providerStats", providers);
         return ResponseEntity.ok(m);
     }
     // ── ENDPOINT MEMORIA DIFFERENZIALE ──────────────────────────────────────────────
