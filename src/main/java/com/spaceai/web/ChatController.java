@@ -35,9 +35,36 @@ public class ChatController {
     private final Map<String, AtomicInteger> agentUsage = new ConcurrentHashMap<>();
     // Evita chiamate duplicate alla LLM per domande identiche
     // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
+    // ── INT4 Quantized KNN Cache — risparmia ~75% RAM rispetto a float[] ──
     private static class KnnCacheEntry {
-        final float[] embedding; final String response; final long timestamp;
-        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
+        final byte[]  quantized;   // embedding INT4 compresso (da float[512] a byte[256])
+        final float   qMin, qMax;  // range per dequantizzazione
+        final String  response;
+        final long    timestamp;
+        KnnCacheEntry(float[] emb, String resp) {
+            float mn = emb[0], mx = emb[0];
+            for (float v : emb) { if(v<mn)mn=v; if(v>mx)mx=v; }
+            this.qMin = mn; this.qMax = mx;
+            float scale = (mx - mn) < 1e-8f ? 1.0f : (mx - mn) / 15.0f;
+            this.quantized = new byte[(emb.length + 1) / 2];
+            for (int i = 0; i < emb.length; i++) {
+                int q = Math.max(0, Math.min(15, Math.round((emb[i] - mn) / scale)));
+                if (i % 2 == 0) this.quantized[i/2]  = (byte)(q << 4);
+                else             this.quantized[i/2] |= (byte)q;
+            }
+            this.response  = resp;
+            this.timestamp = System.currentTimeMillis();
+        }
+        float[] dequantize() {
+            float scale = (qMax - qMin) < 1e-8f ? 1.0f : (qMax - qMin) / 15.0f;
+            float[] out = new float[quantized.length * 2];
+            for (int i = 0; i < quantized.length; i++) {
+                out[i*2]   = qMin + ((quantized[i] >> 4) & 0x0F) * scale;
+                if (i*2+1 < out.length)
+                    out[i*2+1] = qMin + (quantized[i] & 0x0F) * scale;
+            }
+            return out;
+        }
     }
     private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
     private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
@@ -1387,10 +1414,74 @@ public class ChatController {
     // (aggiunto sotto come @GetMapping)
     private static final String BRAIN_FILE = "spaceai_brain.json.gz";
 
+    // ════════════════════════════════════════════════════════════════════════
+    // INT4 QUANTIZATION — synapticWeights: risparmia ~75% RAM
+    // ════════════════════════════════════════════════════════════════════════
+    private void saveQuantizedWeights() {
+        try {
+            ObjectNode root = MAPPER.createObjectNode();
+            ObjectNode qNode = MAPPER.createObjectNode();
+            long saved = 0, orig = 0;
+            for (Map.Entry<String, double[]> entry : synapticWeights.entrySet()) {
+                String agent = entry.getKey();
+                double[] ws  = entry.getValue();
+                orig += ws.length * 8L;
+                double min = ws[0], max = ws[0];
+                for (double w : ws) { if(w<min)min=w; if(w>max)max=w; }
+                double scale = (max-min)<1e-8 ? 1.0 : (max-min)/15.0;
+                byte[] cmp = new byte[(ws.length+1)/2];
+                for (int i = 0; i < ws.length; i++) {
+                    int val = Math.max(0,Math.min(15,(int)Math.round((ws[i]-min)/scale)));
+                    if (i%2==0) cmp[i/2]  = (byte)(val<<4);
+                    else        cmp[i/2] |= (byte)val;
+                }
+                saved += cmp.length;
+                qNode.put(agent+"_data", java.util.Base64.getEncoder().encodeToString(cmp));
+                qNode.put(agent+"_min",  min);
+                qNode.put(agent+"_max",  max);
+                qNode.put(agent+"_len",  ws.length);
+            }
+            root.set("q4", qNode);
+            java.nio.file.Files.writeString(java.nio.file.Paths.get("weights_4bit.json"),
+                MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root));
+            log.info("INT4 weights saved: {}KB -> {}KB (~{}% saving)",
+                orig/1024, saved/1024, orig>0?100-(saved*100/orig):0);
+        } catch (Exception e) { log.warn("saveQuantizedWeights: {}", e.getMessage()); }
+    }
+    private void loadQuantizedWeights() {
+        try {
+            java.nio.file.Path p = java.nio.file.Paths.get("weights_4bit.json");
+            if (!java.nio.file.Files.exists(p)) return;
+            JsonNode root  = MAPPER.readTree(java.nio.file.Files.readString(p));
+            JsonNode qNode = root.path("q4");
+            if (qNode.isMissingNode()) return;
+            java.util.Iterator<Map.Entry<String,JsonNode>> it = qNode.fields();
+            while (it.hasNext()) {
+                Map.Entry<String,JsonNode> e = it.next();
+                if (!e.getKey().endsWith("_data")) continue;
+                String agent = e.getKey().replace("_data","");
+                byte[] cmp   = java.util.Base64.getDecoder().decode(e.getValue().asText());
+                double min   = qNode.path(agent+"_min").asDouble(0);
+                double max   = qNode.path(agent+"_max").asDouble(1);
+                int    len   = qNode.path(agent+"_len").asInt(cmp.length*2);
+                double scale = (max-min)<1e-8 ? 1.0 : (max-min)/15.0;
+                double[] ws  = new double[len];
+                for (int i = 0; i < cmp.length && i*2 < len; i++) {
+                    ws[i*2]   = min + ((cmp[i]>>4)&0x0F)*scale;
+                    if (i*2+1 < len) ws[i*2+1] = min + (cmp[i]&0x0F)*scale;
+                }
+                synapticWeights.put(agent, ws);
+                log.debug("INT4 weights loaded: agent={} len={}", agent, len);
+            }
+            log.info("INT4 weights loaded for {} agents", synapticWeights.size());
+        } catch (Exception e) { log.warn("loadQuantizedWeights: {}", e.getMessage()); }
+    }
+
     public ChatController(AgentLoop agentLoop) {
         this.agentLoop = agentLoop;
         initQuantumState();
         loadBrainState();
+        loadQuantizedWeights(); // Carica pesi INT4 se disponibili
         // Fix 3: Assicura collection Qdrant all'avvio
         if (qdrantEnabled()) {
             qdrantEnsureCollection();
@@ -1427,7 +1518,7 @@ public class ChatController {
         for (KnnCacheEntry e : ringCache) {
             if (e == null) continue;
             if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
-            double sim = cosineSimilarity(qv, e.embedding);
+            double sim = cosineSimilarity(qv, e.dequantize());
             if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
         }
         if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
@@ -1485,6 +1576,7 @@ public class ChatController {
     public void saveBrainState() {
         // Fix 4: Shutdown RLHF executor
         rlhfExecutor.shutdown();
+        saveQuantizedWeights(); // Salva pesi INT4 compresso prima dello shutdown
         try { rlhfExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); }
         catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
         try {
@@ -3665,7 +3757,7 @@ public class ChatController {
                 String b64 = frameB64s.get(i);
                 if (!b64.isEmpty())
                     html.append("<img onclick='goFrame(").append(i).append(")' src='data:image/jpeg;base64,")
-                        .append(b64).append("' ")
+                        .append(b64.substring(0, Math.min(200, b64.length()))).append("...' ")
                         .append("style='height:50px;border-radius:4px;cursor:pointer;opacity:.6;")
                         .append("border:2px solid transparent' id='vth").append(i).append("'/>");
             }
@@ -3725,14 +3817,11 @@ public class ChatController {
             html.append("  var fi=0;");
             html.append("  function drawNext(){");
             html.append("    showFrame(fi);");
-            html.append("    var imgEl=document.getElementById('vf'+fi);");
-            html.append("    function doDraw(){");
-            html.append("      if(imgEl){ctx2.clearRect(0,0,canvas.width,canvas.height);ctx2.drawImage(imgEl,0,0,canvas.width,canvas.height);}");
-            html.append("      fi++;");
-            html.append("      if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
-            html.append("      else{setTimeout(function(){rec.stop();},300);}");
-            html.append("    }");
-            html.append("    if(imgEl&&!imgEl.complete){imgEl.onload=doDraw;imgEl.onerror=doDraw;}else{doDraw();}");
+            html.append("    var img=document.getElementById('vf'+fi);");
+            html.append("    if(img){ctx2.drawImage(img,0,0,canvas.width,canvas.height);}");
+            html.append("    fi++;");
+            html.append("    if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
+            html.append("    else{setTimeout(function(){rec.stop();},200);}");
             html.append("  }");
             html.append("  drawNext();");
             html.append("};");
