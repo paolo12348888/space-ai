@@ -178,31 +178,9 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <div class="chips">
-          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
-          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
-          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
-          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
-          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
-          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
-          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
-          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
-          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
-          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
-          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
-          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
-          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
-          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
-          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
-          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
-          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
-          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
-          <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
-          <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
-          <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
-          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
-          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
-          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
+        <div id="agentHint" style="display:flex;align-items:center;gap:10px;margin-top:16px;padding:10px 16px;border-radius:12px;background:var(--surface);border:1px solid var(--border);font-size:.8rem;color:var(--muted);min-height:40px;transition:all .3s">
+          <span id="agentHintIcon" style="font-size:1.2rem">🤖</span>
+          <span id="agentHintTxt">Scrivi qualcosa per attivare automaticamente l'agente giusto…</span>
         </div>
       </div>
     </div>
@@ -510,6 +488,63 @@ function setMode(m){
   };
   inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
+
+// ── AUTO-ROUTING: sceglie l'agente giusto in base al testo ──────────────
+var _routeRules=[
+  // [regex, mode, icon, label]
+  [/\b(genera|crea|disegna|dipingi|immagine|foto|illustra|render|ritratto|paesaggio|sfondo)\b/i,          "image",          "🎨","Genera Immagine"],
+  [/\b(svg|vettoriale|grafico vettoriale|visual creative|disegno geometrico)\b/i,                          "visual_creative", "🖼️","Creativo Visivo"],
+  [/\b(video|animazione|clip|film|crea.{0,10}video|genera.{0,10}video)\b/i,                               "video",           "🎬","Video AI"],
+  [/\b(canzone|musica|melodia|brano|accordi|spartito|testo musicale|crea.{0,10}canzone)\b/i,              "music",           "🎵","Crea Canzone"],
+  [/\b(audio|voce|tts|pronuncia|leggi ad alta voce|genera audio|sintesi vocale)\b/i,                      "audio",           "🎙️","Audio TTS"],
+  [/\b(codice|programma|funzione|script|bug|debug|python|java|javascript|html|css|api|git|classe|metodo|algoritmo|compila)\b/i, "code","💻","Codice"],
+  [/\b(trading|borsa|azioni|stock|bitcoin|ethereum|crypto|mercato|finanza|investimento|macd|rsi|nasdaq|indice|portafoglio|dividendo)\b/i, "finance","📈","Finanza"],
+  [/\b(notizie|news|oggi|ultime ore|aggiornamenti|cerca.{0,10}web|google|ricerca|attualit[àa]|breaking)\b/i, "search",       "🔍","Ricerca Web"],
+  [/\b(sicurezza|vulnerability|exploit|hacking|penetration|firewall|malware|virus|cybersecurity|aegis|scan)\b/i, "security",  "🛡️","AEGIS Security"],
+  [/\b(futuro|passato|storia|evoluzione|timeline|previsione|tendenza|temporal|analisi storica)\b/i,        "temporal",       "⏳","Temporal Reasoning"],
+  [/\b(sogno|creativo|idea innovativa|startup|brainstorm|fantasia|immagina se|dream|soluzione creativa)\b/i,"dream",          "🌌","Dream Synthesis"],
+  [/\b(spiega|come funziona|insegnam|imparo|capisci|socratico|ragiona con me|guida|tutorial|passo passo)\b/i,"socratic",      "🤖","Socratic Mode"],
+  [/\b(cosa sarebbe successo|scenario alternativo|ipotesi|e se|counterfactual|e se invece|immagina che)\b/i,"counterfactual","❓","Counterfactual"],
+  [/\b(neural|ragiona autonomamente|analisi profonda|riflessione|meditazione logica)\b/i,                  "neural",          "🧠","Neural Core"],
+  [/\b(parla|ascolta|voce|conversazione vocale|spaces)\b/i,                                               "spaces",          "🛸","SPACES Vocale"],
+  [/\b(github|repository|repo|commit|pull request|branch|open source)\b/i,                               "github",          "🐱","GitHub Agent"],
+  [/\b(obiettivo|goal|delega|pianifica|task autonomo|manus|agente autonomo|esegui per me)\b/i,             "manus",           "🎯","Goal Delegation"],
+];
+
+function autoRoute(text){
+  if(!text||text.trim().length<3)return null;
+  var t=text.trim();
+  for(var i=0;i<_routeRules.length;i++){
+    if(_routeRules[i][0].test(t))return{mode:_routeRules[i][1],icon:_routeRules[i][2],label:_routeRules[i][3]};
+  }
+  return null;
+}
+
+function updateAgentHint(text){
+  var hint=document.getElementById("agentHint");
+  var icon=document.getElementById("agentHintIcon");
+  var lbl=document.getElementById("agentHintTxt");
+  if(!hint||!icon||!lbl)return;
+  var r=autoRoute(text);
+  if(r){
+    icon.textContent=r.icon;
+    lbl.innerHTML="Agente rilevato: <strong style='color:var(--accent)'>"+r.label+"</strong>";
+    hint.style.borderColor="var(--accent)";
+    hint.style.background="rgba(0,200,150,.07)";
+  } else if(text&&text.trim().length>0){
+    icon.textContent="🤖";
+    lbl.textContent="Rispondo io direttamente…";
+    hint.style.borderColor="var(--border)";
+    hint.style.background="var(--surface)";
+  } else {
+    icon.textContent="🤖";
+    lbl.textContent="Scrivi qualcosa per attivare automaticamente l'agente giusto…";
+    hint.style.borderColor="var(--border)";
+    hint.style.background="var(--surface)";
+  }
+}
+// ────────────────────────────────────────────────────────────────────────
+
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
 function startSpaces(){
   curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
@@ -550,7 +585,11 @@ function listenLoop(){
   };
   try{r.start();}catch(e){if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1500);}
 }
-inpEl.addEventListener("input",function(){inpEl.style.height="auto";inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";});
+inpEl.addEventListener("input",function(){
+  inpEl.style.height="auto";
+  inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";
+  updateAgentHint(inpEl.value);
+});
 // ── Avvio: carica sessioni e offri di riprendere l'ultima chat ───────────
 renderChatHistory();
 (function(){
@@ -720,16 +759,7 @@ function addImgRow(b64,mime){
   var bub=document.createElement("div");bub.className="bubble";bub.style.cssText="padding:8px;max-width:92%";
   var img=document.createElement("img");img.src="data:"+(mime||"image/jpeg")+";base64,"+b64;
   img.style.cssText="max-width:100%;border-radius:10px;display:block;cursor:zoom-in";
-  img.onclick=function(){
-    var ov=document.createElement("div");
-    ov.style.cssText="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.88);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out";
-    var big=document.createElement("img");
-    big.src=img.src;
-    big.style.cssText="max-width:95vw;max-height:95vh;border-radius:10px;box-shadow:0 0 40px rgba(0,0,0,.8)";
-    ov.appendChild(big);
-    ov.onclick=function(){document.body.removeChild(ov);};
-    document.body.appendChild(ov);
-  };
+  img.onclick=function(){window.open(img.src,"_blank");};
   var acts=document.createElement("div");acts.className="acts";
   var dl=document.createElement("a");dl.href=img.src;dl.download="space-ai-"+Date.now()+".jpg";dl.className="abtn";dl.style.textDecoration="none";
   dl.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Scarica';
@@ -746,16 +776,7 @@ function addSVGRow(svgDataUrl, caption, svgCode){
   var img=document.createElement("img");
   img.src=svgDataUrl;
   img.style.cssText="max-width:100%;border-radius:10px;display:block;cursor:zoom-in;margin-bottom:8px";
-  img.onclick=function(){
-    var ov=document.createElement("div");
-    ov.style.cssText="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.88);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out";
-    var big=document.createElement("img");
-    big.src=img.src;
-    big.style.cssText="max-width:95vw;max-height:95vh;border-radius:10px;box-shadow:0 0 40px rgba(0,0,0,.8)";
-    ov.appendChild(big);
-    ov.onclick=function(){document.body.removeChild(ov);};
-    document.body.appendChild(ov);
-  };
+  img.onclick=function(){window.open(img.src,"_blank");};
   bub.appendChild(img);
   if(caption){
     var cap=document.createElement("p");
@@ -875,6 +896,22 @@ async function sendMsg(){
     attachedFiles=[];renderFiles();
   }
   if(!text||btnEl.disabled)return;
+
+  // ── AUTO-ROUTING: se siamo in modalità auto, scegli agente dal testo ──
+  if(curMode==="auto"){
+    var _ar=autoRoute(text);
+    if(_ar){
+      // agenti speciali con panel dedicato
+      if(_ar.mode==="music"){showMusicPanel();return;}
+      if(_ar.mode==="github"){showGithubPanel();return;}
+      if(_ar.mode==="manus"){showManusPanel();return;}
+      // imposta mode silenziosamente (senza chiudere sidebar)
+      curMode=_ar.mode;
+      document.getElementById("modeLbl").innerHTML=_ar.icon+" "+_ar.label;
+    }
+  }
+  // ── fine auto-routing ─────────────────────────────────────────────────
+
   var msg=text;
   if(curMode==="code")msg="[MODALITA CODICE] "+text;
   else if(curMode==="finance")msg="[MODALITA FINANZA] "+text;
@@ -888,6 +925,8 @@ async function sendMsg(){
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
+  // reset a auto dopo ogni messaggio (routing stateless)
+  if(curMode!=="spaces")curMode="auto";
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   addRow(text,"user");
@@ -1119,6 +1158,9 @@ async function sendMsg(){
   }finally{
     btnEl.disabled=false;
     inpEl.focus();
+    // reset label a Auto dopo ogni risposta
+    if(curMode==="auto")document.getElementById("modeLbl").innerHTML="🤖 Auto";
+    updateAgentHint("");
   }
 }
   // ── Manus Agent ───────────────────────────────────────────────────────────
