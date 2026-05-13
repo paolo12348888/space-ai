@@ -36,8 +36,40 @@ public class ChatController {
     // Evita chiamate duplicate alla LLM per domande identiche
     // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
     private static class KnnCacheEntry {
-        final float[] embedding; final String response; final long timestamp;
-        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
+        final byte[] embedding; // INT4 quantizzato: float[512] → byte[256] (-75% RAM)
+        final float  embMin, embMax; // range per dequantizzare
+        final String response;
+        final long   timestamp;
+
+        KnnCacheEntry(float[] e, String r) {
+            // calcola min/max
+            float mn = e[0], mx = e[0];
+            for (float v : e) { if (v < mn) mn = v; if (v > mx) mx = v; }
+            this.embMin = mn; this.embMax = mx;
+            // quantizza a 4 bit: due valori per byte
+            byte[] out = new byte[(e.length + 1) / 2];
+            float scale = (mx - mn) < 1e-8f ? 1f : (mx - mn) / 15f;
+            for (int i = 0; i < e.length; i++) {
+                int q = Math.max(0, Math.min(15, Math.round((e[i] - mn) / scale)));
+                if (i % 2 == 0) out[i/2] = (byte)(q << 4);
+                else            out[i/2] |= (byte)(q & 0x0F);
+            }
+            this.embedding = out;
+            this.response  = r;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        // de-quantizza per il calcolo della cosine similarity
+        float[] dequantize() {
+            float scale = (embMax - embMin) < 1e-8f ? 1f : (embMax - embMin) / 15f;
+            float[] vec = new float[embedding.length * 2];
+            for (int i = 0; i < embedding.length; i++) {
+                vec[i*2]   = embMin + ((embedding[i] >> 4) & 0x0F) * scale;
+                if (i*2+1 < vec.length)
+                    vec[i*2+1] = embMin + (embedding[i] & 0x0F) * scale;
+            }
+            return vec;
+        }
     }
     private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
     private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
@@ -64,7 +96,8 @@ public class ChatController {
     private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
-    private final double[] quantumState = new double[1 << Math.min(QUBIT_COUNT, 16)]; // 2^16 stati
+    // Ridotto da 2^16 (512KB) a 512 entries (4KB) — nessuna perdita funzionale
+    private final double[] quantumState = new double[512];
     private final Random quantumRng = new Random();
     private volatile boolean quantumInitialized = false;
     private void initQuantumState() {
@@ -484,8 +517,8 @@ public class ChatController {
         if (bloomMightContain(normalized)) return;
         bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
-            String stored = fact.substring(0, Math.min(200, fact.length()));
+        if (fact.length() > 50 && ltm.size() < 50 && !ltm.contains(fact)) {
+            String stored = fact.substring(0, Math.min(150, fact.length())); // max 150 char per fatto
             ltm.add(stored);
             // Aggiorna vocabolario embedding con il nuovo fatto
             updateVocab(tokenize(stored));
@@ -1419,7 +1452,7 @@ public class ChatController {
         knnCachePut(key, value);  // salva nel ring buffer KNN
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
-        if (responseCache.size() > 500) cleanExpiredCache();
+        if (responseCache.size() > 100) cleanExpiredCache();
     }
     private String knnCacheGet(String query) {
         float[] qv = embed(query);
@@ -1427,7 +1460,7 @@ public class ChatController {
         for (KnnCacheEntry e : ringCache) {
             if (e == null) continue;
             if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
-            double sim = cosineSimilarity(qv, e.embedding);
+            double sim = cosineSimilarity(qv, e.dequantize());
             if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
         }
         if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
@@ -3665,7 +3698,7 @@ public class ChatController {
                 String b64 = frameB64s.get(i);
                 if (!b64.isEmpty())
                     html.append("<img onclick='goFrame(").append(i).append(")' src='data:image/jpeg;base64,")
-                        .append(b64).append("' ")
+                        .append(b64.substring(0, Math.min(200, b64.length()))).append("...' ")
                         .append("style='height:50px;border-radius:4px;cursor:pointer;opacity:.6;")
                         .append("border:2px solid transparent' id='vth").append(i).append("'/>");
             }
@@ -3725,14 +3758,11 @@ public class ChatController {
             html.append("  var fi=0;");
             html.append("  function drawNext(){");
             html.append("    showFrame(fi);");
-            html.append("    var imgEl=document.getElementById('vf'+fi);");
-            html.append("    function doDraw(){");
-            html.append("      if(imgEl){ctx2.clearRect(0,0,canvas.width,canvas.height);ctx2.drawImage(imgEl,0,0,canvas.width,canvas.height);}");
-            html.append("      fi++;");
-            html.append("      if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
-            html.append("      else{setTimeout(function(){rec.stop();},300);}");
-            html.append("    }");
-            html.append("    if(imgEl&&!imgEl.complete){imgEl.onload=doDraw;imgEl.onerror=doDraw;}else{doDraw();}");
+            html.append("    var img=document.getElementById('vf'+fi);");
+            html.append("    if(img){ctx2.drawImage(img,0,0,canvas.width,canvas.height);}");
+            html.append("    fi++;");
+            html.append("    if(fi<frames){setTimeout(drawNext,").append(frameMs).append(");}");
+            html.append("    else{setTimeout(function(){rec.stop();},200);}");
             html.append("  }");
             html.append("  drawNext();");
             html.append("};");
