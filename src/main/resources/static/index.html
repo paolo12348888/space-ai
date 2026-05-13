@@ -259,6 +259,7 @@ var btnEl=document.getElementById("sendBtn");
 var attachedFiles=[];
 var isRec=false,recog=null,curSpeech=null;
 var curMode="auto";
+var _lockedMode=null; // agente attivo fino a cambio di topic (null = nessuno)
 var spacesOn=false;
 var spacesWaiting=false;
 
@@ -468,6 +469,9 @@ window.addEventListener("load",function(){
 });
 function setMode(m){
   curMode=m;
+  // se l'utente sceglie manualmente dalla sidebar → locked su quell'agente
+  // se sceglie "auto" → sblocca
+  _lockedMode = (m==="auto") ? null : m;
   if(m!=="spaces")spacesOn=false;
   var L={
     auto:"&#129302; Auto",code:"&#128187; Codice",finance:"&#128200; Finanza",
@@ -691,7 +695,7 @@ function renderMD(text){
   return t;
 }
 function cpCode(btn){var c=btn.previousElementSibling.textContent;navigator.clipboard.writeText(c).then(function(){btn.textContent="OK";setTimeout(function(){btn.textContent="Copia";},1500);});}
-function newChat(){saveChatToStorage();SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;spacesWaiting=false;msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
+function newChat(){saveChatToStorage();SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;spacesWaiting=false;curMode="auto";_lockedMode=null;document.getElementById("modeLbl").innerHTML="\u{1F916} Auto";msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
 function removeWelcome(){var w=document.getElementById("welcome");if(w)w.remove();}
 function qs(t){inpEl.value=t;sendMsg();}
 function addRow(text,type){
@@ -897,20 +901,36 @@ async function sendMsg(){
   }
   if(!text||btnEl.disabled)return;
 
-  // ── AUTO-ROUTING: se siamo in modalità auto, scegli agente dal testo ──
-  if(curMode==="auto"){
+  // ── AUTO-ROUTING con sticky agent ────────────────────────────────────
+  // lockedMode = agente attivo finché il tema non cambia
+  if(curMode==="auto"||curMode===_lockedMode){
     var _ar=autoRoute(text);
     if(_ar){
-      // agenti speciali con panel dedicato
+      // agenti con panel dedicato → apri panel e fermati
       if(_ar.mode==="music"){showMusicPanel();return;}
       if(_ar.mode==="github"){showGithubPanel();return;}
       if(_ar.mode==="manus"){showManusPanel();return;}
-      // imposta mode silenziosamente (senza chiudere sidebar)
-      curMode=_ar.mode;
-      document.getElementById("modeLbl").innerHTML=_ar.icon+" "+_ar.label;
+
+      if(_ar.mode!==_lockedMode){
+        // nuovo agente rilevato → switcha e blocca
+        _lockedMode=_ar.mode;
+        curMode=_ar.mode;
+        document.getElementById("modeLbl").innerHTML=_ar.icon+" "+_ar.label;
+      } else {
+        // stesso agente → rimane locked, non fare nulla
+        curMode=_lockedMode;
+      }
+    } else {
+      // nessun agente rilevato nel messaggio
+      if(_lockedMode!==null){
+        // messaggio generico mentre c'è un agente locked → rimane locked
+        curMode=_lockedMode;
+      } else {
+        curMode="auto"; // nessun agente attivo → risposta diretta
+      }
     }
   }
-  // ── fine auto-routing ─────────────────────────────────────────────────
+  // ── fine auto-routing ──────────────────────────────────────────────────
 
   var msg=text;
   if(curMode==="code")msg="[MODALITA CODICE] "+text;
@@ -925,8 +945,7 @@ async function sendMsg(){
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
-  // reset a auto dopo ogni messaggio (routing stateless)
-  if(curMode!=="spaces")curMode="auto";
+  // NON resettare curMode — l'agente rimane locked finché cambia topic
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   addRow(text,"user");
@@ -1158,8 +1177,10 @@ async function sendMsg(){
   }finally{
     btnEl.disabled=false;
     inpEl.focus();
-    // reset label a Auto dopo ogni risposta
-    if(curMode==="auto")document.getElementById("modeLbl").innerHTML="🤖 Auto";
+    // aggiorna label: mostra agente locked o Auto
+    if(curMode==="auto"||curMode===null){
+      document.getElementById("modeLbl").innerHTML="🤖 Auto";
+    }
     updateAgentHint("");
   }
 }
