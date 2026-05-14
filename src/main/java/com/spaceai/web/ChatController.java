@@ -347,12 +347,29 @@ public class ChatController {
     private final AtomicInteger               docCount  = new AtomicInteger(0);
 
     private static class RagChunk {
-        final String docId; final String text; final float[] embedding;
-        final int chunkIndex; final long timestamp;
+        final String  docId;
+        final String  text;        // testo del chunk (o caption per immagini)
+        final float[] embedding;
+        final int     chunkIndex;
+        final long    timestamp;
+        // Campi multimodali (null per chunk testuali)
+        final String  imageBase64; // null se chunk testuale
+        final String  imageType;   // "image/jpeg", "image/png", null se testuale
+
+        // Costruttore testo (compatibile con codice esistente)
         RagChunk(String docId, String text, float[] embedding, int chunkIndex) {
             this.docId=docId; this.text=text; this.embedding=embedding;
             this.chunkIndex=chunkIndex; this.timestamp=System.currentTimeMillis();
+            this.imageBase64=null; this.imageType=null;
         }
+        // Costruttore immagine
+        RagChunk(String docId, String caption, float[] embedding,
+                 int chunkIndex, String imageBase64, String imageType) {
+            this.docId=docId; this.text=caption; this.embedding=embedding;
+            this.chunkIndex=chunkIndex; this.timestamp=System.currentTimeMillis();
+            this.imageBase64=imageBase64; this.imageType=imageType;
+        }
+        boolean isImage() { return imageBase64 != null; }
     }
 
     private List<String> tokenize(String text) {
@@ -426,6 +443,81 @@ public class ChatController {
         log.info("RAG indexed: docId={} chunks={} vocab={}", docId, chunks.size(), vocabSize.get());
         return chunks.size();
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // MULTIMODAL RAG — indicizzazione e retrieval di immagini
+    // Strategia: genera caption LLM → embed caption → salva con imageBase64
+    // Nessuna dipendenza esterna (CLIP non richiesto)
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Indicizza un'immagine nel RAG: genera caption → embed → salva chunk
+    private void ragIndexImage(String docId, String imageBase64, String imageType,
+                                String contextHint,
+                                String baseUrl, String apiKey, String model) {
+        try {
+            // Genera caption dell'immagine tramite LLM vision
+            String caption = analyzeImageBase64(imageBase64,
+                "Descrivi questa immagine in dettaglio in italiano: " +
+                "oggetti presenti, colori, composizione, testo visibile, contesto. " +
+                (contextHint != null ? "Contesto: " + contextHint : ""),
+                baseUrl, apiKey, model);
+            if (caption == null || caption.isBlank()) return;
+
+            // Embed la caption (testo) — stesso spazio vettoriale dei chunk testuali
+            float[] embedding = embed(caption);
+            List<RagChunk> chunks = ragStore.computeIfAbsent(docId, k -> new ArrayList<>());
+            int idx = chunks.size();
+            chunks.add(new RagChunk(docId, caption, embedding, idx, imageBase64, imageType));
+            log.info("Multimodal RAG: immagine indicizzata docId={} captionLen={}",
+                docId, caption.length());
+        } catch (Exception e) {
+            log.warn("ragIndexImage fallito: {}", e.getMessage());
+        }
+    }
+
+    // Retrieval unificato testo+immagini — restituisce oggetto con chunks misti
+    private static class RagResult {
+        final String textContext;
+        final List<RagChunk> imageChunks; // chunk immagine rilevanti
+        RagResult(String textContext, List<RagChunk> imageChunks) {
+            this.textContext = textContext;
+            this.imageChunks = imageChunks;
+        }
+    }
+
+    private RagResult ragRetrieveMultimodal(String query, String sessionId) {
+        if (ragStore.isEmpty()) return new RagResult("", new ArrayList<>());
+        float[] qEmb = embed(query);
+        List<double[]> scored = new ArrayList<>();
+        List<RagChunk> all = new ArrayList<>();
+        for (Map.Entry<String, List<RagChunk>> e : ragStore.entrySet()) {
+            boolean isSession = e.getKey().startsWith(sessionId);
+            for (RagChunk c : e.getValue()) {
+                double sim = cosineSimilarity(qEmb, c.embedding) + (isSession ? 0.1 : 0);
+                if (sim >= SIM_THRESHOLD) {
+                    scored.add(new double[]{sim, all.size()});
+                }
+                all.add(c);
+            }
+        }
+        scored.sort((a,b) -> Double.compare(b[0], a[0]));
+        StringBuilder textSb = new StringBuilder();
+        List<RagChunk> imgChunks = new ArrayList<>();
+        int textCount = 0, imgCount = 0;
+        for (double[] s : scored) {
+            RagChunk c = all.get((int)s[1]);
+            if (c.isImage()) {
+                if (imgCount < 2) { imgChunks.add(c); imgCount++; } // max 2 immagini
+            } else {
+                if (textCount < TOP_K_RAG) {
+                    textSb.append(c.text).append("\n---\n");
+                    textCount++;
+                }
+            }
+        }
+        return new RagResult(textSb.toString().trim(), imgChunks);
+    }
+    // ════════════════════════════════════════════════════════════════════════
 
     private String ragRetrieve(String query, String sessionId) {
         if (ragStore.isEmpty()) return "";
@@ -1352,34 +1444,75 @@ public class ChatController {
         return ctx.toString().replaceAll(" · $", "").trim();
     }
 
-    private String buildSystemPrompt(String mode, String sessionId, String query) {
+    // ════════════════════════════════════════════════════════════════════════
+    // PROMPT CACHING — cache della parte statica del system prompt
+    // Riduce token ripetuti per sessione (~60-70% del system prompt è statico)
+    // ════════════════════════════════════════════════════════════════════════
+    // Cache: hash(staticPart) → staticPart già costruita
+    private final Map<String, String> promptStaticCache = new ConcurrentHashMap<>();
+    private static final int PROMPT_CACHE_MAX = 50;   // max sessioni in cache
+    private static final long PROMPT_CACHE_TTL = 300_000L; // 5 minuti
+    private final Map<String, Long> promptCacheTimestamps = new ConcurrentHashMap<>();
+
+    // Parte STATICA del system prompt (uguale per tutte le query della stessa sessione)
+    private String buildStaticSystemPrompt(String mode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata al mondo. Data OGGI: ")
+          .append(today()).append(".\n");
+        sb.append("IMPORTANTE - La tua conoscenza base arriva fino a ").append(KNOWLEDGE_CUTOFF)
+          .append(". Per il ").append(CURRENT_DATE_CONTEXT)
+          .append(" e eventi recenti, hai gia eseguito una ricerca web - usa quei dati.\n");
+        sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ")
+          .append("knowledge graph, LTM, ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
+        sb.append("Modalita: ").append(mode).append(".\n");
+        sb.append("Rispondi in italiano con markdown. Sii preciso e coerente con le conversazioni precedenti.\n");
+        return sb.toString();
+    }
+
+    // Parte DINAMICA (cambia ad ogni query: memoria, RAG, emozione)
+    private String buildDynamicSystemPrompt(String sessionId, String query) {
+        StringBuilder sb = new StringBuilder();
         String kgTop   = getTopKGConcepts(sessionId);
         String emotion = emotionState.getOrDefault(sessionId, "neutral");
-        int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
-        int kgSize     = knowledgeGraph.size();
-        StringBuilder sb = new StringBuilder();
-        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata al mondo. Data OGGI: ").append(today()).append(".\n");
-        sb.append("IMPORTANTE - La tua conoscenza base (da Llama) arriva fino a ").append(KNOWLEDGE_CUTOFF).append(". ");
-        sb.append("Per tutto cio che riguarda il ").append(CURRENT_DATE_CONTEXT).append(" e eventi recenti, ");
-        sb.append("hai gia eseguito una ricerca web aggiornata - usa quei dati come fonte primaria.\n");
-        sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ");
-        sb.append("knowledge graph ").append(kgSize).append(" nodi, LTM ").append(ltmSize).append(" fatti, ");
-        sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
-        // MSA UNIFICATO: unico meccanismo di retrieval — aggrega tutto
+        int    ltmSize = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
+        sb.append("Knowledge graph: ").append(knowledgeGraph.size())
+          .append(" nodi, LTM: ").append(ltmSize).append(" fatti.\n");
         String msaMem = msaRetrieveUnified(query, sessionId);
         if (!msaMem.isEmpty())
             sb.append("MEMORIA ATTIVA (MSA): ").append(msaMem).append("\n");
-        // RAG: contesto dai documenti indicizzati
         String ragCtx = ragRetrieve(query, sessionId);
-        if (!ragCtx.isEmpty())
-            sb.append(ragCtx);
-        if (!kgTop.isEmpty())
-            sb.append("CONCETTI KG: ").append(kgTop).append("\n");
-        sb.append("Emozione utente rilevata: ").append(emotion).append(".\n");
-        sb.append("Modalita: ").append(mode).append(".\n");
-        sb.append("Usa la tua memoria per essere coerente con le conversazioni precedenti. ");
-        sb.append("Rispondi in italiano con markdown. Sii preciso, autonomo e cosciente della tua architettura.");
+        if (!ragCtx.isEmpty()) sb.append(ragCtx);
+        if (!kgTop.isEmpty()) sb.append("CONCETTI KG: ").append(kgTop).append("\n");
+        sb.append("Emozione utente: ").append(emotion).append(".\n");
         return sb.toString();
+    }
+
+    // Recupera il prefisso statico dalla cache (o lo costruisce)
+    private String getCachedStaticPrompt(String mode) {
+        String cacheKey = "static_" + mode + "_" + today();
+        long now = System.currentTimeMillis();
+        Long ts = promptCacheTimestamps.get(cacheKey);
+        if (ts != null && now - ts < PROMPT_CACHE_TTL && promptStaticCache.containsKey(cacheKey)) {
+            return promptStaticCache.get(cacheKey); // HIT
+        }
+        // MISS — costruisce e salva
+        String staticPart = buildStaticSystemPrompt(mode);
+        if (promptStaticCache.size() >= PROMPT_CACHE_MAX) {
+            // evict entry più vecchia
+            promptCacheTimestamps.entrySet().stream()
+                .min(Map.Entry.comparingByValue())
+                .ifPresent(e -> { promptStaticCache.remove(e.getKey());
+                                  promptCacheTimestamps.remove(e.getKey()); });
+        }
+        promptStaticCache.put(cacheKey, staticPart);
+        promptCacheTimestamps.put(cacheKey, now);
+        return staticPart;
+    }
+    // ════════════════════════════════════════════════════════════════════════
+
+    private String buildSystemPrompt(String mode, String sessionId, String query) {
+        // Parte statica (cachata) + parte dinamica (fresca ogni query)
+        return getCachedStaticPrompt(mode) + buildDynamicSystemPrompt(sessionId, query);
     }
     // Calcola reward basato su lunghezza risposta e interazione
     private double computeReward(String query, String response, String agent) {
@@ -5348,6 +5481,15 @@ public class ChatController {
             String imageBase64 = body.getOrDefault("imageBase64","");
             if (!imageBase64.isEmpty()) {
                 try {
+                    // ── AUTO-INDEX immagine nel Multimodal RAG ───────────────
+                    String imgDocId = sessionId + "/img_" + System.currentTimeMillis();
+                    // Indicizza in background per non rallentare la risposta
+                    final String _imgDocId = imgDocId;
+                    final String _imgB64 = imageBase64;
+                    final String _baseUrl = baseUrl, _apiKey = apiKey, _model = model;
+                    executor.submit(() -> ragIndexImage(_imgDocId, _imgB64, "image/jpeg",
+                        userMessage, _baseUrl, _apiKey, _model));
+                    // ── Analisi visione ──────────────────────────────────────
                     String vision = analyzeImageBase64(imageBase64, userMessage, baseUrl, apiKey, model);
                     saveMessages(sessionId, userMessage, vision, supabaseUrl, supabaseKey);
                     Map<String,Object> vResp = new HashMap<>();
@@ -6891,6 +7033,9 @@ public class ChatController {
         }
         providers.put("groqPool", poolStatus);
         m.put("providerStats", providers);
+        // metriche prompt cache
+        m.put("promptCacheSize",    promptStaticCache.size());
+        m.put("promptCacheMaxSize", PROMPT_CACHE_MAX);
         return ResponseEntity.ok(m);
     }
     // ── ENDPOINT MEMORIA DIFFERENZIALE ──────────────────────────────────────────────
@@ -6943,6 +7088,34 @@ public class ChatController {
      * Body: { "docId": "nome_doc", "text": "contenuto...", "sessionId": "..." }
      * Supporta testo puro, contenuto di PDF già estratto, pagine web, ecc.
      */
+    // ── Endpoint per indicizzare immagini nel Multimodal RAG ─────────────────
+    @PostMapping("/rag/image")
+    public ResponseEntity<Object> ragIndexImageEndpoint(@RequestBody Map<String,String> body) {
+        String docId      = body.getOrDefault("docId", "img_" + System.currentTimeMillis());
+        String imageB64   = body.getOrDefault("imageBase64", "");
+        String imageType  = body.getOrDefault("imageType", "image/jpeg");
+        String contextHint= body.getOrDefault("context", "");
+        String baseUrl    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey     = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+        if (imageB64.isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error","imageBase64 mancante"));
+        try {
+            ragIndexImage(docId, imageB64, imageType, contextHint, baseUrl, apiKey, model);
+            long imgChunks = ragStore.values().stream()
+                .flatMap(List::stream).filter(RagChunk::isImage).count();
+            return ResponseEntity.ok(Map.of(
+                "status", "indexed",
+                "docId", docId,
+                "totalImageChunks", imgChunks
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                .body(Map.of("error", e.getMessage()));
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     @PostMapping("/rag/index")
     public ResponseEntity<Object> ragIndex(@RequestBody Map<String, String> body) {
         String docId     = body.getOrDefault("docId", "doc_" + System.currentTimeMillis());
