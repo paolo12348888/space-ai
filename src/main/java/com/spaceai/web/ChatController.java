@@ -4495,7 +4495,7 @@ public class ChatController {
                        "arts,music,books,movies,fashion,food_tech,writer,creative,designer,architect,innovator," +
                        "planner,startup,hr,product,ux,seo,coach,education,negotiator,strategist,consultant," +
                        "growth,brand,pr,social,ads,analytics,supply_chain,pm," +
-                       "translator,legal,legal2,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
+                       "translator,legal,legal2,contract_review,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
                        "debate,interview,language,mindmap,prompt_eng,video_gen,audio_gen,image_gen,spaces. " +
                        "Scegli 1-2 agenti. SOLO JSON valido.";
             case "spaces": return "Sei SPACES, assistente vocale personale di SPACE AI. Data:" + d + ". Rispondi in max 3 frasi concise per la voce. Usa sempre tono professionale e amichevole. Inizia con 'SPACES:'.";
@@ -4621,6 +4621,29 @@ public class ChatController {
             case "translator": return "Sei TRANSLATOR di SPACE AI. Multilingua: IT,EN,FR,ES,DE,PT,ZH,JA,AR.";
             case "legal": return "Sei LEGAL di SPACE AI. Data:" + d + ". Info generali, non consulenza. Rispondi in italiano.";
             case "legal2": return "Sei LEGAL2 di SPACE AI. Data:" + d + ". AI regulation,IP,privacy law. Info generali. Rispondi in italiano.";
+            case "contract_review": return
+                "Sei CONTRACT REVIEW di SPACE AI — specialista nell'analisi di contratti e documenti legali. Data:" + d + ".\n" +
+                "IMPORTANTE: fornisci informazioni generali a scopo informativo, NON consulenza legale professionale.\n\n" +
+                "Quando ricevi un contratto o clausola da analizzare, DEVI sempre rispondere con questa struttura ESATTA:\n\n" +
+                "## 📋 RIEPILOGO CONTRATTO\n" +
+                "- Tipo di contratto, parti coinvolte, durata, valore economico (se presente)\n\n" +
+                "## ✅ CLAUSOLE STANDARD (OK)\n" +
+                "- Lista delle clausole nella norma, con breve spiegazione\n\n" +
+                "## ⚠️ CLAUSOLE DA VERIFICARE\n" +
+                "- Lista clausole ambigue o inusuali con spiegazione del rischio\n\n" +
+                "## 🔴 CLAUSOLE CRITICHE / RED FLAG\n" +
+                "- Clausole potenzialmente svantaggiose, vessatorie o pericolose\n" +
+                "- Per ognuna: [CLAUSOLA] → [RISCHIO] → [SUGGERIMENTO]\n\n" +
+                "## 📊 SCORE CONTRATTO\n" +
+                "- Bilanciamento: X/10 (10=perfettamente bilanciato, 1=totalmente a favore dell'altra parte)\n" +
+                "- Rischio complessivo: BASSO / MEDIO / ALTO / CRITICO\n\n" +
+                "## 💡 RACCOMANDAZIONI\n" +
+                "- Punti da negoziare prima di firmare\n" +
+                "- Clausole da aggiungere per tutela\n\n" +
+                "## ⚖️ DISCLAIMER\n" +
+                "Questa analisi è a scopo informativo. Consulta un avvocato per decisioni legali vincolanti.\n\n" +
+                "Analizza con precisione, identifica ogni rischio, usa linguaggio chiaro e accessibile.";
+
             case "summarizer": return "Sei SUMMARIZER di SPACE AI. Bullet points chiari e concisi. Rispondi in italiano.";
             case "cooking": return "Sei COOKING di SPACE AI. Data:" + d + ". Ricette con dosi precise. Rispondi in italiano.";
             case "travel": return "Sei TRAVEL di SPACE AI. Data:" + d + ". Destinazioni,itinerari,budget. Rispondi in italiano.";
@@ -5355,6 +5378,11 @@ public class ChatController {
         if (q.contains("calcola") || q.contains("matematica")) return List.of("math");
         if (q.contains("bug") || q.contains("errore nel codice")) return List.of("debug");
         if (q.contains("legge") || q.contains("contratto")) return List.of("legal");
+        if (q.contains("analizza contratto") || q.contains("review contratto") ||
+            q.contains("clausola") || q.contains("nda") || q.contains("accordo commerciale") ||
+            q.contains("termini e condizioni") || q.contains("contratto di lavoro") ||
+            q.contains("contratto di vendita") || q.contains("privacy policy") ||
+            q.contains("red flag") || q.contains("firmare questo")) return List.of("contract_review");
         if (q.contains("ricetta")) return List.of("cooking");
         if (q.contains("viaggio") || q.contains("vacanza")) return List.of("travel");
         if (q.contains("allenamento")) return List.of("fitness");
@@ -6657,6 +6685,83 @@ public class ChatController {
     // ══════════════════════════════════════════════════════════════════
     // PUNTO 14: MITRE Security Agent — CVE monitor + security audit
     // ══════════════════════════════════════════════════════════════════
+
+    // ── CONTRACT REVIEW AGENT ─────────────────────────────────────────────────
+    @PostMapping("/contract/review")
+    public ResponseEntity<Object> contractReview(@RequestBody Map<String,String> body) {
+        String contractText = ((String) body.getOrDefault("contract", "")).trim();
+        String contractType = body.getOrDefault("type", "generico"); // NDA, lavoro, vendita, ecc.
+        String sessionId    = body.getOrDefault("sessionId", "contract_" + System.currentTimeMillis());
+        String baseUrl      = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey       = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model        = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+
+        if (contractText.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Testo del contratto mancante"));
+        }
+        if (contractText.length() > 50000) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Contratto troppo lungo (max 50.000 caratteri)"));
+        }
+
+        try {
+            // Indicizza il contratto nel RAG per retrieval semantico
+            String docId = "contract_" + sessionId;
+            ragIndex(docId, contractText);
+
+            // System prompt specializzato
+            String systemPrompt = agentPrompt("contract_review");
+
+            // Costruisci il messaggio con contesto tipo contratto
+            String userMsg = "TIPO CONTRATTO: " + contractType + "\n\n" +
+                "TESTO DEL CONTRATTO:\n" + contractText + "\n\n" +
+                "Analizza questo contratto in modo completo seguendo la struttura richiesta.";
+
+            // Stima complessità per token: contratti lunghi richiedono più token
+            int maxTokens = Math.min(4000, 1500 + contractText.length() / 10);
+
+            String analysis = callLLMWithTemp(systemPrompt, userMsg,
+                new ArrayList<>(), baseUrl, apiKey, model, maxTokens, 0.2); // temp bassa = più preciso
+
+            // Estrai score dal testo per risposta strutturata
+            int riskScore = extractContractRiskScore(analysis);
+
+            // Salva l'analisi in memoria per follow-up
+            consolidateToLTM(sessionId, "Contratto " + contractType + " analizzato. Rischio: " +
+                (riskScore >= 7 ? "BASSO" : riskScore >= 4 ? "MEDIO" : "ALTO"));
+
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            result.put("analysis",     analysis);
+            result.put("contractType", contractType);
+            result.put("charCount",    contractText.length());
+            result.put("riskScore",    riskScore);
+            result.put("riskLevel",    riskScore >= 7 ? "BASSO" : riskScore >= 4 ? "MEDIO" :
+                                       riskScore >= 2 ? "ALTO"  : "CRITICO");
+            result.put("sessionId",    sessionId);
+            result.put("disclaimer",   "Analisi a scopo informativo. Non sostituisce consulenza legale professionale.");
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Contract review error: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                .body(Map.of("error", "Errore analisi contratto: " + e.getMessage()));
+        }
+    }
+
+    // Estrae lo score numerico dal testo dell'analisi (cerca pattern "X/10")
+    private int extractContractRiskScore(String analysis) {
+        try {
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "(?i)bilanciamento[:\\s]+?(\\d+)\\s*/\\s*10");
+            java.util.regex.Matcher m = p.matcher(analysis);
+            if (m.find()) return Integer.parseInt(m.group(1));
+            // fallback: cerca qualsiasi X/10
+            p = java.util.regex.Pattern.compile("(\\d+)\\s*/\\s*10");
+            m = p.matcher(analysis);
+            if (m.find()) return Integer.parseInt(m.group(1));
+        } catch (Exception ignored) {}
+        return 5; // default medio
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     @PostMapping("/security/audit")
     public ResponseEntity<Object> securityAudit(@RequestBody Map<String,String> body) {
