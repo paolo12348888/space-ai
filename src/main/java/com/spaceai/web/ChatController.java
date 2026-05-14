@@ -1625,8 +1625,6 @@ public class ChatController {
         if (realIp != null && !realIp.isBlank()) return realIp.trim();
         return request.getRemoteAddr();
     }
-        return reqs > MAX_REQUESTS_PER_MINUTE;
-    }
     private boolean isCircuitOpen() {
         if (failureCount.get() < FAILURE_THRESHOLD) return false;
         long now = System.currentTimeMillis();
@@ -5020,7 +5018,6 @@ public class ChatController {
                 "error", "Troppe richieste da questo indirizzo. Attendi un minuto.",
                 "status", "rate_limited_ip"));
         }
-            }
             // Circuit breaker
             if (isCircuitOpen()) {
                 return ResponseEntity.status(503).body(Map.of(
