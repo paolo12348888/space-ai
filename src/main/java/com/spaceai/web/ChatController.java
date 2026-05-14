@@ -5853,14 +5853,26 @@ public class ChatController {
     // ════════════════════════════════════════════════════════════════════════
     private static final String[][] GROQ_MODEL_POOL = {
         // {modelId, maxTokens, note}
-        {"qwen/qwen3-32b",                        "8000",  "60rpm — il più permissivo"},
-        {"moonshotai/kimi-k2-instruct",            "8000",  "ottimo ragionamento"},
-        {"meta-llama/llama-4-scout-17b-16e-instruct","8000","llama4 scout"},
-        {"llama-3.3-70b-versatile",                "8000",  "principale"},
-        {"openai/gpt-oss-120b",                    "8000",  "potente"},
-        {"groq/compound",                          "8000",  "compound"},
-        {"llama-3.1-8b-instant",                   "8000",  "velocissimo — fallback finale"},
+        // ── Alta priorità (più permissivi / migliori) ──────────────────────
+        {"qwen/qwen3-32b",                              "8000", "60rpm — il più permissivo"},
+        {"moonshotai/kimi-k2-instruct",                 "8000", "ottimo ragionamento"},
+        {"meta-llama/llama-4-scout-17b-16e-instruct",   "8000", "llama4 scout — 14.4K TPM"},
+        {"llama-3.1-8b-instant",                        "8000", "velocissimo — 14.4K TPM"},
+        // ── Media priorità ────────────────────────────────────────────────
+        {"llama-3.3-70b-versatile",                     "8000", "principale"},
+        {"openai/gpt-oss-120b",                         "8000", "potente — 1K TPM"},
+        {"openai/gpt-oss-20b",                          "8000", "veloce — 1K TPM"},
+        {"moonshotai/kimi-k2-instruct-0905",            "8000", "kimi aggiornato"},
+        // ── Bassa priorità (TPM limitato) ─────────────────────────────────
+        {"groq/compound",                               "200",  "compound — solo 250 TPM"},
+        {"groq/compound-mini",                          "200",  "compound leggero — 250 TPM"},
     };
+    // Modelli con TPM basso: limitiamo i token per non esaurire la quota
+    private static final java.util.Set<String> LOW_TPM_MODELS = new java.util.HashSet<>(
+        java.util.Arrays.asList("groq/compound", "groq/compound-mini",
+            "openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile")
+    );
+    private static final int LOW_TPM_MAX_TOKENS = 800; // cap per modelli con 1K TPM
     // indice corrente nel pool (thread-safe)
     private final AtomicInteger groqPoolIndex = new AtomicInteger(0);
     // timestamp fino a cui ogni modello del pool è in cooldown (429)
@@ -6062,8 +6074,13 @@ public class ChatController {
             if (cd == null || System.currentTimeMillis() > cd) activeModel = model;
         }
 
+        // ── Cap token per modelli con TPM basso ──────────────────────────────
+        int actualMaxTokens = LOW_TPM_MODELS.contains(activeModel)
+            ? Math.min(maxTokens, LOW_TPM_MAX_TOKENS)
+            : maxTokens;
+
         ObjectNode req = MAPPER.createObjectNode();
-        req.put("model", activeModel); req.put("max_tokens", maxTokens);
+        req.put("model", activeModel); req.put("max_tokens", actualMaxTokens);
         req.put("temperature", temperature); req.put("top_p", 0.95);
         req.put("frequency_penalty", 0.3); req.put("presence_penalty", 0.3);
         ArrayNode messages = MAPPER.createArrayNode();
