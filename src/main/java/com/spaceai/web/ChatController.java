@@ -1754,18 +1754,16 @@ public class ChatController {
     }
 
     // Decide se usare Agent Loop (query complesse multi-step)
+    // NON chiamare se il frontend ha già una mode specifica — gestito nel dispatch
     private boolean needsAgentLoop(String msg) {
         String q = msg.toLowerCase();
-        // Soglia 40 char: query lunghe sono quasi sempre multi-step
-        if (q.length() > 40) return true;
-        // Keyword espliciti anche per query brevi
-        return q.contains("analizza") || q.contains("confronta") || q.contains("compara") ||
-               q.contains("cerca") || q.contains("codice") || q.contains("programma") ||
-               q.contains("report") || q.contains("articolo") || q.contains("github") ||
-               q.contains("naviga") || q.contains("video") || q.contains("esegui") ||
-               q.contains("calcola") || q.contains("sviluppa") || q.contains("scrivi") ||
-               q.contains("riassumi") || q.contains("spiega") || q.contains("dimmi") ||
-               q.contains("trova") || q.contains("cerca e") || q.contains("leggi");
+        // Soglia alzata a 80 char: evita di intercettare domande semplici
+        if (q.length() > 80 &&
+            (q.contains("analizza e") || q.contains("confronta e") ||
+             q.contains("cerca e poi") || q.contains("esegui e"))) return true;
+        // Solo keyword esplicitamente multi-step — NON "video", "codice", "scrivi" ecc.
+        return q.contains("agent loop") || q.contains("multi-step") ||
+               q.contains("step by step autonomo") || q.contains("esegui in sequenza");
     }
 
     // Cerca su web — pipeline: Tavily → SerpAPI/Google → DuckDuckGo
@@ -5057,9 +5055,16 @@ public class ChatController {
                 } catch (Exception ge) { log.warn("Goal delegation fallback: {}", ge.getMessage()); }
             }
 
+            // ── LEGGI MODE DAL FRONTEND — se c'è una mode specifica, NON usare Agent Loop ──
+            String frontendMode = body.getOrDefault("mode", "").toLowerCase().trim();
+            // Modalità che hanno pipeline dedicata: bypass totale dell'Agent Loop
+            boolean hasSpecificMode = !frontendMode.isEmpty() &&
+                !frontendMode.equals("auto") && !frontendMode.equals("agent_loop");
+
             // ── AGENT LOOP Manus-style: per query complesse multi-step ─────────
+            // SKIP se il frontend ha già scelto un agente specifico
             String agentLoopResult = null;
-            if (needsAgentLoop(userMessage)) {
+            if (!hasSpecificMode && needsAgentLoop(userMessage)) {
                 try {
                     log.info("Avvio Agent Loop: {}", userMessage.substring(0, Math.min(60, userMessage.length())));
                     agentLoopResult = agentLoop(userMessage, sessionId, baseUrl, apiKey, model);
@@ -5131,7 +5136,7 @@ public class ChatController {
             }
             // Gestione immagini
             String q = userMessage.toLowerCase();
-            String curMode = body.getOrDefault("mode", "");
+            String curMode = frontendMode; // usa frontendMode già letta sopra
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
