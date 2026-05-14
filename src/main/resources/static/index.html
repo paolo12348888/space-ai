@@ -135,6 +135,7 @@ textarea::placeholder{color:var(--muted)}
     <div class="sbi" onclick="setMode('dream');closeSB()">&#129704; Dream Synthesis</div>
     <div class="sbi" onclick="setMode('socratic');closeSB()">&#129302; Socratic Mode</div>
     <div class="sbi" onclick="setMode('counterfactual');closeSB()">&#10067; Counterfactual</div>
+    <div class="sbi" onclick="showContractPanel();closeSB()">&#9878;&#65039; Contract Review</div>
     <div class="sec" style="margin-top:6px">Recenti</div>
     <div class="sbi on">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -478,7 +479,8 @@ function setMode(m){
     search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES",
     security:"&#128737; AEGIS",neural:"&#129504; Neural",
     temporal:"&#8987; Temporal",dream:"&#129704; Dream",
-    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario"
+    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario",
+    contract_review:"&#9878;&#65039; Contract Review"
   };
   document.getElementById("modeLbl").innerHTML=L[m]||"&#129302; Auto";
   var ph={
@@ -488,7 +490,8 @@ function setMode(m){
     temporal:"Di cosa vuoi analizzare passato/presente/futuro?",
     dream:"Problema o sfida per cui generare soluzioni creative...",
     socratic:"Cosa vuoi imparare? Ti guido alla scoperta...",
-    counterfactual:"Scenario da analizzare nei suoi sviluppi alternativi..."
+    counterfactual:"Scenario da analizzare nei suoi sviluppi alternativi...",
+    contract_review:"Scrivi 'contratto' o 'clausola' per aprire il pannello di analisi..."
   };
   inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
@@ -506,7 +509,7 @@ var _routeRules=[
   [/\b(notizie|news|oggi|ultime ore|aggiornamenti|cerca.{0,10}web|google|ricerca|attualit[àa]|breaking)\b/i, "search",       "🔍","Ricerca Web"],
   [/\b(sicurezza|vulnerability|exploit|hacking|penetration|firewall|malware|virus|cybersecurity|aegis|scan)\b/i, "security",  "🛡️","AEGIS Security"],
   [/\b(futuro|passato|storia|evoluzione|timeline|previsione|tendenza|temporal|analisi storica)\b/i,        "temporal",       "⏳","Temporal Reasoning"],
-  [/\b(sogno|creativo|idea innovativa|startup|brainstorm|fantasia|immagina se|dream|soluzione creativa)\b/i,"dream",          "🌌","Dream Synthesis"],
+  [/\b(contratto|clausola|nda|riservatezza|accordo commerciale|termini e condizioni|contratto di lavoro|contratto di vendita|contratto di affitto|privacy policy|red flag contratto|firmare questo|analizza contratto|review contratto|licenza software)\b/i, "contract_review","⚖️","Contract Review"],
   [/\b(spiega|come funziona|insegnam|imparo|capisci|socratico|ragiona con me|guida|tutorial|passo passo)\b/i,"socratic",      "🤖","Socratic Mode"],
   [/\b(cosa sarebbe successo|scenario alternativo|ipotesi|e se|counterfactual|e se invece|immagina che)\b/i,"counterfactual","❓","Counterfactual"],
   [/\b(neural|ragiona autonomamente|analisi profonda|riflessione|meditazione logica)\b/i,                  "neural",          "🧠","Neural Core"],
@@ -910,6 +913,7 @@ async function sendMsg(){
       if(_ar.mode==="music"){showMusicPanel();return;}
       if(_ar.mode==="github"){showGithubPanel();return;}
       if(_ar.mode==="manus"){showManusPanel();return;}
+      if(_ar.mode==="contract_review"){showContractPanel();return;}
 
       if(_ar.mode!==_lockedMode){
         // nuovo agente rilevato → switcha e blocca
@@ -1703,5 +1707,115 @@ async function sendMsg(){
     </div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- CONTRACT REVIEW PANEL                                               -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<div id="contractPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:1005;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--bg2,#1a1a2e);border-radius:16px;padding:24px;max-width:720px;width:100%;max-height:90vh;overflow-y:auto;border:1px solid var(--border,#333)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <h2 style="margin:0;color:var(--accent,#00c896);font-size:1.1rem">⚖️ Contract Review Agent</h2>
+      <button onclick="closeContractPanel()" style="background:none;border:none;color:var(--muted,#888);font-size:1.4rem;cursor:pointer">✕</button>
+    </div>
+
+    <!-- Tipo contratto -->
+    <div style="margin-bottom:12px">
+      <label style="font-size:.8rem;color:var(--muted,#888);display:block;margin-bottom:6px">Tipo di contratto</label>
+      <select id="contractType" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--surface,#111);color:var(--fg,#eee);font-size:.85rem">
+        <option value="generico">📄 Generico</option>
+        <option value="NDA">🤐 NDA / Accordo riservatezza</option>
+        <option value="lavoro">👔 Contratto di lavoro</option>
+        <option value="vendita">🛒 Contratto di vendita</option>
+        <option value="affitto">🏠 Contratto di affitto</option>
+        <option value="servizi">🔧 Contratto di servizi / Freelance</option>
+        <option value="partnership">🤝 Partnership / Joint venture</option>
+        <option value="licenza">📜 Licenza software / IP</option>
+        <option value="privacy">🔒 Privacy policy / GDPR</option>
+        <option value="termini">📋 Termini e condizioni</option>
+        <option value="investimento">💰 Accordo di investimento</option>
+      </select>
+    </div>
+
+    <!-- Testo contratto -->
+    <div style="margin-bottom:12px">
+      <label style="font-size:.8rem;color:var(--muted,#888);display:block;margin-bottom:6px">
+        Incolla il testo del contratto o la clausola da analizzare
+        <span id="contractCharCount" style="margin-left:8px;color:var(--accent,#00c896)">0 / 50.000 caratteri</span>
+      </label>
+      <textarea id="contractText"
+        placeholder="Incolla qui il testo del contratto, clausola specifica o documento legale da analizzare..."
+        oninput="document.getElementById('contractCharCount').textContent=this.value.length+' / 50.000 caratteri'"
+        style="width:100%;height:200px;padding:12px;border-radius:8px;border:1px solid var(--border,#333);background:var(--surface,#111);color:var(--fg,#eee);font-size:.82rem;resize:vertical;box-sizing:border-box;font-family:inherit"></textarea>
+    </div>
+
+    <!-- Bottone analisi -->
+    <button id="contractAnalyzeBtn" onclick="analyzeContract()"
+      style="width:100%;padding:13px;border-radius:10px;border:none;background:var(--accent,#00c896);color:#000;font-weight:700;font-size:.95rem;cursor:pointer;margin-bottom:16px">
+      ⚖️ Analizza Contratto
+    </button>
+
+    <!-- Risultato -->
+    <div id="contractResult" style="display:none">
+      <!-- Badge rischio -->
+      <div id="contractRiskBadge" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-weight:700"></div>
+      <!-- Analisi testuale -->
+      <div id="contractAnalysis" style="background:var(--surface,#111);border-radius:10px;padding:16px;font-size:.83rem;line-height:1.7;white-space:pre-wrap;border:1px solid var(--border,#333)"></div>
+      <!-- Disclaimer -->
+      <p style="font-size:.72rem;color:var(--muted,#666);margin-top:12px;text-align:center">
+        ⚖️ Analisi a scopo informativo — Non sostituisce la consulenza di un avvocato professionista
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+function showContractPanel(){document.getElementById("contractPanel").style.display="flex";}
+function closeContractPanel(){
+  document.getElementById("contractPanel").style.display="none";
+  document.getElementById("contractResult").style.display="none";
+  document.getElementById("contractText").value="";
+  document.getElementById("contractCharCount").textContent="0 / 50.000 caratteri";
+  document.getElementById("contractAnalyzeBtn").disabled=false;
+  document.getElementById("contractAnalyzeBtn").textContent="⚖️ Analizza Contratto";
+}
+async function analyzeContract(){
+  var text=document.getElementById("contractText").value.trim();
+  var type=document.getElementById("contractType").value;
+  if(!text){alert("Incolla il testo del contratto prima di procedere.");return;}
+  if(text.length>50000){alert("Testo troppo lungo. Massimo 50.000 caratteri.");return;}
+  var btn=document.getElementById("contractAnalyzeBtn");
+  btn.disabled=true; btn.textContent="⏳ Analisi in corso...";
+  document.getElementById("contractResult").style.display="none";
+  try{
+    var res=await fetch("/api/contract/review",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contract:text,type:type,sessionId:SID})
+    });
+    var data=await res.json();
+    if(data.error){alert("Errore: "+data.error);return;}
+    // Badge rischio colorato
+    var badge=document.getElementById("contractRiskBadge");
+    var colors={BASSO:"#00c896",MEDIO:"#f59e0b",ALTO:"#ef4444",CRITICO:"#7c3aed"};
+    var icons={BASSO:"✅",MEDIO:"⚠️",ALTO:"🔴",CRITICO:"☠️"};
+    var lvl=data.riskLevel||"MEDIO";
+    badge.style.background=colors[lvl]+"22";
+    badge.style.border="1px solid "+colors[lvl];
+    badge.style.color=colors[lvl];
+    badge.innerHTML=icons[lvl]+" Rischio "+lvl+
+      " &nbsp;|&nbsp; Score bilanciamento: <strong>"+data.riskScore+"/10</strong>"+
+      " &nbsp;|&nbsp; "+data.charCount+" caratteri analizzati";
+    // Analisi renderizzata
+    document.getElementById("contractAnalysis").innerHTML=renderMD(data.analysis||"");
+    document.getElementById("contractResult").style.display="block";
+    // Aggiunge anche in chat come conferma
+    addRow("⚖️ Contratto **"+type+"** analizzato — Rischio: **"+lvl+"** (score "+data.riskScore+"/10)","ai");
+  }catch(e){
+    alert("Errore di rete: "+e.message);
+  }finally{
+    btn.disabled=false; btn.textContent="⚖️ Analizza Contratto";
+  }
+}
+</script>
 </body>
 </html>
