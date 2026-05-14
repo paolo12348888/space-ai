@@ -1804,6 +1804,62 @@ public class ChatController {
         if (profile.containsKey("style")) ctx.append("Preferisce risposte: ").append(profile.get("style")).append(". ");
         return ctx.toString();
     }
+    // Ritorna risultati web con metadati per citazioni in-line
+    private List<Map<String,String>> searchWebWithSources(String query) {
+        List<Map<String,String>> sources = new ArrayList<>();
+        String key = env("TAVILY_API_KEY", "");
+        if (key.isEmpty()) return sources;
+        try {
+            ObjectNode req = MAPPER.createObjectNode();
+            req.put("api_key", key); req.put("query", query);
+            req.put("search_depth", "advanced"); req.put("max_results", 5);
+            req.put("include_answer", true);
+            HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
+            ResponseEntity<String> resp = restTemplate.postForEntity(
+                "https://api.tavily.com/search",
+                new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+            JsonNode json = MAPPER.readTree(resp.getBody());
+            // Risposta sintetica come fonte [0]
+            if (json.has("answer") && !json.path("answer").asText().isBlank()) {
+                Map<String,String> ans = new LinkedHashMap<>();
+                ans.put("index", "0"); ans.put("title", "Sintesi Tavily");
+                ans.put("url", ""); ans.put("content", json.path("answer").asText());
+                sources.add(ans);
+            }
+            JsonNode results = json.path("results");
+            if (results.isArray()) {
+                int i = 1;
+                for (JsonNode r : results) {
+                    Map<String,String> src = new LinkedHashMap<>();
+                    src.put("index", String.valueOf(i++));
+                    src.put("title",   r.path("title").asText());
+                    src.put("url",     r.path("url").asText());
+                    String c = r.path("content").asText();
+                    src.put("content", c.substring(0, Math.min(300, c.length())));
+                    sources.add(src);
+                }
+            }
+        } catch (Exception e) { log.warn("Tavily sources: {}", e.getMessage()); }
+        return sources;
+    }
+
+    // Costruisce contesto con citazioni numerate per il LLM
+    private String buildCitationContext(List<Map<String,String>> sources) {
+        if (sources.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("FONTI DISPONIBILI (usa [n] per citare):\n\n");
+        for (Map<String,String> s : sources) {
+            if (s.get("index").equals("0")) continue;
+            sb.append("[").append(s.get("index")).append("] ")
+              .append(s.get("title")).append("\n")
+              .append("   ").append(s.get("content")).append("\n")
+              .append("   URL: ").append(s.get("url")).append("\n\n");
+        }
+        sb.append("\nISTRUZIONI: Nella tua risposta cita le fonti con [1], [2], ecc. " +
+                  "Es: 'Secondo [1], il PIL italiano è cresciuto del 2%.' " +
+                  "Alla fine elenca le fonti usate come: **Fonti:** [1] titolo - url");
+        return sb.toString();
+    }
+
     private String searchWeb(String query) {
         String key = env("TAVILY_API_KEY", "");
         if (key.isEmpty()) return null;
@@ -3086,12 +3142,12 @@ public class ChatController {
             "\"tool\":\"web_search\", \"params\":\"...\"}]}\n\n" +
             "OBIETTIVO: " + task.goal;
 
-        String planJson = callLLM("Sei un pianificatore JSON. Rispondi SOLO con JSON valido.",
+        String planJson = callLLMJson("Sei un pianificatore JSON. Rispondi SOLO con JSON valido.",
             planPrompt, new ArrayList<>(), baseUrl, apiKey, model, 1500);
 
         // Parse JSON subtasks
         try {
-            String cleaned = planJson.replaceAll("```json","").replaceAll("```","").trim();
+            String cleaned = planJson; // già validato da callLLMJson
             JsonNode plan = MAPPER.readTree(cleaned);
             JsonNode subs = plan.path("subtasks");
             if (subs.isArray()) {
@@ -3258,6 +3314,42 @@ public class ChatController {
         runtimes.put("cpp",        new String[]{"c++",        "10.2.0"});
         runtimes.put("c",          new String[]{"c",          "10.2.0"});
 
+        // ── Wrapper per Python: intercetta matplotlib e PIL per output IMAGE_B64 ──
+        if (language.equals("python")) {
+            String plotWrapper =
+                "import sys, io, base64\n" +
+                "try:\n" +
+                "    import matplotlib\n" +
+                "    matplotlib.use('Agg')  # backend non-interattivo\n" +
+                "    import matplotlib.pyplot as _plt_orig\n" +
+                "    _plt_show_orig = _plt_orig.show\n" +
+                "    def _plt_show_patched(*args, **kwargs):\n" +
+                "        buf = io.BytesIO()\n" +
+                "        _plt_orig.savefig(buf, format='png', bbox_inches='tight', dpi=100)\n" +
+                "        buf.seek(0)\n" +
+                "        b64 = base64.b64encode(buf.read()).decode()\n" +
+                "        print('IMAGE_B64:data:image/png;base64,' + b64)\n" +
+                "        _plt_orig.clf()\n" +
+                "    _plt_orig.show = _plt_show_patched\n" +
+                "    import matplotlib.pyplot as plt  # ri-esporta il patchato\n" +
+                "except ImportError:\n" +
+                "    pass\n\n" +
+                "# ── CODICE UTENTE ──\n";
+            code = plotWrapper + code;
+
+            // Se il codice usa plt.savefig invece di plt.show, converti anche quello
+            if (code.contains("plt.savefig") && !code.contains("IMAGE_B64")) {
+                code = code + "\n" +
+                    "\ntry:\n" +
+                    "    import io, base64, matplotlib.pyplot as _p\n" +
+                    "    buf2 = io.BytesIO()\n" +
+                    "    _p.savefig(buf2, format='png', bbox_inches='tight', dpi=100)\n" +
+                    "    buf2.seek(0)\n" +
+                    "    print('IMAGE_B64:data:image/png;base64,' + base64.b64encode(buf2.read()).decode())\n" +
+                    "except: pass\n";
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────────
         String[] runtime = runtimes.getOrDefault(language, new String[]{"python","3.10.0"});
 
         try {
@@ -3295,12 +3387,26 @@ public class ChatController {
             String stderr   = run.path("stderr").asText();
             int    exitCode = run.path("code").asInt();
 
+            // ── Rileva immagini base64 nell'output (matplotlib/PIL plots) ──
+            List<String> images = new ArrayList<>();
+            StringBuilder cleanOutput = new StringBuilder();
+            for (String line : output.split("\n")) {
+                if (line.startsWith("IMAGE_B64:")) {
+                    images.add(line.substring(10).trim());
+                } else {
+                    cleanOutput.append(line).append("\n");
+                }
+            }
+            // ────────────────────────────────────────────────────────────────
+
             Map<String,Object> r = new LinkedHashMap<>();
             r.put("language", language);
             r.put("exitCode", exitCode);
-            r.put("output",   output.isEmpty() ? "(nessun output)" : output);
-            r.put("stderr",   stderr.isEmpty()  ? null : stderr);
+            r.put("output",   cleanOutput.toString().trim().isEmpty()
+                ? "(nessun output)" : cleanOutput.toString().trim());
+            r.put("stderr",   stderr.isEmpty() ? null : stderr);
             r.put("success",  exitCode == 0);
+            if (!images.isEmpty()) r.put("images", images); // lista di base64 da mostrare
             r.put("date",     today());
             return ResponseEntity.ok(r);
 
@@ -5223,19 +5329,20 @@ public class ChatController {
                 }
             }
             // ── GOOGLE SEARCH LIVE: per query che richiedono dati aggiornati ─
-            // Pipeline: Tavily → SerpAPI/Google CSE → DuckDuckGo
             String webData = needsSearch(userMessage) ? searchWebEnhanced(userMessage, sessionId) : null;
             if (webData == null && userMessage.matches(".*\b(202[4-9]|chi e|cosa e successo|quando|dove ora)\b.*")) {
                 webData = searchWebEnhanced(userMessage, sessionId);
             }
+            // ── CITAZIONI IN-LINE: fonti strutturate per [1][2][3] ──────────
+            List<Map<String,String>> webSources = new ArrayList<>();
+            if (needsSearch(userMessage)) webSources = searchWebWithSources(userMessage);
             String enriched = userMessage;
             if (webData != null && !webData.isBlank()) {
-                // AUTO-INDEX risultati web nel RAG per sessione
-                String webDocId = sessionId + "/web_" + System.currentTimeMillis();
-                ragIndexDocument(webDocId, webData);
+                ragIndexDocument(sessionId + "/web_" + System.currentTimeMillis(), webData);
+                String citationCtx = webSources.isEmpty() ? "" : "\n\n" + buildCitationContext(webSources);
                 enriched = userMessage + "\n\n[DATI WEB AGGIORNATI - " + today() + "]:\n" +
                            "NOTA: Questi dati sono piu recenti della tua conoscenza base. Usali come fonte primaria.\n" +
-                           webData;
+                           webData + citationCtx;
             }
             // Analisi immagine base64 se presente (multimodale)
             String imageBase64 = body.getOrDefault("imageBase64","");
@@ -5475,6 +5582,7 @@ public class ChatController {
             resp.put("model",           model);
             resp.put("agents",          agents.toString());
             resp.put("webSearch",       webData != null ? "true" : "false");
+            if (!webSources.isEmpty()) resp.put("webSources", webSources); // citazioni per frontend
             resp.put("sessionId",       sessionId);
             resp.put("totalRequests",   totalRequests.get());
             resp.put("emotion",         emotionState.getOrDefault(sessionId,"neutral"));
@@ -5842,6 +5950,72 @@ public class ChatController {
         if (isSimple && !fastModel.isEmpty()) return fastModel;
         return defaultModel;
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // STRUCTURED OUTPUT GARANTITO — JSON auto-repair
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Estrae il primo blocco JSON valido da una stringa (ignora testo intorno)
+    private String extractJsonBlock(String text) {
+        if (text == null || text.isBlank()) return null;
+        // Prova parsing diretto
+        String t = text.trim();
+        if ((t.startsWith("{") || t.startsWith("[")) ) {
+            try { MAPPER.readTree(t); return t; } catch (Exception ignored) {}
+        }
+        // Cerca blocco ```json ... ```
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("```(?:json)?\\s*([\\s\\S]*?)```", java.util.regex.Pattern.DOTALL)
+            .matcher(text);
+        if (m.find()) {
+            String candidate = m.group(1).trim();
+            try { MAPPER.readTree(candidate); return candidate; } catch (Exception ignored) {}
+        }
+        // Cerca prima { o [ e ultima } o ]
+        int start = -1, end = -1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '{' || text.charAt(i) == '[') { start = i; break; }
+        }
+        for (int i = text.length()-1; i >= 0; i--) {
+            if (text.charAt(i) == '}' || text.charAt(i) == ']') { end = i; break; }
+        }
+        if (start >= 0 && end > start) {
+            String candidate = text.substring(start, end+1);
+            try { MAPPER.readTree(candidate); return candidate; } catch (Exception ignored) {}
+        }
+        return null; // non recuperabile
+    }
+
+    // Chiama LLM con garanzia di output JSON valido — riprova se malformato
+    private String callLLMJson(String system, String userMsg,
+            List<Map<String,String>> history,
+            String baseUrl, String apiKey, String model,
+            int maxTokens) throws Exception {
+        String systemJson = system + "\n\nIMPORTANTE: Rispondi SOLO con JSON valido. " +
+            "Nessun testo prima o dopo. Nessun markdown. Nessun commento.";
+        // Primo tentativo
+        String resp = callLLMWithTemp(systemJson, userMsg, history,
+            baseUrl, apiKey, model, maxTokens, 0.1); // temp bassa = più deterministico
+        String extracted = extractJsonBlock(resp);
+        if (extracted != null) return extracted;
+
+        // Secondo tentativo: chiedi esplicitamente di correggere
+        log.warn("JSON malformato al primo tentativo, richiedo correzione...");
+        String fixPrompt = "Il tuo output precedente non era JSON valido.\n" +
+            "Output ricevuto:\n" + resp.substring(0, Math.min(500, resp.length())) + "\n\n" +
+            "Riscrivi SOLO il JSON valido richiesto, senza nessun testo aggiuntivo.";
+        String resp2 = callLLMWithTemp(systemJson, fixPrompt, history,
+            baseUrl, apiKey, model, maxTokens, 0.05); // temp ancora più bassa
+        String extracted2 = extractJsonBlock(resp2);
+        if (extracted2 != null) {
+            log.info("JSON recuperato al secondo tentativo");
+            return extracted2;
+        }
+        // Fallback: restituisce stringa grezza per debug
+        log.error("JSON non recuperabile dopo 2 tentativi");
+        return resp;
+    }
+    // ════════════════════════════════════════════════════════════════════════
 
     private String callLLM(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
@@ -7096,3 +7270,4 @@ public class ChatController {
         return ResponseEntity.ok(r);
     }
 }
+
