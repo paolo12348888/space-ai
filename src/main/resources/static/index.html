@@ -137,11 +137,13 @@ textarea::placeholder{color:var(--muted)}
     <div class="sbi" onclick="setMode('counterfactual');closeSB()">&#10067; Counterfactual</div>
     <div class="sbi" onclick="showContractPanel();closeSB()">&#9878;&#65039; Contract Review</div>
     <div class="sec" style="margin-top:6px">Recenti</div>
-    <div class="sbi on">
+    <div class="sbi on" onclick="newChat()">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       Nuova chat
     </div>
+    <div id="recentChatList" style="overflow-y:auto;max-height:280px"></div>
     <div class="sec" style="margin-top:6px">Account</div>
+    <div id="accountBadge" style="display:none;padding:6px 14px;font-size:.75rem;border-radius:8px;margin:4px 8px;background:rgba(0,200,150,.12);border:1px solid var(--accent);color:var(--accent)"></div>
     <button class="login-sb-btn" onclick="loginGoogle()">
       <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
       Accedi con Google
@@ -265,7 +267,35 @@ var spacesOn=false;
 var spacesWaiting=false;
 
 // ── CHAT PERSISTENCE — salva/carica conversazioni da localStorage ─────────
-var MAX_STORED_CHATS=20;
+var MAX_STORED_CHATS=50;
+
+// ── Account creatore — nessun limite di servizio ────────────────────────────
+var CREATOR_EMAIL="elettronicmarket01@gmail.com";
+function isCreator(){ return (window._loggedEmail||"")===CREATOR_EMAIL; }
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── Render lista chat recenti nella sidebar ─────────────────────────────────
+function renderRecentChats(){
+  var el=document.getElementById("recentChatList");
+  if(!el)return;
+  try{
+    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
+    if(chats.length===0){
+      el.innerHTML="<div style='padding:6px 14px;font-size:.75rem;color:var(--muted)'>Nessuna chat salvata</div>";
+      return;
+    }
+    el.innerHTML=chats.slice(0,30).map(function(c){
+      var title=(c.title||"Chat").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      var date=c.ts?new Date(c.ts).toLocaleDateString("it-IT",{day:"2-digit",month:"short"}):"";
+      var active=c.id===SID?"background:var(--surface);border-radius:8px;":"";
+      return "<div class='sbi' style='"+active+"justify-content:space-between;gap:4px' onclick='loadChatFromStorage(\""+c.id+"\");closeSB()'>"+
+        "<span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:.8rem'>💬 "+title+"</span>"+
+        "<span style='font-size:.68rem;color:var(--muted);flex-shrink:0'>"+date+"</span>"+
+        "</div>";
+    }).join("");
+  }catch(e){console.warn("renderRecentChats:",e);}
+}
+// ────────────────────────────────────────────────────────────────────────────
 function saveChatToStorage(){
   try{
     var msgs=[];
@@ -278,12 +308,13 @@ function saveChatToStorage(){
     });
     if(msgs.length===0)return;
     var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    var existing=cache.findIndex(function(c){return c.id===SID;});
+    var existing=chats.findIndex(function(c){return c.id===SID;}); // fix: era "cache"
     var entry={id:SID,userId:USER_ID,ts:Date.now(),title:msgs[0]?msgs[0].text.replace(/<[^>]*>/g,"").slice(0,40):"Chat",msgs:msgs};
     if(existing>=0)chats[existing]=entry;
     else chats.unshift(entry);
     if(chats.length>MAX_STORED_CHATS)chats=chats.slice(0,MAX_STORED_CHATS);
     localStorage.setItem("spaceai_chats",JSON.stringify(chats));
+    renderRecentChats(); // aggiorna lista sidebar
   }catch(e){console.warn("saveChatToStorage:",e);}
 }
 function loadChatFromStorage(chatId){
@@ -431,16 +462,61 @@ var SID=USER_ID+"_s"+Math.random().toString(36).slice(2,8)+Date.now().toString(3
 var lastAgent="reasoner";
 var lastQuery="";
 var SUPABASE_URL="";
-function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");}
+function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");renderRecentChats();}
 function closeSB(){document.getElementById("sidebar").classList.remove("open");document.getElementById("sbOv").classList.remove("on");}
 function loginGoogle(){
-  if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);}
-  else{alert("Configura SUPABASE_URL su Render per il login.");}
+  if(SUPABASE_URL){
+    window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);
+  } else {
+    // Fallback senza Supabase: chiedi email manualmente
+    var email=prompt("Inserisci la tua email Google:");
+    if(email&&email.trim()){
+      window._loggedEmail=email.trim();
+      localStorage.setItem("spaceai_user_email",email.trim());
+      _applyCreatorPrivileges();
+      alert("Accesso effettuato come: "+email.trim()+(isCreator()?" 👑 (Creatore — nessun limite)":""));
+    }
+  }
 }
 function loginGithub(){
-  if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);}
-  else{alert("Configura SUPABASE_URL su Render per il login.");}
+  if(SUPABASE_URL){
+    window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);
+  } else {
+    var email=prompt("Inserisci la tua email GitHub:");
+    if(email&&email.trim()){
+      window._loggedEmail=email.trim();
+      localStorage.setItem("spaceai_user_email",email.trim());
+      _applyCreatorPrivileges();
+      alert("Accesso effettuato come: "+email.trim()+(isCreator()?" 👑 (Creatore — nessun limite)":""));
+    }
+  }
 }
+function _applyCreatorPrivileges(){
+  // Mostra badge account per tutti gli utenti loggati
+  var badge=document.getElementById("accountBadge");
+  if(badge&&window._loggedEmail){
+    badge.style.display="block";
+    if(isCreator()){
+      badge.innerHTML="👑 <strong>Creatore</strong> — "+window._loggedEmail+"<br><span style='font-size:.7rem;opacity:.8'>Nessun limite attivo</span>";
+      badge.style.background="rgba(255,200,0,.12)";
+      badge.style.borderColor="#f59e0b";
+      badge.style.color="#f59e0b";
+    } else {
+      badge.innerHTML="✅ "+window._loggedEmail;
+    }
+  }
+  if(!isCreator())return;
+  // Rimuove tutti i rate limit lato frontend
+  window._creatorMode=true;
+  MAX_STORED_CHATS=9999;
+  console.log("👑 Creator mode attivata — nessun limite");
+}
+// Ripristina login al reload
+(function(){
+  var saved=localStorage.getItem("spaceai_user_email");
+  if(saved){window._loggedEmail=saved;_applyCreatorPrivileges();}
+  renderRecentChats();
+})();
 async function loadHealth(){
   try{
     var r=await fetch("/api/health");
@@ -958,7 +1034,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:_lockedMode||curMode||"auto"})
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:_lockedMode||curMode||"auto",userEmail:window._loggedEmail||""})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
