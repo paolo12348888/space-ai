@@ -6706,7 +6706,7 @@ public class ChatController {
         try {
             // Indicizza il contratto nel RAG per retrieval semantico
             String docId = "contract_" + sessionId;
-            ragIndex(docId, contractText);
+            ragIndexDocument(docId, contractText);
 
             // System prompt specializzato
             String systemPrompt = agentPrompt("contract_review");
