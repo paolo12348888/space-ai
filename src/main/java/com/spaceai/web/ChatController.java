@@ -1490,36 +1490,42 @@ public class ChatController {
     @jakarta.annotation.PostConstruct
     public void validateEnvOnStartup() {
         log.info("=== SPACE AI — Validazione environment ===");
-        // Obbligatori: almeno un provider LLM deve essere configurato
-        boolean hasGroq     = !env("GROQ_API_KEY","").isEmpty();
-        boolean hasGemini   = !env("GEMINI_API_KEY","").isEmpty();
-        boolean hasDeepSeek = !env("DEEPSEEK_API_KEY","").isEmpty();
-        if (!hasGroq && !hasGemini && !hasDeepSeek) {
-            log.error("CRITICO: Nessun provider LLM configurato! " +
-                "Imposta almeno GROQ_API_KEY, GEMINI_API_KEY o DEEPSEEK_API_KEY");
+        // Il sistema usa AI_API_KEY come chiave principale (compatibile con Groq/OpenAI)
+        boolean hasAiKey     = !env("AI_API_KEY","").isEmpty();
+        boolean hasGroq      = !env("AI_API_KEY", env("GROQ_API_KEY","")).isEmpty();
+        boolean hasGemini    = !env("GEMINI_API_KEY","").isEmpty();
+        boolean hasDeepSeek  = !env("DEEPSEEK_API_KEY","").isEmpty();
+
+        if (!hasAiKey && !hasGroq && !hasGemini && !hasDeepSeek) {
+            log.error("CRITICO: Nessun provider LLM configurato! Imposta AI_API_KEY o GROQ_API_KEY");
         } else {
-            if (hasGroq)     log.info("  ✅ GROQ_API_KEY          presente");
-            else             log.warn("  ⚠️  GROQ_API_KEY          non configurata (provider principale)");
-            if (hasGemini)   log.info("  ✅ GEMINI_API_KEY        presente");
-            else             log.warn("  ⚠️  GEMINI_API_KEY        non configurata (fallback 1)");
-            if (hasDeepSeek) log.info("  ✅ DEEPSEEK_API_KEY      presente");
-            else             log.warn("  ⚠️  DEEPSEEK_API_KEY      non configurata (fallback 2)");
+            if (hasAiKey)    log.info("  ✅ AI_API_KEY             presente (provider principale)");
+            if (hasGroq)     log.info("  ✅ GROQ_API_KEY           presente");
+            if (hasGemini)   log.info("  ✅ GEMINI_API_KEY         presente");
+            if (hasDeepSeek) log.info("  ✅ DEEPSEEK_API_KEY       presente");
         }
-        // Opzionali — avvisa se mancano
+        // Opzionali
+        if (!env("AI_BASE_URL","").isEmpty())
+            log.info("  ✅ AI_BASE_URL            = {}", env("AI_BASE_URL",""));
+        if (!env("AI_MODEL","").isEmpty())
+            log.info("  ✅ AI_MODEL               = {}", env("AI_MODEL",""));
         if (env("SUPABASE_URL","").isEmpty())
             log.warn("  ⚠️  SUPABASE_URL           non configurata (storico chat disabilitato)");
+        else
+            log.info("  ✅ SUPABASE_URL           presente");
         if (env("TAVILY_API_KEY","").isEmpty())
-            log.warn("  ⚠️  TAVILY_API_KEY          non configurata (web search ridotta)");
+            log.warn("  ⚠️  TAVILY_API_KEY         non configurata (web search ridotta)");
+        else
+            log.info("  ✅ TAVILY_API_KEY         presente");
         if (env("ELEVENLABS_API_KEY","").isEmpty())
-            log.warn("  ⚠️  ELEVENLABS_API_KEY      non configurata (TTS qualità ridotta)");
+            log.warn("  ⚠️  ELEVENLABS_API_KEY     non configurata (TTS qualità ridotta)");
         if (env("PISTON_URL","").isEmpty())
-            log.warn("  ⚠️  PISTON_URL              non configurata (esecuzione codice disabilitata)");
-        // CORS
+            log.warn("  ⚠️  PISTON_URL             non configurata (esecuzione codice disabilitata)");
         String origins = env("ALLOWED_ORIGINS","");
         if (origins.isEmpty())
-            log.warn("  ⚠️  ALLOWED_ORIGINS         non configurata — uso fallback onrender.com");
+            log.warn("  ⚠️  ALLOWED_ORIGINS        non configurata — uso fallback onrender.com");
         else
-            log.info("  ✅ ALLOWED_ORIGINS          = {}", origins);
+            log.info("  ✅ ALLOWED_ORIGINS        = {}", origins);
         log.info("==========================================");
     }
     // ─────────────────────────────────────────────────────────────────────
@@ -2795,9 +2801,9 @@ public class ChatController {
         String goal      = ((String) body.getOrDefault("goal","")).trim();
         String context   = body.getOrDefault("context","");   // contesto aziendale opzionale
         String sessionId = body.getOrDefault("sessionId","global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Goal obbligatorio"));
 
@@ -2987,9 +2993,9 @@ public class ChatController {
     public ResponseEntity<Object> manusCreateTask(@RequestBody Map<String,String> body) {
         String goal      = ((String) body.getOrDefault("goal", "")).trim();
         String sessionId = body.getOrDefault("sessionId", "global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Fornisci un goal"));
 
@@ -3316,9 +3322,9 @@ public class ChatController {
         String url       = ((String) body.getOrDefault("url", "")).trim();
         String task      = body.getOrDefault("task", "Estrai il contenuto principale");
         String sessionId = body.getOrDefault("sessionId", "global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (url.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","URL obbligatorio"));
         if (!url.startsWith("http")) url = "https://" + url;
@@ -3538,9 +3544,9 @@ public class ChatController {
         String tempo       = body.getOrDefault("tempo","120");
         String key         = body.getOrDefault("key","C");
         String sessionId   = body.getOrDefault("sessionId","global");
-        String baseUrl2    = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2     = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model2      = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model2      = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (description.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
 
@@ -4071,9 +4077,9 @@ public class ChatController {
     public ResponseEntity<Object> videoGenerate(@RequestBody Map<String,String> body) {
         String description = ((String)body.getOrDefault("description", body.getOrDefault("goal",""))).trim();
         String sessionId   = body.getOrDefault("sessionId", "global");
-        String baseUrl     = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey      = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model       = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl     = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey      = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model       = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
         if (description.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Fornisci una descrizione del video"));
         String html = generateVideoHtml(description, sessionId, baseUrl, apiKey, model);
@@ -4202,9 +4208,9 @@ public class ChatController {
     public ResponseEntity<Object> orchestrateSubAgents(@RequestBody Map<String,Object> body) {
         String goal      = ((String) body.getOrDefault("goal","")).trim();
         String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2   = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model2    = (String) body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
         @SuppressWarnings("unchecked")
         List<String> requestedAgents = (List<String>) body.getOrDefault("agents",
             List.of("researcher","analyst"));
@@ -4343,9 +4349,9 @@ public class ChatController {
         String params    = (String) arguments.getOrDefault("query",
                            arguments.getOrDefault("params", "").toString());
         String sessionId = (String) body.getOrDefault("sessionId", "global");
-        String baseUrl   = env("GROQ_BASE_URL","https://api.groq.com/openai/v1");
-        String apiKey    = env("GROQ_API_KEY","");
-        String model     = env("GROQ_MODEL","llama-3.3-70b-versatile");
+        String baseUrl   = env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = env("AI_API_KEY", env("GROQ_API_KEY",""));
+        String model     = env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile"));
         if (toolName.isEmpty() || params.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","name e arguments.query obbligatori"));
         try {
@@ -5552,9 +5558,9 @@ public class ChatController {
         String goal      = (String) body.getOrDefault("goal","");
         String startUrl  = (String) body.getOrDefault("url","");
         String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2   = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model2    = (String) body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
         int    maxSteps  = Integer.parseInt((String)body.getOrDefault("maxSteps","8"));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Goal obbligatorio"));
@@ -6829,9 +6835,9 @@ public class ChatController {
         String contractText = ((String) body.getOrDefault("contract", "")).trim();
         String contractType = body.getOrDefault("type", "generico"); // NDA, lavoro, vendita, ecc.
         String sessionId    = body.getOrDefault("sessionId", "contract_" + System.currentTimeMillis());
-        String baseUrl      = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey       = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model        = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl      = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey       = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model        = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (contractText.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Testo del contratto mancante"));
@@ -6904,9 +6910,9 @@ public class ChatController {
     public ResponseEntity<Object> securityAudit(@RequestBody Map<String,String> body) {
         String target    = ((String) body.getOrDefault("target", "")).trim();
         String auditType = body.getOrDefault("type", "general"); // general, code, network, deps
-        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
 
         if (target.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Target obbligatorio"));
 
