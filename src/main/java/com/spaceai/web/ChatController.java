@@ -19,12 +19,40 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
+
+// ── Configurazione CORS production-safe ─────────────────────────────────────
+// ALLOWED_ORIGINS env var: lista separata da virgola delle origini permesse
+// Esempio: https://space-ai-940e.onrender.com,https://mio-dominio.com
+// Se non impostata → fallback a onrender.com (NON wildcard *)
+@org.springframework.context.annotation.Configuration
+class CorsConfig implements org.springframework.web.servlet.config.annotation.WebMvcConfigurer {
+    @Override
+    public void addCorsMappings(org.springframework.web.servlet.config.annotation.CorsRegistry registry) {
+        String originsEnv = System.getenv("ALLOWED_ORIGINS");
+        String[] origins;
+        if (originsEnv != null && !originsEnv.isBlank()) {
+            origins = originsEnv.split(",");
+        } else {
+            origins = new String[]{"https://space-ai-940e.onrender.com"};
+        }
+        registry.addMapping("/api/**")
+            .allowedOrigins(origins)
+            .allowedMethods("GET","POST","PUT","DELETE","OPTIONS")
+            .allowedHeaders("*")
+            .allowCredentials(false)
+            .maxAge(3600);
+    }
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    // ── Account creatore: nessun rate limit, nessun circuit breaker ──────────
+    private static final String CREATOR_EMAIL = "elettronicmarket01@gmail.com";
+    // ────────────────────────────────────────────────────────────────────────
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -99,8 +127,13 @@ public class ChatController {
     private static final long CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti
     private final AtomicInteger cacheHits = new AtomicInteger(0);
     private final Map<String, AtomicInteger> sessionRequests = new ConcurrentHashMap<>();
-    private final Map<String, Long> sessionWindows = new ConcurrentHashMap<>();
+    private final Map<String, Long>          sessionWindows  = new ConcurrentHashMap<>();
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
+
+    // Rate limiting per IP — più difficile da aggirare del solo sessionId
+    private final Map<String, AtomicInteger> ipRequests = new ConcurrentHashMap<>();
+    private final Map<String, Long>          ipWindows  = new ConcurrentHashMap<>();
+    private static final int MAX_REQUESTS_PER_MINUTE_IP = 60; // soglia IP più alta (può avere più sessioni)
     private final AtomicInteger failureCount = new AtomicInteger(0);
     private volatile long circuitOpenTime   = 0;
     // Rate limit tracker — 429 da Groq
@@ -1444,7 +1477,6 @@ public class ChatController {
         this.agentLoop = agentLoop;
         initQuantumState();
         loadBrainState();
-        // Fix 3: Assicura collection Qdrant all'avvio
         if (qdrantEnabled()) {
             qdrantEnsureCollection();
             log.info("Qdrant collection verificata: {}", QDRANT_COLLECTION);
@@ -1453,6 +1485,62 @@ public class ChatController {
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
             this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
     }
+
+    // ── VALIDAZIONE ENV ALL'AVVIO ─────────────────────────────────────────
+    @jakarta.annotation.PostConstruct
+    public void validateEnvOnStartup() {
+        log.info("=== SPACE AI — Validazione environment ===");
+        // Obbligatori: almeno un provider LLM deve essere configurato
+        boolean hasGroq     = !env("GROQ_API_KEY","").isEmpty();
+        boolean hasGemini   = !env("GEMINI_API_KEY","").isEmpty();
+        boolean hasDeepSeek = !env("DEEPSEEK_API_KEY","").isEmpty();
+        if (!hasGroq && !hasGemini && !hasDeepSeek) {
+            log.error("CRITICO: Nessun provider LLM configurato! " +
+                "Imposta almeno GROQ_API_KEY, GEMINI_API_KEY o DEEPSEEK_API_KEY");
+        } else {
+            if (hasGroq)     log.info("  ✅ GROQ_API_KEY          presente");
+            else             log.warn("  ⚠️  GROQ_API_KEY          non configurata (provider principale)");
+            if (hasGemini)   log.info("  ✅ GEMINI_API_KEY        presente");
+            else             log.warn("  ⚠️  GEMINI_API_KEY        non configurata (fallback 1)");
+            if (hasDeepSeek) log.info("  ✅ DEEPSEEK_API_KEY      presente");
+            else             log.warn("  ⚠️  DEEPSEEK_API_KEY      non configurata (fallback 2)");
+        }
+        // Opzionali — avvisa se mancano
+        if (env("SUPABASE_URL","").isEmpty())
+            log.warn("  ⚠️  SUPABASE_URL           non configurata (storico chat disabilitato)");
+        if (env("TAVILY_API_KEY","").isEmpty())
+            log.warn("  ⚠️  TAVILY_API_KEY          non configurata (web search ridotta)");
+        if (env("ELEVENLABS_API_KEY","").isEmpty())
+            log.warn("  ⚠️  ELEVENLABS_API_KEY      non configurata (TTS qualità ridotta)");
+        if (env("PISTON_URL","").isEmpty())
+            log.warn("  ⚠️  PISTON_URL              non configurata (esecuzione codice disabilitata)");
+        // CORS
+        String origins = env("ALLOWED_ORIGINS","");
+        if (origins.isEmpty())
+            log.warn("  ⚠️  ALLOWED_ORIGINS         non configurata — uso fallback onrender.com");
+        else
+            log.info("  ✅ ALLOWED_ORIGINS          = {}", origins);
+        log.info("==========================================");
+    }
+    // ─────────────────────────────────────────────────────────────────────
+    // ── Helper: shutdown graceful di un ExecutorService ──────────────────
+    private void shutdownExecutor(String name, java.util.concurrent.ExecutorService ex) {
+        if (ex == null || ex.isShutdown()) return;
+        ex.shutdown();
+        try {
+            if (!ex.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                ex.shutdownNow();
+                log.warn("{} forzato dopo timeout", name);
+            } else {
+                log.info("{} chiuso correttamente", name);
+            }
+        } catch (InterruptedException ie) {
+            ex.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     private String getCached(String key) {
         // 1. KNN semantica (soglia alta = quasi identico)
         String knn = knnCacheGet(key);
@@ -1506,6 +1594,37 @@ public class ChatController {
             sessionRequests.put(sessionId, new AtomicInteger(0));
         }
         int reqs = sessionRequests.computeIfAbsent(sessionId, k -> new AtomicInteger(0)).incrementAndGet();
+        return reqs > MAX_REQUESTS_PER_MINUTE;
+    }
+
+    // Rate limiting per IP — resiste al cambio di sessionId
+    private boolean isIpRateLimited(jakarta.servlet.http.HttpServletRequest request) {
+        String ip = extractClientIp(request);
+        if (ip == null || ip.isBlank()) return false; // se non riusciamo a leggere l'IP, non blocchiamo
+        long now = System.currentTimeMillis();
+        Long window = ipWindows.get(ip);
+        if (window == null || now - window > 60000) {
+            ipWindows.put(ip, now);
+            ipRequests.put(ip, new AtomicInteger(0));
+        }
+        int reqs = ipRequests.computeIfAbsent(ip, k -> new AtomicInteger(0)).incrementAndGet();
+        if (reqs > MAX_REQUESTS_PER_MINUTE_IP) {
+            log.warn("IP rate limit superato: {} ({} req/min)", ip, reqs);
+            return true;
+        }
+        return false;
+    }
+
+    // Estrae l'IP reale considerando proxy/load balancer (X-Forwarded-For)
+    private String extractClientIp(jakarta.servlet.http.HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim(); // primo IP della catena = client reale
+        }
+        String realIp = request.getHeader("X-Real-IP");
+        if (realIp != null && !realIp.isBlank()) return realIp.trim();
+        return request.getRemoteAddr();
+    }
         return reqs > MAX_REQUESTS_PER_MINUTE;
     }
     private boolean isCircuitOpen() {
@@ -1562,10 +1681,11 @@ public class ChatController {
     // ── PERSISTENZA BRAIN STATE ───────────────────────────────────
     @jakarta.annotation.PreDestroy
     public void saveBrainState() {
-        // Fix 4: Shutdown RLHF executor
-        rlhfExecutor.shutdown();
-        try { rlhfExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); }
-        catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+        // Shutdown graceful di TUTTI gli executor
+        log.info("SPACE AI shutdown — chiusura executor...");
+        shutdownExecutor("rlhfExecutor",    rlhfExecutor);
+        shutdownExecutor("mainExecutor",    executor);
+        log.info("Executor chiusi. Salvataggio brain state...");
         try {
             com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
             com.fasterxml.jackson.databind.node.ObjectNode wNode = MAPPER.createObjectNode();
@@ -4869,7 +4989,9 @@ public class ChatController {
                "Unifica in UNA risposta finale perfetta. Elimina ridondanze. Markdown. Italiano.";
     }
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
+    public ResponseEntity<Map<String, Object>> chat(
+            @RequestBody Map<String, String> body,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
         String userMessage  = ((String) body.getOrDefault("message", "")).trim();
         String sessionId    = body.getOrDefault("sessionId", "default");
         String fileContent  = body.getOrDefault("fileContent", "");
@@ -4880,11 +5002,24 @@ public class ChatController {
         String model       = env("AI_MODEL", "llama-3.3-70b-versatile");
         String supabaseUrl = env("SUPABASE_URL", "");
         String supabaseKey = env("SUPABASE_KEY", "");
-        // Rate limiting
-            if (isRateLimited(sessionId)) {
-                return ResponseEntity.status(429).body(Map.of(
-                    "error", "Troppe richieste. Attendi un minuto.",
-                    "status", "rate_limited"));
+
+        // ── Creator account: nessun rate limit ───────────────────────────────
+        String userEmail   = body.getOrDefault("userEmail", "");
+        boolean isCreator  = CREATOR_EMAIL.equalsIgnoreCase(userEmail);
+        // ────────────────────────────────────────────────────────────────────
+
+        // Rate limiting per sessionId (skip per creator)
+        if (!isCreator && isRateLimited(sessionId)) {
+            return ResponseEntity.status(429).body(Map.of(
+                "error", "Troppe richieste. Attendi un minuto.",
+                "status", "rate_limited"));
+        }
+        // Rate limiting per IP (skip per creator)
+        if (!isCreator && isIpRateLimited(httpRequest)) {
+            return ResponseEntity.status(429).body(Map.of(
+                "error", "Troppe richieste da questo indirizzo. Attendi un minuto.",
+                "status", "rate_limited_ip"));
+        }
             }
             // Circuit breaker
             if (isCircuitOpen()) {
