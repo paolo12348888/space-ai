@@ -5848,7 +5848,52 @@ public class ChatController {
         return callLLMWithTemp(system, userMsg, history, baseUrl, apiKey, model, maxTokens, 0.8);
     }
     // ════════════════════════════════════════════════════════════════════════
-    // PROVIDER CHAIN: Groq → Gemini 2.0 → DeepSeek → Autonomous fallback
+    // GROQ MODEL POOL — rotazione automatica su 429/rate limit
+    // Tutti gratuiti, ordinati per capacità decrescente
+    // ════════════════════════════════════════════════════════════════════════
+    private static final String[][] GROQ_MODEL_POOL = {
+        // {modelId, maxTokens, note}
+        {"qwen/qwen3-32b",                        "8000",  "60rpm — il più permissivo"},
+        {"moonshotai/kimi-k2-instruct",            "8000",  "ottimo ragionamento"},
+        {"meta-llama/llama-4-scout-17b-16e-instruct","8000","llama4 scout"},
+        {"llama-3.3-70b-versatile",                "8000",  "principale"},
+        {"openai/gpt-oss-120b",                    "8000",  "potente"},
+        {"groq/compound",                          "8000",  "compound"},
+        {"llama-3.1-8b-instant",                   "8000",  "velocissimo — fallback finale"},
+    };
+    // indice corrente nel pool (thread-safe)
+    private final AtomicInteger groqPoolIndex = new AtomicInteger(0);
+    // timestamp fino a cui ogni modello del pool è in cooldown (429)
+    private final Map<String, Long> groqModelCooldown = new ConcurrentHashMap<>();
+    private static final long GROQ_COOLDOWN_MS = 60_000; // 1 minuto di cooldown dopo 429
+
+    // Restituisce il prossimo modello disponibile nel pool
+    private String[] nextAvailableGroqModel() {
+        long now = System.currentTimeMillis();
+        // Prova tutti i modelli in ordine ciclico
+        for (int attempt = 0; attempt < GROQ_MODEL_POOL.length; attempt++) {
+            int idx = groqPoolIndex.get() % GROQ_MODEL_POOL.length;
+            String[] entry = GROQ_MODEL_POOL[idx];
+            String modelId = entry[0];
+            Long cooldownUntil = groqModelCooldown.get(modelId);
+            if (cooldownUntil == null || now > cooldownUntil) {
+                return entry; // modello disponibile
+            }
+            // questo modello è in cooldown, prova il prossimo
+            groqPoolIndex.incrementAndGet();
+        }
+        // tutti in cooldown — usa il principale come fallback forzato
+        log.warn("Groq pool: tutti i modelli in cooldown, forzo llama-3.3-70b-versatile");
+        return GROQ_MODEL_POOL[3]; // llama-3.3-70b-versatile
+    }
+
+    // Segna un modello come in cooldown dopo un 429
+    private void markGroqModelCooldown(String modelId) {
+        groqModelCooldown.put(modelId, System.currentTimeMillis() + GROQ_COOLDOWN_MS);
+        groqPoolIndex.incrementAndGet(); // passa al prossimo
+        log.warn("Groq model {} in cooldown per {}s — passo al prossimo",
+            modelId, GROQ_COOLDOWN_MS / 1000);
+    }
     // ════════════════════════════════════════════════════════════════════════
 
     // ── Helper: esegue una chiamata HTTP con retry + backoff esponenziale ───
@@ -5995,36 +6040,30 @@ public class ChatController {
     private String callLLMWithTemp(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens, double temperature) throws Exception {
 
-        // ── Rate limit check: se Groq è bloccato, prova altri provider ──
+        // ── Reset contatore giornaliero Groq ────────────────────────────────
         long now = System.currentTimeMillis();
-        if (rateLimitUntil > now) {
-            log.warn("Groq rate limited, provo provider alternativi...");
-            // Prova Gemini
-            if (!env("GEMINI_API_KEY","").isEmpty()) {
-                try { return callGemini(system, userMsg, history, maxTokens, temperature); }
-                catch (Exception ge) { log.warn("Gemini fallback: {}", ge.getMessage()); }
-            }
-            // Prova DeepSeek
-            if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
-                try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
-                catch (Exception de) { log.warn("DeepSeek fallback: {}", de.getMessage()); }
-            }
-            localFallbacks.incrementAndGet();
-            return autonomousFallback(system, userMsg, history);
-        }
-
-        // Fix 5: Reset groqCallsToday basato su giorno UTC (non su 24h dall avvio)
         java.time.LocalDate today2 = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
         java.time.LocalDate dayStart = java.time.Instant.ofEpochMilli(groqDayStart)
             .atZone(java.time.ZoneOffset.UTC).toLocalDate();
         if (!today2.equals(dayStart)) {
             groqCallsToday.set(0);
             groqDayStart = now;
-            log.info("Groq daily counter reset (nuovo giorno UTC)");
+            groqModelCooldown.clear(); // reset tutti i cooldown a mezzanotte
+            log.info("Groq daily counter e pool cooldown reset (nuovo giorno UTC)");
+        }
+
+        // ── GROQ MODEL POOL: usa il modello disponibile, ruota su 429 ────────
+        String[] poolEntry = nextAvailableGroqModel();
+        String activeModel = poolEntry[0];
+        // Se il chiamante passa un modello specifico diverso da quello del pool, usalo
+        // ma solo se non è in cooldown
+        if (model != null && !model.isEmpty() && !model.equals(env("AI_MODEL","llama-3.3-70b-versatile"))) {
+            Long cd = groqModelCooldown.get(model);
+            if (cd == null || System.currentTimeMillis() > cd) activeModel = model;
         }
 
         ObjectNode req = MAPPER.createObjectNode();
-        req.put("model", model); req.put("max_tokens", maxTokens);
+        req.put("model", activeModel); req.put("max_tokens", maxTokens);
         req.put("temperature", temperature); req.put("top_p", 0.95);
         req.put("frequency_penalty", 0.3); req.put("presence_penalty", 0.3);
         ArrayNode messages = MAPPER.createArrayNode();
@@ -6040,49 +6079,57 @@ public class ChatController {
         req.set("messages", messages);
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         if (!apiKey.isEmpty()) h.setBearerAuth(apiKey);
-        h.set("HTTP-Referer","https://space-ai-940e.onrender.com");
+        h.set("HTTP-Referer","https://space-ai-new.onrender.com");
         h.set("X-Title","SPACE AI"); h.set("User-Agent","SPACE-AI/4.0");
         String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
 
         try {
             groqCallsToday.incrementAndGet();
-            ResponseEntity<String> response = restTemplate.postForEntity(
+            log.debug("Groq pool usando modello: {}", activeModel);
+            ResponseEntity<String> response = llmRestTemplate.postForEntity(
                 endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+            // successo — reset cooldown per questo modello
+            groqModelCooldown.remove(activeModel);
             return MAPPER.readTree(response.getBody()).path("choices").get(0)
                 .path("message").path("content").asText();
 
         } catch (org.springframework.web.client.HttpClientErrorException e) {
-            String body = e.getResponseBodyAsString();
+            String respBody = e.getResponseBodyAsString();
 
-            // ── 429 Rate Limit: calcola quando Groq si resetta ─────────────
+            // ── 429: metti in cooldown questo modello e riprova con il prossimo ──
             if (e.getStatusCode().value() == 429) {
-                long retryMs = 2_100_000L; // default 35 minuti
-                // Estrai "Please try again in Xm Ys" dal messaggio
-                try {
-                    java.util.regex.Matcher m429 = java.util.regex.Pattern
-                        .compile("try again in (\\d+)m(\\d+\\.?\\d*)s").matcher(body);
-                    if (m429.find()) {
-                        long mins = Long.parseLong(m429.group(1));
-                        double secs = Double.parseDouble(m429.group(2));
-                        retryMs = (long)(mins * 60_000 + secs * 1000) + 5000; // +5s buffer
+                markGroqModelCooldown(activeModel);
+                log.warn("429 su {} — riprovo con prossimo modello del pool", activeModel);
+                // Riprova ricorsivamente con il prossimo modello disponibile
+                String[] next = nextAvailableGroqModel();
+                if (!next[0].equals(activeModel)) {
+                    // c'è un altro modello disponibile nel pool
+                    try {
+                        req.put("model", next[0]);
+                        ResponseEntity<String> retry = llmRestTemplate.postForEntity(
+                            endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+                        log.info("Pool fallback OK: {} → {}", activeModel, next[0]);
+                        groqModelCooldown.remove(next[0]);
+                        return MAPPER.readTree(retry.getBody()).path("choices").get(0)
+                            .path("message").path("content").asText();
+                    } catch (Exception retryEx) {
+                        log.warn("Anche {} fallito: {}", next[0], retryEx.getMessage());
                     }
-                } catch (Exception ignored) {}
-                rateLimitUntil = System.currentTimeMillis() + retryMs;
-                log.error("Groq 429 — rate limit per {}ms. Provo provider alternativi.", retryMs);
-                // Provider chain: Gemini → DeepSeek → autonomo
+                }
+                // Pool esaurito → provider chain esterna
+                log.warn("Groq pool esaurito — provo Gemini/DeepSeek");
+                rateLimitUntil = System.currentTimeMillis() + 60_000;
                 if (!env("GEMINI_API_KEY","").isEmpty()) {
                     try { return callGemini(system, userMsg, history, maxTokens, temperature); }
-                    catch (Exception ge) { log.warn("Gemini dopo 429: {}", ge.getMessage()); }
+                    catch (Exception ge) { log.warn("Gemini fallback: {}", ge.getMessage()); }
                 }
                 if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
                     try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
-                    catch (Exception de) { log.warn("DeepSeek dopo 429: {}", de.getMessage()); }
+                    catch (Exception de) { log.warn("DeepSeek fallback: {}", de.getMessage()); }
                 }
                 localFallbacks.incrementAndGet();
                 return autonomousFallback(system, userMsg, history);
             }
-
-            // ── 503 / 502: circuit breaker ─────────────────────────────────
             if (e.getStatusCode().value() >= 500) {
                 circuitOpenTime = System.currentTimeMillis();
                 log.error("Groq {}. Circuit breaker aperto.", e.getStatusCode().value());
@@ -6090,7 +6137,6 @@ public class ChatController {
             }
             throw e;
         } catch (Exception e) {
-            // Qualsiasi altro errore di rete — fallback autonomo
             log.error("Groq unreachable: {}. Uso fallback autonomo.", e.getMessage());
             return autonomousFallback(system, userMsg, history);
         }
@@ -6644,6 +6690,15 @@ public class ChatController {
             pm.put("successRate", tot > 0 ? (pm.get("success") * 100 / tot) : 100);
             providers.put(p, pm);
         }
+        // stato pool modelli Groq
+        long nowPool = System.currentTimeMillis();
+        Map<String,String> poolStatus = new java.util.LinkedHashMap<>();
+        for (String[] entry : GROQ_MODEL_POOL) {
+            Long cd = groqModelCooldown.get(entry[0]);
+            poolStatus.put(entry[0], (cd == null || nowPool > cd) ? "✅ disponibile" :
+                "⏳ cooldown " + ((cd - nowPool)/1000) + "s");
+        }
+        providers.put("groqPool", poolStatus);
         m.put("providerStats", providers);
         return ResponseEntity.ok(m);
     }
