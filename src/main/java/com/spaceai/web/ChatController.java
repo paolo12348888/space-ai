@@ -1511,8 +1511,42 @@ public class ChatController {
     // ════════════════════════════════════════════════════════════════════════
 
     private String buildSystemPrompt(String mode, String sessionId, String query) {
+        // ── Modalità SPACES: risposta vocale stile Alexa/Google ──────────────
+        if ("spaces".equals(mode) || query.startsWith("[SPACES_VOICE_MODE]")) {
+            return buildSpacesVoicePrompt(sessionId, query);
+        }
         // Parte statica (cachata) + parte dinamica (fresca ogni query)
         return getCachedStaticPrompt(mode) + buildDynamicSystemPrompt(sessionId, query);
+    }
+
+    // System prompt dedicato per SPACES — risposte brevi, naturali, parlate
+    private String buildSpacesVoicePrompt(String sessionId, String query) {
+        String emotion = emotionState.getOrDefault(sessionId, "neutral");
+        String msaMem  = msaRetrieveUnified(query.replace("[SPACES_VOICE_MODE]","").trim(), sessionId);
+
+        return "Sei SPACE AI in modalità vocale assistente, come Alexa o Google Assistant.\n\n" +
+               "REGOLE FONDAMENTALI PER LA RISPOSTA VOCALE:\n" +
+               "1. Rispondi in modo NATURALE e CONVERSAZIONALE — come parlerebbe una persona\n" +
+               "2. Massimo 2-3 frasi per risposta semplice, 5 per risposta complessa\n" +
+               "3. ZERO markdown: niente **, ##, -, *, backtick, tabelle, elenchi puntati\n" +
+               "4. ZERO introduzioni tipo 'Certo!', 'Assolutamente!', 'Ottima domanda!'\n" +
+               "5. VAI DIRETTO alla risposta — come fa Alexa\n" +
+               "6. Se è una domanda semplice → risposta in 1 frase\n" +
+               "7. Se chiede di fare qualcosa → conferma brevemente cosa stai facendo\n" +
+               "8. Usa il nome dell'utente se lo conosci\n" +
+               "9. Parla in prima persona, tono amichevole e diretto\n" +
+               "10. Se non sai qualcosa → dillo chiaramente in una frase\n\n" +
+               "ESEMPI CORRETTI:\n" +
+               "Domanda: 'che ore sono?' → 'Sono le tre e mezza del pomeriggio.'\n" +
+               "Domanda: 'com'è il tempo a Roma?' → 'A Roma oggi ci sono 22 gradi e cielo sereno.'\n" +
+               "Domanda: 'genera un immagine di un tramonto' → 'Sto generando l immagine del tramonto.'\n" +
+               "Domanda: 'chi ha vinto la Champions?' → 'Il Real Madrid ha vinto la Champions League.'\n\n" +
+               "ESEMPI SBAGLIATI (da evitare):\n" +
+               "❌ 'Certo! Ecco alcune informazioni: **Roma** è...'\n" +
+               "❌ 'Assolutamente! Analizziamo insieme questo argomento...'\n" +
+               "❌ Risposta con liste puntate o tabelle\n\n" +
+               "Emozione rilevata: " + emotion + ". Adatta il tono di conseguenza.\n" +
+               (msaMem.isEmpty() ? "" : "Ricordi utili: " + msaMem.substring(0, Math.min(200, msaMem.length())) + "\n");
     }
     // Calcola reward basato su lunghezza risposta e interazione
     private double computeReward(String query, String response, String agent) {
@@ -6704,20 +6738,42 @@ public class ChatController {
         return messages;
     }
     private String cleanTextForTTS(String md) {
-        if (md == null) return "";
+        if (md == null || md.isBlank()) return "";
         String t = md;
-        t = t.replaceAll("\\*\\*(.*?)\\*\\*", "$1");
-        t = t.replaceAll("__(.*?)__", "$1");
-        t = t.replaceAll("\\*(.*?)\\*", "$1");
-        t = t.replaceAll("_(.*?)_", "$1");
-        t = t.replaceAll("\\[(.*?)\\]\\(.*?\\)", "$1");
-        t = t.replaceAll("(?s)```.*?```", "codice omesso.");
-        t = t.replaceAll("`(.*?)`", "$1");
-        t = t.replaceAll("#{1,6}\\s+", "");
-        t = t.replaceAll("(?m)^[-*]\\s+", "");
-        t = t.replaceAll("(?s)<details>.*?</details>", "");
+        // Rimuovi blocchi codice completamente (non leggerli)
+        t = t.replaceAll("(?s)```[\\w]*\\n.*?```", "Codice generato.");
+        t = t.replaceAll("(?s)```.*?```", "");
+        // Rimuovi inline code
+        t = t.replaceAll("`[^`]+`", "");
+        // Rimuovi markdown formattazione
+        t = t.replaceAll("\\*\\*([^*]+)\\*\\*", "$1");
+        t = t.replaceAll("__([^_]+)__", "$1");
+        t = t.replaceAll("\\*([^*\n]+)\\*", "$1");
+        t = t.replaceAll("_([^_\n]+)_", "$1");
+        // Rimuovi link ma mantieni il testo
+        t = t.replaceAll("\\[([^\\]]+)\\]\\([^)]+\\)", "$1");
+        // Rimuovi titoli (##, ###) ma mantieni il testo
+        t = t.replaceAll("(?m)^#{1,6}\\s+", "");
+        // Converti liste puntate in testo fluente
+        t = t.replaceAll("(?m)^[-*•]\\s+", "");
+        t = t.replaceAll("(?m)^\\d+\\.\\s+", "");
+        // Rimuovi tabelle markdown
+        t = t.replaceAll("(?m)^[|].*[|]\\s*$", "");
+        t = t.replaceAll("(?m)^[-|: ]+$", "");
+        // Rimuovi HTML
         t = t.replaceAll("<[^>]+>", "");
+        // Rimuovi citazioni [1][2] da web search
+        t = t.replaceAll("\\[\\d+\\]", "");
+        // Normalizza spazi e newline
+        t = t.replaceAll("(?m)^\\s*$", "");
         t = t.replaceAll("\\n{3,}", "\n\n");
+        t = t.replaceAll("  +", " ");
+        // Aggiungi pause naturali per TTS
+        t = t.replace("\n\n", ". ");
+        t = t.replace("\n", ", ");
+        t = t.replaceAll("\\. \\.", ".");
+        t = t.replaceAll(", ,", ",");
+        t = t.replaceAll("\\.{2,}", ".");
         return t.trim();
     }
     private String analyzeImageBase64(String base64Image, String userMsg,
