@@ -509,7 +509,7 @@ public class ChatController {
             if (c.isImage()) {
                 if (imgCount < 2) { imgChunks.add(c); imgCount++; } // max 2 immagini
             } else {
-                if (textCount < TOP_K_RAG) {
+                if (textCount < RAG_TOP_K) {
                     textSb.append(c.text).append("\n---\n");
                     textCount++;
                 }
