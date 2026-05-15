@@ -1402,7 +1402,7 @@ async function sendMsg(){
   else if(curMode==="finance")msg="[MODALITA FINANZA] "+text;
   else if(curMode==="search")msg="[RICERCA WEB 2026] "+text;
   else if(curMode==="image")msg="Genera immagine di: "+text;
-  else if(curMode==="spaces")msg="[SPACES MODE - rispondi conciso per voce] "+text;
+  else if(curMode==="spaces")msg="[SPACES_VOICE_MODE] "+text;
   else if(curMode==="security")msg="[AEGIS SECURITY SCAN - analisi difensiva] "+text;
   else if(curMode==="neural")msg="[NEURAL CORE - ragionamento autonomo profondo] "+text;
   else if(curMode==="visual_creative")msg="[VISUAL CREATIVE - genera SVG per: ] "+text;
@@ -1544,8 +1544,12 @@ async function sendMsg(){
             pollGoalTask(data.taskData.taskId, 0);
           }
         } else if(data.agentLoop && data.response){
-          addRow("\uD83E\uDD16 **Agent Loop**\n\n"+data.response,"ai");
-          if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
+          addRow("🤖 **Agent Loop**\n\n"+data.response,"ai");
+          if(spacesOn){
+            var vt=data.responseForVoice||data.response||"";
+            if(vt.length>400){var ci=vt.indexOf(".",300);vt=ci>0&&ci<450?vt.substring(0,ci+1):vt.substring(0,380)+"...";}
+            setTimeout(function(){speak(vt,null);},400);
+          }
         // ── SVG standalone ─────────────────────────────────────────────
         } else if(data.svgImage){
           addSVGRow(data.svgImage, data.response||"Immagine SVG generata!", data.svgCode||"");
@@ -1555,18 +1559,27 @@ async function sendMsg(){
             addRow("⚠️ Generazione immagine non riuscita. Riprova tra qualche secondo.","err");
           } else {
             var prefix=data.webSearch==="true"?"🌐 **Live** · ":"";
-            // Citazioni in-line: trasforma [1][2][3] in link cliccabili
             var finalResp = data.webSources
               ? renderCitations(data.response, data.webSources)
               : data.response;
             addRow(prefix+finalResp,"ai");
-            // Immagini da code_exec (matplotlib plots)
             if(data.images && data.images.length>0){
               var imgHtml=renderCodeImages(data.images);
               var lastBubble=msgsEl.querySelector(".row.ai:last-child .bubble");
               if(lastBubble)lastBubble.insertAdjacentHTML("beforeend",imgHtml);
             }
-            if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
+            // SPACES: legge responseForVoice (testo pulito) non la risposta markdown
+            if(spacesOn){
+              var voiceText = data.responseForVoice || data.response || "";
+              // Tronca a 400 caratteri per risposte vocali — come Alexa
+              if(voiceText.length > 400){
+                // Taglia al punto più vicino dopo 300 caratteri
+                var cutIdx = voiceText.indexOf(".", 300);
+                if(cutIdx > 0 && cutIdx < 450) voiceText = voiceText.substring(0, cutIdx+1);
+                else voiceText = voiceText.substring(0, 380) + "...";
+              }
+              setTimeout(function(){ speak(voiceText, null); }, 400);
+            }
           }
         }
         // Aggiorna emotion indicator
