@@ -4611,9 +4611,113 @@ public class ChatController {
 
     /**
      * Traduce e ottimizza il prompt IT→EN per Stable Diffusion / Pollinations.
-     * Usa un dizionario esteso + LLM fallback per scene complesse.
+     * Usa LLM per traduzione accurata + quality tags professionali adattivi.
      */
     private String enhancePromptForSD(String prompt) {
+        if (prompt == null || prompt.isBlank()) return "a breathtaking space scene, ultra detailed, 8k uhd, masterpiece";
+
+        // ── Step 1: Pulizia comandi italiani ─────────────────────────────────
+        String cleaned = prompt
+            .replaceAll("(?i)\\b(crea(re)?|genera(re)?|disegna(re)?|mostra(re)?|fammi\\s+vedere|fai\\s+un[a]?)\\b", "")
+            .replaceAll("(?i)\\b(immagine\\s+(di|del|della|dello|dei|degli)?|foto\\s+di|illustrazione\\s+di)\\b", "")
+            .replaceAll("(?i)\\b(alta\\s+qualità|alta\\s+risoluzione|dettagliata|realistica)\\b", "")
+            .replaceAll("\\s{2,}", " ").trim();
+        if (cleaned.isBlank()) cleaned = prompt.trim();
+
+        // ── Step 2: Traduzione LLM (per prompt complessi) ────────────────────
+        String eng = cleaned;
+        try {
+            String baseUrl = env("AI_BASE_URL","https://api.groq.com/openai/v1");
+            String apiKey  = env("AI_API_KEY", env("GROQ_API_KEY",""));
+            if (!apiKey.isEmpty() && cleaned.length() > 8) {
+                // Usa modello veloce per la traduzione
+                String translationPrompt =
+                    "Translate this image description to English for an AI image generator. " +
+                    "Keep it concise and visual. Return ONLY the translated description, nothing else.\n" +
+                    "Input: " + cleaned;
+                ObjectNode req = MAPPER.createObjectNode();
+                req.put("model", "llama-3.1-8b-instant"); // modello veloce
+                req.put("max_tokens", 200);
+                req.put("temperature", 0.1);
+                ArrayNode msgs = MAPPER.createArrayNode();
+                ObjectNode sys = MAPPER.createObjectNode();
+                sys.put("role","system");
+                sys.put("content","You are a translator. Translate Italian image descriptions to English. Reply with ONLY the translation.");
+                msgs.add(sys);
+                ObjectNode usr = MAPPER.createObjectNode();
+                usr.put("role","user"); usr.put("content",translationPrompt); msgs.add(usr);
+                req.set("messages", msgs);
+                HttpHeaders h = new HttpHeaders();
+                h.setContentType(MediaType.APPLICATION_JSON); h.setBearerAuth(apiKey);
+                String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
+                ResponseEntity<String> resp = llmRestTemplate.postForEntity(
+                    endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
+                String translated = MAPPER.readTree(resp.getBody())
+                    .path("choices").get(0).path("message").path("content").asText().trim();
+                if (!translated.isBlank() && translated.length() > 3) {
+                    eng = translated;
+                    log.debug("Prompt tradotto LLM: [{}] → [{}]", cleaned, eng);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Traduzione LLM fallita, uso dizionario: {}", e.getMessage());
+            // Fallback dizionario essenziale
+            eng = cleaned
+                .replaceAll("(?i)\\bun uomo\\b","a man").replaceAll("(?i)\\buna donna\\b","a woman")
+                .replaceAll("(?i)\\bun bambino\\b","a child").replaceAll("(?i)\\buna persona\\b","a person")
+                .replaceAll("(?i)\\bgatto\\b","cat").replaceAll("(?i)\\bcane\\b","dog")
+                .replaceAll("(?i)\\bcielo\\b","sky").replaceAll("(?i)\\bmare\\b","sea")
+                .replaceAll("(?i)\\bmontagna\\b","mountain").replaceAll("(?i)\\bcittà\\b","city")
+                .replaceAll("(?i)\\btramonto\\b","sunset").replaceAll("(?i)\\balba\\b","sunrise")
+                .replaceAll("(?i)\\bnotte\\b","night").replaceAll("(?i)\\bforesta\\b","forest")
+                .replaceAll("(?i)\\bastronauta\\b","astronaut").replaceAll("(?i)\\brobot\\b","robot")
+                .replaceAll("(?i)\\bspazio\\b","outer space").replaceAll("(?i)\\bgalassia\\b","galaxy")
+                .replaceAll("(?i)\\bdrago\\b","dragon").replaceAll("(?i)\\bcastello\\b","castle")
+                .replaceAll("\\s{2,}"," ").trim();
+        }
+
+        // ── Step 3: Quality tags professionali adattivi ──────────────────────
+        String engLow = eng.toLowerCase();
+        String negativeHint = " --no blur, noise, grain, low quality, watermark, text, deformed, ugly";
+
+        String qualityBase;
+        if (engLow.matches(".*(portrait|person|man|woman|face|girl|boy|human|model|character).*"))
+            qualityBase = ", ultra-detailed portrait, photorealistic, RAW photo, DSLR, sharp focus, " +
+                "professional studio lighting, skin texture detail, 8k uhd, masterpiece, best quality, " +
+                "bokeh background, perfect anatomy, intricate details";
+        else if (engLow.matches(".*(landscape|nature|mountain|forest|ocean|river|valley|field).*"))
+            qualityBase = ", epic landscape photography, golden hour lighting, volumetric light, " +
+                "National Geographic style, ultra detailed, 8k uhd, HDR, award winning photo, " +
+                "atmospheric perspective, depth of field, hyperrealistic";
+        else if (engLow.matches(".*(space|galaxy|nebula|cosmos|planet|star|universe|asteroid).*"))
+            qualityBase = ", stunning space art, NASA quality, hyperrealistic nebula, " +
+                "volumetric lighting, cinematic, ultra detailed, 8k, Hubble telescope style, " +
+                "deep space photography, award winning digital art";
+        else if (engLow.matches(".*(anime|manga|cartoon|studio.?ghibli|pixar).*"))
+            qualityBase = ", anime style, vibrant colors, ultra detailed, 4k, " +
+                "studio quality, professional illustration, clean lineart, beautiful shading";
+        else if (engLow.matches(".*(city|building|architecture|street|urban|interior).*"))
+            qualityBase = ", architectural visualization, ultra detailed, 8k, " +
+                "photorealistic render, dramatic lighting, professional photography, " +
+                "sharp details, HDR, cinematic composition";
+        else if (engLow.matches(".*(fantasy|magic|dragon|wizard|sword|castle|mythical).*"))
+            qualityBase = ", epic fantasy art, ultra detailed, cinematic lighting, " +
+                "artstation trending, 8k, vibrant colors, professional digital painting, " +
+                "dramatic atmosphere, masterpiece";
+        else if (engLow.matches(".*(food|meal|dish|cuisine|restaurant|cooking).*"))
+            qualityBase = ", professional food photography, macro lens, soft diffused lighting, " +
+                "ultra detailed textures, 8k, commercial quality, shallow depth of field";
+        else if (engLow.matches(".*(car|vehicle|motorcycle|aircraft|ship|mechanical).*"))
+            qualityBase = ", automotive photography, studio lighting, ultra detailed, " +
+                "8k, photorealistic render, chrome reflections, professional CGI quality";
+        else
+            qualityBase = ", ultra detailed, photorealistic, cinematic lighting, 8k uhd, " +
+                "sharp focus, masterpiece, best quality, professional photography, HDR";
+
+        return eng + qualityBase;
+    }
+
+    private String generateImage(String prompt) {
         if (prompt == null || prompt.isBlank()) return "a beautiful space scene, highly detailed, 4k";
         // Dizionario IT->EN per termini visivi comuni
         String eng = prompt.toLowerCase()
@@ -4676,92 +4780,109 @@ public class ChatController {
     }
 
     private String generateImage(String prompt) {
-        // ── STEP 1: Traduci sempre il prompt in inglese prima di inviarlo ─────
-        // Questo è il bug principale: prima si passava il prompt italiano grezzo
         String engPrompt = enhancePromptForSD(prompt);
-        log.info("Image prompt IT: [{}] -> EN: [{}]", prompt, engPrompt);
+        log.info("Image prompt: [{}]", engPrompt.substring(0, Math.min(120, engPrompt.length())));
 
-        // ── RestTemplate con timeout ottimizzati ────────────────────────────
+        // RestTemplate con timeout esteso per immagini ad alta risoluzione
         org.springframework.web.client.RestTemplate imgClient =
             new org.springframework.web.client.RestTemplate();
         try {
             org.springframework.http.client.SimpleClientHttpRequestFactory f =
                 new org.springframework.http.client.SimpleClientHttpRequestFactory();
-            f.setConnectTimeout(10000);  // 10s connect
-            f.setReadTimeout(30000);     // 30s read (Pollinations risponde in ~5-15s)
+            f.setConnectTimeout(12000);  // 12s connect
+            f.setReadTimeout(60000);     // 60s read (immagini HD richiedono più tempo)
             imgClient.setRequestFactory(f);
         } catch (Exception ex) { log.warn("Timeout config: {}", ex.getMessage()); }
 
-        // ── PRIORITÀ 1: Pollinations FLUX (gratis, no key, ottima qualità) ──
-        // Usa SEMPRE il prompt in inglese tradotto
-        String[] pollinationModels = {"flux", "turbo", "flux-realism"};
-        for (String pModel : pollinationModels) {
+        // ── PRIORITÀ 1: Pollinations — modelli ordinati per qualità ──────────
+        // flux-realism: migliore per fotorealismo
+        // flux: bilanciato qualità/velocità
+        // flux-pro: massima qualità (più lento)
+        // turbo: fallback veloce
+        String[][] pollinationModels = {
+            {"flux-realism", "1280", "1280"}, // massima qualità fotorealistica
+            {"flux",         "1344", "1024"}, // formato panoramico — meno sgranato
+            {"flux-pro",     "1024", "1024"}, // pro — più dettagliato
+            {"turbo",        "1024", "1024"}, // fallback veloce
+        };
+        for (String[] pm : pollinationModels) {
             try {
-                // Seed fisso per coerenza, basato sull hash del prompt (non sul tempo!)
-                long seed = Math.abs(engPrompt.hashCode()) % 99999;
+                String pModel = pm[0];
+                int    width  = Integer.parseInt(pm[1]);
+                int    height = Integer.parseInt(pm[2]);
+                long   seed   = Math.abs(engPrompt.hashCode()) % 99999;
                 String encoded = java.net.URLEncoder.encode(engPrompt, "UTF-8")
                     .replace("+", "%20").replace("%2C", ",");
                 String url = "https://image.pollinations.ai/prompt/" + encoded
-                    + "?width=1024&height=1024&nologo=true&enhance=true"
+                    + "?width=" + width + "&height=" + height
+                    + "&nologo=true&enhance=true&safe=false"
                     + "&model=" + pModel + "&seed=" + seed;
-                log.info("Pollinations {} request: {}", pModel, url.substring(0, Math.min(120, url.length())));
+                log.info("Pollinations {} ({}x{}) request", pModel, width, height);
                 ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
                 if (resp.getStatusCode().is2xxSuccessful()
                         && resp.getBody() != null
-                        && resp.getBody().length > 5000) {
-                    log.info("Pollinations {} OK: {} bytes", pModel, resp.getBody().length);
+                        && resp.getBody().length > 10000) { // soglia più alta: 10KB min
+                    log.info("Pollinations {} OK: {} KB", pModel, resp.getBody().length/1024);
                     return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
                 }
-                log.warn("Pollinations {} risposta insufficiente: {} bytes",
-                    pModel, resp.getBody() == null ? 0 : resp.getBody().length);
+                log.warn("Pollinations {} risposta insufficiente: {} bytes", pModel,
+                    resp.getBody() == null ? 0 : resp.getBody().length);
             } catch (Exception e) {
-                log.warn("Pollinations {} fallito: {}", pModel, e.getMessage());
+                log.warn("Pollinations {} fallito: {}", pm[0], e.getMessage());
             }
         }
 
-        // ── PRIORITÀ 2: HuggingFace SD (se HF_TOKEN disponibile) ─────────
+        // ── PRIORITÀ 2: HuggingFace con parametri qualità top ────────────────
         String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
-            String[] hfModels = {
-                "black-forest-labs/FLUX.1-schnell",        // FLUX schnell - veloce
-                "stabilityai/stable-diffusion-xl-base-1.0", // SDXL
-                "runwayml/stable-diffusion-v1-5"            // SD 1.5 fallback
+            // Modelli ordinati per qualità output
+            String[][] hfModels = {
+                {"black-forest-labs/FLUX.1-dev",             "1024", "1024", "28", "3.5"},  // FLUX dev — massima qualità
+                {"black-forest-labs/FLUX.1-schnell",         "1024", "1024", "4",  "0.0"},  // FLUX schnell — veloce
+                {"stabilityai/stable-diffusion-xl-base-1.0", "1024", "1024", "40", "7.5"},  // SDXL
+                {"stabilityai/stable-diffusion-3-medium-diffusers","1024","1024","28","7.0"} // SD3
             };
-            for (String hfModel : hfModels) {
+            for (String[] hm : hfModels) {
                 try {
                     HttpHeaders h = new HttpHeaders();
                     h.setContentType(MediaType.APPLICATION_JSON);
                     h.setBearerAuth(hfKey);
                     ObjectNode req = MAPPER.createObjectNode();
-                    req.put("inputs", engPrompt); // SEMPRE il prompt in inglese
+                    req.put("inputs", engPrompt);
                     ObjectNode params = MAPPER.createObjectNode();
-                    params.put("num_inference_steps", 20);
-                    params.put("guidance_scale", 7.5);
-                    params.put("width", 768);
-                    params.put("height", 768);
-                    params.put("wait_for_model", true);
-                    params.put("use_cache", false);
+                    params.put("num_inference_steps", Integer.parseInt(hm[3]));
+                    params.put("guidance_scale",      Double.parseDouble(hm[4]));
+                    params.put("width",               Integer.parseInt(hm[1]));
+                    params.put("height",              Integer.parseInt(hm[2]));
+                    params.put("wait_for_model",      true);
+                    params.put("use_cache",           false);
+                    // Negative prompt per ridurre artefatti
+                    if (!hm[0].contains("FLUX.1-schnell")) // schnell non supporta negative
+                        params.put("negative_prompt",
+                            "blurry, low quality, noise, grain, watermark, text, " +
+                            "deformed, ugly, bad anatomy, disfigured, poorly drawn, " +
+                            "extra limbs, cloned face, oversaturated");
                     req.set("parameters", params);
                     ResponseEntity<byte[]> resp = imgClient.postForEntity(
-                        "https://api-inference.huggingface.co/models/" + hfModel,
+                        "https://api-inference.huggingface.co/models/" + hm[0],
                         new HttpEntity<>(MAPPER.writeValueAsString(req), h),
                         byte[].class);
                     if (resp.getStatusCode().is2xxSuccessful()
                             && resp.getBody() != null
-                            && resp.getBody().length > 3000) {
-                        log.info("HF {} OK: {} bytes", hfModel, resp.getBody().length);
+                            && resp.getBody().length > 5000) {
+                        log.info("HF {} OK: {} KB", hm[0], resp.getBody().length/1024);
                         return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
                     }
                 } catch (Exception e) {
-                    log.warn("HF model {} fallito: {}", hfModel, e.getMessage());
+                    log.warn("HF model {} fallito: {}", hm[0], e.getMessage());
                 }
             }
         }
 
-        // ── FALLBACK: SVG placeholder con la scena descritta ──────────────
-        log.warn("Tutti i motori immagine falliti per prompt: {}", engPrompt);
+        // ── FALLBACK: placeholder informativo ─────────────────────────────────
+        log.warn("Tutti i motori immagine falliti per: {}", engPrompt.substring(0, Math.min(80, engPrompt.length())));
         return "ERRORE_IMMAGINE: Servizio immagini temporaneamente non disponibile. " +
-               "Prompt EN usato: [" + engPrompt.substring(0, Math.min(80, engPrompt.length())) + "]";
+               "Prompt usato: [" + engPrompt.substring(0, Math.min(80, engPrompt.length())) + "]";
     }
     private String thinkingMode(String userMsg, String context, String baseUrl, String apiKey, String model) throws Exception {
         // Step 1: Ragionamento interno
