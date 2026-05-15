@@ -107,8 +107,8 @@ textarea::placeholder{color:var(--muted)}
 .mlbl{margin-left:auto;font-size:.69rem;color:var(--accent);opacity:.75}
 .hint{text-align:center;font-size:.61rem;color:var(--muted);margin:5px auto 0;opacity:.45}
 </style>
-  <!-- ABCJS: renderizza e riproduce notazione ABC (musica) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-basic-min.js"></script>
+  <!-- ABCJS: renderizza e riproduce notazione ABC (versione completa con synth audio) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-min.js"></script>
 </head>
 <body>
 <div class="sb-ov" id="sbOv" onclick="closeSB()"></div>
@@ -1067,75 +1067,11 @@ async function sendMsg(){
         // ── Music Gen ─────────────────────────────────────────────────
         if(data.mode==="music_gen"&&data.musicData){
           var md=data.musicData;
-          addRow("\uD83C\uDFB5 **"+( md.title||"Canzone generata")+"**\n\n"+
-            "\uD83C\uDFB8 Genere: "+md.genre+" | Mood: "+md.mood+" | Tempo: "+md.tempo+" BPM\n\n"+
+          addRow("🎵 **"+(md.title||"Canzone generata")+"**\n\n"+
+            "🎸 Genere: "+md.genre+" | Mood: "+md.mood+" | Tempo: "+md.tempo+" BPM\n\n"+
             (md.description||""),"ai");
-          // Player ABCJS
-          var mRow=document.createElement("div");mRow.className="row ai";
-          var mAv=document.createElement("div");mAv.className="av";
-          var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
-          var mBub=document.createElement("div");mBub.className="bubble";
-          mBub.style.cssText="padding:12px;max-width:96%;width:680px";
-          // ABC player container
-          var abcDiv=document.createElement("div");abcDiv.id="abc_"+Date.now();
-          abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
-          mBub.appendChild(abcDiv);
-          // Controls
-          var ctrlDiv=document.createElement("div");ctrlDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px";
-          var playMusicBtn=document.createElement("button");
-          playMusicBtn.className="abtn";playMusicBtn.style.cssText="background:var(--accent);color:#000;font-weight:700";
-          playMusicBtn.innerHTML="\u25B6 Riproduci";
-          var stopMusicBtn=document.createElement("button");stopMusicBtn.className="abtn";
-          stopMusicBtn.innerHTML="\u23F9 Stop";
-          var dlAbcBtn=document.createElement("a");
-          dlAbcBtn.className="abtn";dlAbcBtn.style.textDecoration="none";
-          dlAbcBtn.innerHTML="\u2B07 Scarica ABC";
-          ctrlDiv.appendChild(playMusicBtn);ctrlDiv.appendChild(stopMusicBtn);ctrlDiv.appendChild(dlAbcBtn);
-          mBub.appendChild(ctrlDiv);
-          // Lyrics
-          if(md.lyrics){
-            var lyrDiv=document.createElement("div");
-            lyrDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
-            lyrDiv.innerHTML="\uD83C\uDFA4 <strong>Testo:</strong>\n"+md.lyrics;
-            mBub.appendChild(lyrDiv);
-          }
-          mRow.appendChild(mAv);mRow.appendChild(mBub);
-          msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
-          // Render ABC notation with ABCJS
-          var abcId=abcDiv.id;var abcText=md.abcNotation||"";
-          setTimeout(function(){
-            if(typeof ABCJS!=="undefined"&&abcText){
-              var visualObj=ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true});
-              // Setup audio
-              var synth=null;
-              playMusicBtn.onclick=function(){
-                ABCJS.renderAbc(abcId,abcText,{responsive:"resize"});
-                if(typeof ABCJS.synth!=="undefined"){
-                  var audioCtx=new AudioContext();
-                  synth=new ABCJS.synth.CreateSynth();
-                  synth.init({audioContext:audioCtx,visualObj:visualObj[0],options:{}})
-                    .then(function(){return synth.prime();})
-                    .then(function(){synth.start();playMusicBtn.innerHTML="\u23F3 Suonando...";})
-                    .catch(function(e){
-                      // Fallback: usa Web Audio API basic tone
-                      playSimpleTones(abcText,audioCtx);
-                    });
-                } else {
-                  playSimpleTones(abcText,new AudioContext());
-                }
-              };
-              stopMusicBtn.onclick=function(){
-                if(synth)synth.stop();
-                playMusicBtn.innerHTML="\u25B6 Riproduci";
-              };
-            } else {
-              abcDiv.innerHTML="<pre style='font-size:.75rem'>"+abcText+"</pre>";
-            }
-            // Download ABC file
-            var blob=new Blob([abcText],{type:"text/plain"});
-            dlAbcBtn.href=URL.createObjectURL(blob);
-            dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-          },500);
+          // Riusa showAbcPlayer per coerenza (Play/Stop/Download già inclusi)
+          showAbcPlayer(md);
         }
         // ── Audio Gen ─────────────────────────────────────────────────
         if(data.mode==="audio_gen"||data.audioBase64||data.webSpeech){
@@ -1569,31 +1505,114 @@ async function sendMsg(){
     var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
     var mBub=document.createElement("div");mBub.className="bubble";
     mBub.style.cssText="padding:12px;max-width:96%;width:680px";
+
+    // Spartito
     var abcId="abc"+Date.now();
     var abcDiv=document.createElement("div");abcDiv.id=abcId;
-    abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
+    abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;min-height:80px";
     mBub.appendChild(abcDiv);
-    var dlBtn=document.createElement("a");dlBtn.className="abtn";dlBtn.style.textDecoration="none";
-    dlBtn.innerHTML="\u2B07 Scarica .ABC";
-    var blob=new Blob([md.abcNotation||""],{type:"text/plain"});
-    dlBtn.href=URL.createObjectURL(blob);
-    dlBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-    mBub.appendChild(dlBtn);
+
+    // ── Controlli audio ────────────────────────────────────────────────
+    var ctrlDiv=document.createElement("div");
+    ctrlDiv.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center";
+
+    var playBtn=document.createElement("button");
+    playBtn.className="abtn";
+    playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:.85rem";
+    playBtn.innerHTML="▶ Riproduci";
+
+    var stopBtn=document.createElement("button");
+    stopBtn.className="abtn";
+    stopBtn.style.cssText="background:var(--surface);color:var(--fg);padding:8px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:.85rem";
+    stopBtn.innerHTML="⏹ Stop";
+
+    var dlAbcBtn=document.createElement("a");dlAbcBtn.className="abtn";
+    dlAbcBtn.style.cssText="text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.85rem;background:var(--surface)";
+    dlAbcBtn.innerHTML="⬇ Scarica .ABC";
+    var abcBlob=new Blob([md.abcNotation||""],{type:"text/plain"});
+    dlAbcBtn.href=URL.createObjectURL(abcBlob);
+    dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+
+    ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);ctrlDiv.appendChild(dlAbcBtn);
+    mBub.appendChild(ctrlDiv);
+    // ──────────────────────────────────────────────────────────────────
+
+    // Testo/lyrics
     if(md.lyrics){
       var lDiv=document.createElement("div");
       lDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
-      lDiv.innerHTML="\uD83C\uDFA4 <b>Testo:</b>\n"+(md.lyrics||"");
+      lDiv.innerHTML="🎤 <b>Testo:</b>\n"+(md.lyrics||"");
       mBub.appendChild(lDiv);
     }
+
     mRow.appendChild(mAv);mRow.appendChild(mBub);
     msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+
+    // ── ABCJS render + synth ──────────────────────────────────────────
     setTimeout(function(){
-      if(typeof ABCJS!=="undefined"&&md.abcNotation){
-        ABCJS.renderAbc(abcId,md.abcNotation,{responsive:"resize",add_classes:true,staffwidth:600});
-      } else {
-        document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem'>"+(md.abcNotation||"")+"</pre>";
+      var abcText=md.abcNotation||"";
+      if(typeof ABCJS==="undefined"||!abcText){
+        document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem;color:#333'>"+abcText+"</pre>";
+        playBtn.onclick=function(){playSimpleTones(abcText,new AudioContext());};
+        return;
       }
-    },300);
+      // Render spartito
+      var visualObj=ABCJS.renderAbc(abcId,abcText,{
+        responsive:"resize",add_classes:true,staffwidth:600,
+        selectionColor:"#00c896"
+      });
+
+      var synth=null;
+      var isPlaying=false;
+
+      playBtn.onclick=function(){
+        if(isPlaying){return;}
+        isPlaying=true;
+        playBtn.innerHTML="⏳ Carico...";
+        playBtn.disabled=true;
+
+        if(ABCJS.synth&&ABCJS.synth.supportsAudio()){
+          var audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+          synth=new ABCJS.synth.CreateSynth();
+          synth.init({
+            audioContext:audioCtx,
+            visualObj:visualObj[0],
+            options:{soundFontUrl:"https://paulrosen.github.io/midi-js-soundfonts/abcjs/"}
+          }).then(function(){
+            return synth.prime();
+          }).then(function(){
+            synth.start();
+            playBtn.innerHTML="🎵 Suonando...";
+            playBtn.disabled=false;
+          }).catch(function(e){
+            console.warn("ABCJS synth fallback:",e);
+            playSimpleTones(abcText,audioCtx);
+            playBtn.innerHTML="🎵 Suonando (basic)";
+            playBtn.disabled=false;
+          });
+        } else {
+          playSimpleTones(abcText,new (window.AudioContext||window.webkitAudioContext)());
+          playBtn.innerHTML="🎵 Suonando (basic)";
+          playBtn.disabled=false;
+        }
+      };
+
+      stopBtn.onclick=function(){
+        if(synth){try{synth.stop();}catch(e){}}
+        isPlaying=false;
+        playBtn.innerHTML="▶ Riproduci";
+        playBtn.disabled=false;
+      };
+
+      // Evento fine riproduzione
+      if(ABCJS.synth){
+        ABCJS.synth.CreateSynth.prototype.finished=function(){
+          isPlaying=false;
+          playBtn.innerHTML="▶ Riproduci";
+          playBtn.disabled=false;
+        };
+      }
+    },400);
   }
   function playSimpleTones(abcText,ctx){
     // Fallback Web Audio: suona toni semplici per 3 secondi
