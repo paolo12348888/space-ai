@@ -4717,67 +4717,6 @@ public class ChatController {
         return eng + qualityBase;
     }
 
-    private String generateImage(String prompt) {
-        if (prompt == null || prompt.isBlank()) return "a beautiful space scene, highly detailed, 4k";
-        // Dizionario IT->EN per termini visivi comuni
-        String eng = prompt.toLowerCase()
-            .replaceAll("(?i)\bcrea(re)?\b", "").replaceAll("(?i)\bgenera(re)?\b", "")
-            .replaceAll("(?i)\bdisegna(re)?\b", "").replaceAll("(?i)\bmostrar?e?\b", "show")
-            .replaceAll("(?i)\bimmagine di\b", "").replaceAll("(?i)\bimmagine del\b", "")
-            .replaceAll("(?i)\bimmagine della\b", "").replaceAll("(?i)\bimmagine\b", "")
-            .replaceAll("(?i)\bun uomo\b", "a man").replaceAll("(?i)\buna donna\b", "a woman")
-            .replaceAll("(?i)\bun bambino\b", "a child").replaceAll("(?i)\buna persona\b", "a person")
-            .replaceAll("(?i)\bseduto\b", "sitting").replaceAll("(?i)\bin piedi\b", "standing")
-            .replaceAll("(?i)\bche vola\b", "flying").replaceAll("(?i)\bche corre\b", "running")
-            .replaceAll("(?i)\bsu un\b", "on a").replaceAll("(?i)\bsu una\b", "on a")
-            .replaceAll("(?i)\bsu dei\b", "on some").replaceAll("(?i)\bsopra un\b", "above a")
-            .replaceAll("(?i)\bmissile\b", "missile").replaceAll("(?i)\brazzo\b", "rocket")
-            .replaceAll("(?i)\baereo\b", "airplane").replaceAll("(?i)\belicottero\b", "helicopter")
-            .replaceAll("(?i)\bmacchina\b", "car").replaceAll("(?i)\bmoto\b", "motorcycle")
-            .replaceAll("(?i)\bbarca\b", "boat").replaceAll("(?i)\bcarro armato\b", "tank")
-            .replaceAll("(?i)\bgatto\b", "cat").replaceAll("(?i)\bcane\b", "dog")
-            .replaceAll("(?i)\bcavallo\b", "horse").replaceAll("(?i)\borso\b", "bear")
-            .replaceAll("(?i)\bcielo\b", "sky").replaceAll("(?i)\bmare\b", "sea")
-            .replaceAll("(?i)\bmontagna\b", "mountain").replaceAll("(?i)\bcittà\b", "city")
-            .replaceAll("(?i)\bforesta\b", "forest").replaceAll("(?i)\bdeserto\b", "desert")
-            .replaceAll("(?i)\bnotte\b", "night").replaceAll("(?i)\bgiorno\b", "daytime")
-            .replaceAll("(?i)\btramonto\b", "sunset").replaceAll("(?i)\balba\b", "sunrise")
-            .replaceAll("(?i)\besplosione\b", "explosion").replaceAll("(?i)\bfuoco\b", "fire")
-            .replaceAll("(?i)\bbandiera\b", "flag").replaceAll("(?i)\bguerra\b", "war scene")
-            .replaceAll("(?i)\biraniano\b", "iranian").replaceAll("(?i)\bitaliano\b", "italian")
-            .replaceAll("(?i)\bamericano\b", "american").replaceAll("(?i)\brusso\b", "russian")
-            .replaceAll("(?i)\bcinese\b", "chinese").replaceAll("(?i)\bfrancese\b", "french")
-            .replaceAll("(?i)\bpresidente\b", "president").replaceAll("(?i)\bguarriero\b", "warrior")
-            .replaceAll("(?i)\bsoldato\b", "soldier").replaceAll("(?i)\bastronauta\b", "astronaut")
-            .replaceAll("(?i)\brobot\b", "robot").replaceAll("(?i)\balieno\b", "alien")
-            .replaceAll("(?i)\bvestito\b", "wearing").replaceAll("(?i)\babito\b", "suit")
-            .replaceAll("(?i)\bcravatta\b", "tie").replaceAll("(?i)\bcappello\b", "hat")
-            .replaceAll("(?i)\bocchiali\b", "glasses").replaceAll("(?i)\buniforme\b", "uniform")
-            .replaceAll("(?i)\bsullo sfondo\b", "in the background")
-            .replaceAll("(?i)\bdavanti a\b", "in front of")
-            .replaceAll("(?i)\bcon\b", "with").replaceAll("(?i)\be\b", "and")
-            .replaceAll("(?i)\bil\b", "").replaceAll("(?i)\bla\b", "")
-            .replaceAll("(?i)\blo\b", "").replaceAll("(?i)\bles?\b", "")
-            .replaceAll("(?i)\bdel\b", "of the").replaceAll("(?i)\bdella\b", "of the")
-            .replaceAll("(?i)\bdei\b", "of").replaceAll("(?i)\bdi\b", "of")
-            .replaceAll("\\s{2,}", " ").trim();
-        if (eng.isBlank() || eng.length() < 5) eng = prompt; // fallback al testo originale
-        // Manus-style quality tokens — adattivi per tipo di immagine
-        String qualityTags;
-        if (eng.contains("portrait") || eng.contains("person") || eng.contains("man") || eng.contains("woman") || eng.contains("face"))
-            qualityTags = ", ultra detailed portrait, photorealistic, studio lighting, 8k, sharp focus, masterpiece, best quality";
-        else if (eng.contains("landscape") || eng.contains("nature") || eng.contains("sky") || eng.contains("mountain"))
-            qualityTags = ", epic landscape, cinematic, golden hour lighting, 8k uhd, ultra detailed, award winning photo";
-        else if (eng.contains("space") || eng.contains("galaxy") || eng.contains("cosmos") || eng.contains("planet"))
-            qualityTags = ", space art, stunning nebula, stars, cinematic, ultra detailed, 8k, digital art, trending on artstation";
-        else if (eng.contains("anime") || eng.contains("cartoon") || eng.contains("manga"))
-            qualityTags = ", anime style, vibrant colors, highly detailed, 4k, studio quality";
-        else if (eng.contains("architecture") || eng.contains("building") || eng.contains("city"))
-            qualityTags = ", architectural visualization, ultra detailed, 8k, photorealistic render, dramatic lighting";
-        else
-            qualityTags = ", highly detailed, photorealistic, cinematic lighting, 4k, sharp focus, masterpiece, best quality";
-        return eng + qualityTags;
-    }
 
     private String generateImage(String prompt) {
         String engPrompt = enhancePromptForSD(prompt);
