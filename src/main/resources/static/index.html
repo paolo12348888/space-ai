@@ -462,6 +462,108 @@ var SID=USER_ID+"_s"+Math.random().toString(36).slice(2,8)+Date.now().toString(3
 var lastAgent="reasoner";
 var lastQuery="";
 var SUPABASE_URL="";
+// ══════════════════════════════════════════════════════════════════════════
+// VIDEO ANALYSIS — estrazione frame + analisi AI vision
+// ══════════════════════════════════════════════════════════════════════════
+
+// Estrae N frame distribuiti uniformemente dal video usando HTML5 Canvas
+function extractVideoFrames(file, numFrames){
+  return new Promise(function(resolve, reject){
+    var video = document.createElement("video");
+    var url   = URL.createObjectURL(file);
+    video.src = url;
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = "anonymous";
+
+    var frames  = [];
+    var canvas  = document.createElement("canvas");
+    var ctx     = canvas.getContext("2d");
+    var seeking = false;
+
+    video.addEventListener("loadedmetadata", function(){
+      var duration = video.duration;
+      if(!duration || duration === Infinity){
+        URL.revokeObjectURL(url);
+        resolve([]); return;
+      }
+      // Ridimensiona canvas per bilanciare qualità/peso
+      canvas.width  = Math.min(video.videoWidth,  960);
+      canvas.height = Math.min(video.videoHeight, 540);
+
+      // Calcola i timestamp da campionare
+      var times = [];
+      for(var i=0; i<numFrames; i++){
+        // Distribuiti tra 5% e 95% della durata (evita inizio/fine neri)
+        times.push(duration * (0.05 + (i / Math.max(numFrames-1, 1)) * 0.90));
+      }
+      var idx = 0;
+
+      function seekNext(){
+        if(idx >= times.length){
+          URL.revokeObjectURL(url);
+          resolve(frames); return;
+        }
+        if(seeking) return;
+        seeking = true;
+        video.currentTime = times[idx];
+      }
+
+      video.addEventListener("seeked", function(){
+        try{
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          // JPEG 0.75 — buon bilanciamento qualità/dimensione per vision API
+          var frameB64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
+          frames.push({
+            b64:       frameB64,
+            timestamp: Math.round(video.currentTime),
+            index:     idx
+          });
+        } catch(e){ console.warn("Frame capture error:", e); }
+        idx++;
+        seeking = false;
+        seekNext();
+      });
+
+      video.addEventListener("error", function(e){
+        URL.revokeObjectURL(url);
+        reject(e);
+      });
+
+      seekNext();
+    });
+
+    video.addEventListener("error", function(e){
+      URL.revokeObjectURL(url); reject(e);
+    });
+
+    video.load();
+  });
+}
+
+// Invia i frame al backend e riceve l'analisi completa
+async function analyzeVideoFrames(frames, userTask, fileName){
+  try {
+    var res = await fetch("/api/video/analyze-frames", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        frames:    frames.map(function(f){ return {frameBase64: f.b64, timestamp: f.timestamp}; }),
+        task:      userTask,
+        fileName:  fileName,
+        sessionId: SID,
+        numFrames: frames.length
+      })
+    });
+    var data = await res.json();
+    if(data.error) return "❌ Errore analisi video: " + data.error;
+    return data.analysis || "Analisi completata.";
+  } catch(e){
+    return "❌ Errore connessione: " + e.message;
+  }
+}
+// ══════════════════════════════════════════════════════════════════════════
+
 function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");renderRecentChats();}
 function closeSB(){document.getElementById("sidebar").classList.remove("open");document.getElementById("sbOv").classList.remove("on");}
 function renderCitations(text, sources){
@@ -978,8 +1080,25 @@ async function sendMsg(){
           var du=await readFile(f);
           imgBase64=du.split(",")[1]||du;
           text=text||"Analizza questa immagine in dettaglio.";
-        } else if(f.type.startsWith("video/")||fn.match(/\.(mp4|avi|mov|mkv|wmv)$/)){
-          text+="\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB) - descrivi cosa potrebbe contenere]";
+        } else if(f.type.startsWith("video/")||fn.match(/\.(mp4|avi|mov|mkv|wmv|webm)$/)){
+          // ── ANALISI VIDEO REALE: estrai frame + invia al backend ──────────
+          addRow("🎬 Video rilevato: **"+f.name+"** — estrazione frame in corso...","ai");
+          try {
+            var frames = await extractVideoFrames(f, 6); // estrai 6 frame distribuiti
+            if(frames.length > 0){
+              var taskMsg = text || "Analizza questo video e descrivi dettagliatamente cosa vedi.";
+              addRow("⏳ Analisi "+frames.length+" frame con AI vision...","ai");
+              var analysisResult = await analyzeVideoFrames(frames, taskMsg, f.name);
+              addRow(analysisResult, "ai");
+              // Salva in memoria per follow-up
+              text = ""; // già risposto
+            } else {
+              text += "\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB) — impossibile estrarre frame, descrivi il tipo di contenuto]";
+            }
+          } catch(ve){
+            console.warn("Video analysis error:", ve);
+            text += "\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB)]";
+          }
         } else if(f.type.startsWith("audio/")||fn.match(/\.(mp3|wav|ogg|flac)$/)){
           text+="\n[AUDIO: "+f.name+" ("+Math.round(f.size/1024)+"KB)]";
         } else if(fn.match(/\.(zip|rar|7z|tar|gz)$/)){
