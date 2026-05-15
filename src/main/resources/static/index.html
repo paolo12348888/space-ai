@@ -208,10 +208,18 @@ textarea::placeholder{color:var(--muted)}
           <button class="tbtn" id="micBtn" onclick="toggleRec()" title="Voce">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           </button>
+          <!-- Pulsante SPACES con stato visivo -->
+          <button class="tbtn" id="spacesQuickBtn"
+            onclick="spacesOn ? SPACES.startListening() : startSpaces()"
+            title="Parla con SPACES (o attiva con &quot;Hey Space&quot;)"
+            style="position:relative">
+            🛸
+            <span id="spacesStateDot" style="position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:#666;display:inline-block"></span>
+          </button>
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; &#127756; SPACES per AI vocale</div>
+      <div class="hint">Invio per inviare · Shift+Invio per a capo · 🛸 <strong>Hey Space</strong> per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -751,45 +759,273 @@ function updateAgentHint(text){
 // ────────────────────────────────────────────────────────────────────────
 
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
-function startSpaces(){
-  curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
-  addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
-  speak("SPACES attivato. Sono pronto.",null);
-}
-function listenLoop(){
-  if(!spacesOn||spacesWaiting)return; // NON riascoltare se in attesa risposta
-  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){addRow("Browser non supportato. Usa Chrome.","err");return;}
-  var r=new SR();
-  r.lang="it-IT";r.continuous=false;r.interimResults=false;
-  r.maxAlternatives=1;
-  r.onstart=function(){
-    document.getElementById("recBar").classList.add("on");
-    document.getElementById("recTxt").textContent="&#127756; SPACES in ascolto...";
-  };
-  r.onresult=function(e){
-    var t=e.results[0][0].transcript.trim();
-    if(t&&t.length>1){
-      spacesWaiting=true; // blocca il riascolto finché non risponde
-      document.getElementById("recBar").classList.remove("on");
-      document.getElementById("recTxt").textContent="&#8987; Elaborazione...";
-      inpEl.value=t;
-      sendMsg(); // sendMsg richiama listenLoop alla fine via speak.onend
+// ══════════════════════════════════════════════════════════════════════════════
+// SPACES — Assistente vocale stile Siri/Hey Google
+// Architettura a macchina a stati: IDLE → WAKE → LISTENING → PROCESSING → SPEAKING
+// Wake word: "Hey Space" o "Ehi Space" o "Space ascolta"
+// ══════════════════════════════════════════════════════════════════════════════
+
+var SPACES = {
+  // ── Stato interno ────────────────────────────────────────────────────────
+  state:       "OFF",    // OFF | WAKE_WATCH | LISTENING | PROCESSING | SPEAKING
+  recognition: null,     // istanza SpeechRecognition attiva
+  synthesis:   null,     // istanza SpeechSynthesisUtterance attiva
+  wakeRecog:   null,     // istanza dedicata al wake word (sempre attiva)
+  silenceTimer:null,     // timer per rilevare silenzio prolungato
+  retryCount:  0,        // contatore errori consecutivi
+
+  // ── Costanti ─────────────────────────────────────────────────────────────
+  WAKE_WORDS:  ["hey space","ehi space","space ascolta","ok space","ciao space"],
+  SILENCE_MS:  8000,     // 8s di silenzio → torna in ascolto wake word
+  MAX_RETRIES: 3,        // dopo 3 errori consecutivi, pausa di 5s
+
+  // ── UI elements ──────────────────────────────────────────────────────────
+  ui: {
+    bar:  function(){ return document.getElementById("recBar"); },
+    txt:  function(){ return document.getElementById("recTxt"); },
+    btn:  function(){ return document.getElementById("spacesBtn"); }
+  },
+
+  // ── Aggiorna UI in base allo stato ───────────────────────────────────────
+  updateUI: function(){
+    var bar = this.ui.bar(), txt = this.ui.txt();
+    var dot = document.getElementById("spacesStateDot");
+    if(!bar||!txt) return;
+    var states = {
+      "OFF":        { on:false, text:"🛸 SPACES disattivato",               color:"#666" },
+      "WAKE_WATCH": { on:false, text:"👂 In ascolto... dì \"Hey Space\"",    color:"#f59e0b" },
+      "LISTENING":  { on:true,  text:"🎙️ Sto ascoltando... parla!",          color:"#00c896" },
+      "PROCESSING": { on:false, text:"⏳ Elaborazione...",                    color:"#8b5cf6" },
+      "SPEAKING":   { on:false, text:"🔊 Risposta in corso...",               color:"#3b82f6" }
+    };
+    var s = states[this.state] || states["OFF"];
+    if(s.on) bar.classList.add("on"); else bar.classList.remove("on");
+    bar.style.borderColor = s.color;
+    txt.textContent = s.text;
+    if(dot) dot.style.background = s.color;
+  },
+
+  // ── Avvia SPACES ─────────────────────────────────────────────────────────
+  start: function(){
+    if(this.state !== "OFF") return;
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SR){ addRow("❌ Browser non supporta il riconoscimento vocale. Usa Chrome.","err"); return; }
+    curMode="spaces"; spacesOn=true;
+    this.retryCount = 0;
+    addRow("🛸 **SPACES attivato!**\n\nDì **\"Hey Space\"** per iniziare, oppure tocca il microfono.\n\nSono in ascolto continuo.", "ai");
+    speak("SPACES attivato. Dimmi Hey Space quando sei pronto.", null);
+    this.startWakeWatch();
+  },
+
+  // ── Ferma tutto ──────────────────────────────────────────────────────────
+  stop: function(){
+    this.state = "OFF";
+    spacesOn = false; spacesWaiting = false;
+    this.stopAll();
+    window.speechSynthesis.cancel();
+    this.updateUI();
+    addRow("🛸 SPACES disattivato.","ai");
+  },
+
+  // ── Ferma riconoscimento attivo ───────────────────────────────────────────
+  stopAll: function(){
+    if(this.recognition){ try{ this.recognition.abort(); }catch(e){} this.recognition=null; }
+    if(this.wakeRecog){   try{ this.wakeRecog.abort(); }catch(e){} this.wakeRecog=null; }
+    if(this.silenceTimer){ clearTimeout(this.silenceTimer); this.silenceTimer=null; }
+  },
+
+  // ── FASE 1: Ascolto wake word in background ───────────────────────────────
+  startWakeWatch: function(){
+    var self = this;
+    if(this.state === "LISTENING" || this.state === "PROCESSING" || this.state === "SPEAKING") return;
+    this.state = "WAKE_WATCH";
+    this.updateUI();
+    if(this.wakeRecog){ try{ this.wakeRecog.abort(); }catch(e){} }
+
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var wr = new SR();
+    wr.lang = "it-IT";
+    wr.continuous = true;      // sempre attivo
+    wr.interimResults = true;  // risultati intermedi per wake word più reattivo
+    wr.maxAlternatives = 3;
+    this.wakeRecog = wr;
+
+    wr.onresult = function(e){
+      if(self.state !== "WAKE_WATCH") return;
+      // Controlla tutti i risultati per il wake word
+      for(var i=e.resultIndex; i<e.results.length; i++){
+        for(var j=0; j<e.results[i].length; j++){
+          var heard = e.results[i][j].transcript.toLowerCase().trim();
+          var isWake = self.WAKE_WORDS.some(function(w){ return heard.includes(w); });
+          if(isWake){
+            wr.abort();
+            self.wakeRecog = null;
+            // Feedback immediato
+            if(window.speechSynthesis) window.speechSynthesis.cancel();
+            self.playBeep("wake");
+            setTimeout(function(){ self.startListening(); }, 300);
+            return;
+          }
+        }
+      }
+    };
+
+    wr.onend = function(){
+      // Riavvia wake watch se SPACES è ancora attivo
+      if(self.state === "WAKE_WATCH" && spacesOn){
+        setTimeout(function(){ if(spacesOn&&self.state==="WAKE_WATCH") self.startWakeWatch(); }, 500);
+      }
+    };
+
+    wr.onerror = function(ev){
+      if(ev.error === "aborted") return;
+      if(spacesOn && self.state === "WAKE_WATCH"){
+        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 1500);
+      }
+    };
+
+    try{ wr.start(); } catch(e){
+      setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 2000);
     }
-  };
-  r.onend=function(){
-    document.getElementById("recBar").classList.remove("on");
-    // Riavvia SOLO se non stiamo aspettando risposta
-    if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1000);
-  };
-  r.onerror=function(ev){
-    document.getElementById("recBar").classList.remove("on");
-    // no-speech = normale, non è un errore
-    if(ev.error==="no-speech"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,800);
-    else if(ev.error!=="aborted"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,2500);
-  };
-  try{r.start();}catch(e){if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1500);}
+  },
+
+  // ── FASE 2: Ascolto comando utente ───────────────────────────────────────
+  startListening: function(){
+    var self = this;
+    if(!spacesOn) return;
+    this.state = "LISTENING";
+    spacesWaiting = false;
+    this.updateUI();
+    if(this.recognition){ try{ this.recognition.abort(); }catch(e){} }
+
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var r = new SR();
+    r.lang = "it-IT";
+    r.continuous = false;
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+    this.recognition = r;
+
+    // Timer silenzio — se l'utente non parla per 8s torna in wake watch
+    this.silenceTimer = setTimeout(function(){
+      if(self.state === "LISTENING"){
+        r.abort();
+        speak("Non ho sentito nulla. Dimmi Hey Space quando sei pronto.", null);
+        setTimeout(function(){ self.startWakeWatch(); }, 2500);
+      }
+    }, this.SILENCE_MS);
+
+    // Mostra testo in tempo reale
+    r.onresult = function(e){
+      var interim = "";
+      var final_t = "";
+      for(var i=0; i<e.results.length; i++){
+        if(e.results[i].isFinal) final_t += e.results[i][0].transcript;
+        else interim += e.results[i][0].transcript;
+      }
+      if(interim) document.getElementById("recTxt").textContent = "🎙️ " + interim + "...";
+      if(final_t.trim().length > 1){
+        clearTimeout(self.silenceTimer);
+        self.silenceTimer = null;
+        self.recognition = null;
+        self.retryCount = 0;
+        self.processCommand(final_t.trim());
+      }
+    };
+
+    r.onend = function(){
+      clearTimeout(self.silenceTimer);
+      if(self.state === "LISTENING"){
+        // Nessun risultato finale — torna in wake watch
+        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 500);
+      }
+    };
+
+    r.onerror = function(ev){
+      clearTimeout(self.silenceTimer);
+      if(ev.error === "aborted") return;
+      self.retryCount++;
+      if(self.retryCount >= self.MAX_RETRIES){
+        self.retryCount = 0;
+        speak("Problemi con il microfono. Riprovo tra poco.", null);
+        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 4000);
+      } else {
+        setTimeout(function(){ if(spacesOn) self.startListening(); }, 1200);
+      }
+    };
+
+    try{ r.start(); } catch(e){
+      setTimeout(function(){ if(spacesOn) self.startListening(); }, 1500);
+    }
+  },
+
+  // ── FASE 3: Processa il comando ───────────────────────────────────────────
+  processCommand: function(text){
+    var self = this;
+    if(!spacesOn) return;
+
+    // Comandi di controllo vocale
+    var low = text.toLowerCase();
+    if(low.match(/\b(stop|basta|fermati|disattiva|spegni)\s*(spaces|voice|voce)?\b/)){
+      this.stop(); return;
+    }
+    if(low.match(/\b(silenzio|smetti di parlare|taci)\b/)){
+      window.speechSynthesis.cancel();
+      this.startWakeWatch(); return;
+    }
+
+    this.state = "PROCESSING";
+    spacesWaiting = true;
+    this.updateUI();
+
+    // Mostra in chat cosa ha detto l'utente
+    addRow("🎙️ " + text, "user-voice");
+    inpEl.value = text;
+
+    // Invia come messaggio normale
+    sendMsg();
+  },
+
+  // ── FASE 4: Chiamato da speak() quando finisce la sintesi vocale ──────────
+  onSpeakEnd: function(){
+    if(!spacesOn) return;
+    this.state = "WAKE_WATCH";
+    spacesWaiting = false;
+    this.updateUI();
+    // Breve pausa naturale poi torna in ascolto wake word
+    setTimeout(function(){ if(spacesOn) SPACES.startWakeWatch(); }, 600);
+  },
+
+  // ── Beep di feedback ─────────────────────────────────────────────────────
+  playBeep: function(type){
+    try{
+      var ctx = new (window.AudioContext||window.webkitAudioContext)();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = type==="wake" ? 880 : 440;
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime+0.15);
+    }catch(e){}
+  }
+};
+
+// ── Funzioni globali per compatibilità con codice esistente ─────────────────
+function startSpaces(){
+  SPACES.start();
 }
+function stopSpaces(){
+  SPACES.stop();
+}
+
+// Override di listenLoop per compatibilità (ora usa SPACES.startWakeWatch)
+function listenLoop(){
+  if(spacesOn && SPACES.state==="WAKE_WATCH") SPACES.startWakeWatch();
+  else if(spacesOn && SPACES.state==="OFF")   SPACES.startListening();
+}
+// ══════════════════════════════════════════════════════════════════════════════
+
 inpEl.addEventListener("input",function(){
   inpEl.style.height="auto";
   inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";
@@ -863,18 +1099,28 @@ function stopRec(){if(recog)recog.stop();isRec=false;document.getElementById("mi
 function speak(text,btn){
   if(curSpeech){window.speechSynthesis.cancel();curSpeech=null;document.querySelectorAll(".abtn.on").forEach(function(b){b.classList.remove("on");});return;}
   var clean=text.replace(/<[^>]*>/g,"").replace(/[#*`>]/g,"").replace(/\n+/g," ").trim().slice(0,2000);
-  var u=new SpeechSynthesisUtterance(clean);u.lang="it-IT";u.rate=1.0;u.pitch=1.1;
+  if(!clean) return;
+  var u=new SpeechSynthesisUtterance(clean);
+  u.lang="it-IT"; u.rate=1.05; u.pitch=1.05;
+  // Seleziona la voce migliore italiana disponibile
   var vs=window.speechSynthesis.getVoices();
-  var pref=["Alice","Federica","Google italiano","Microsoft Elsa"];
-  for(var p of pref){var iv=vs.find(function(v){return v.name.includes(p)&&v.lang.startsWith("it");});if(iv){u.voice=iv;break;}}
+  var pref=["Alice","Federica","Google italiano","Microsoft Elsa","Paola"];
+  for(var p of pref){
+    var iv=vs.find(function(v){return v.name.includes(p)&&v.lang.startsWith("it");});
+    if(iv){u.voice=iv;break;}
+  }
   if(!u.voice){var it=vs.filter(function(v){return v.lang.startsWith("it");});if(it.length)u.voice=it[0];}
-  u.onstart=function(){curSpeech=u;if(btn)btn.classList.add("on");};
+  u.onstart=function(){
+    curSpeech=u;
+    if(btn)btn.classList.add("on");
+    if(spacesOn){ SPACES.state="SPEAKING"; SPACES.updateUI(); }
+  };
   u.onend=u.onerror=function(){
     curSpeech=null;
     if(btn)btn.classList.remove("on");
     if(spacesOn){
-      spacesWaiting=false; // risposta finita, si può riascoltare
-      setTimeout(listenLoop,600); // pausa naturale prima di riascoltare
+      // Notifica SPACES — riprende il ciclo wake word
+      SPACES.onSpeakEnd();
     }
   };
   window.speechSynthesis.speak(u);
@@ -1342,11 +1588,15 @@ async function sendMsg(){
   }finally{
     btnEl.disabled=false;
     inpEl.focus();
-    // aggiorna label: mostra agente locked o Auto
     if(curMode==="auto"||curMode===null){
       document.getElementById("modeLbl").innerHTML="🤖 Auto";
     }
     updateAgentHint("");
+    // Se SPACES è attivo e non c'è sintesi vocale in corso, torna in ascolto
+    if(spacesOn && SPACES.state==="PROCESSING" && !curSpeech){
+      spacesWaiting=false;
+      setTimeout(function(){ if(spacesOn) SPACES.startWakeWatch(); }, 800);
+    }
   }
 }
   // ── Manus Agent ───────────────────────────────────────────────────────────
