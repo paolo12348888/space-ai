@@ -1866,23 +1866,170 @@ async function sendMsg(){
     var genre=document.getElementById("musicGenre").value;
     var mood=document.getElementById("musicMood").value;
     var tempo=document.getElementById("musicTempo").value;
+    var key=document.getElementById("musicKey").value;
+    var duration=document.getElementById("musicDuration")?document.getElementById("musicDuration").value:"120";
+    var durationSec=parseInt(duration);
+    var durationLabel=durationSec>=120?(durationSec/60)+" minuti":(durationSec==60?"1 minuto":durationSec+" secondi");
     var sid=typeof SID!=="undefined"?SID:"global";
     closeMusicPanel();
-    addRow("\uD83C\uDFB5 Composizione in corso: "+desc,"ai");
+    addRow("🎵 Composizione in corso: **"+desc+"**\n⏱ Durata: "+durationLabel+" | 🎸 "+genre+" | 💫 "+mood,"ai");
+    // Mostra indicatore progresso
+    var progRow=document.createElement("div");progRow.className="row ai";progRow.id="musicProg";
+    var progAv=document.createElement("div");progAv.className="av";
+    var progIm=document.createElement("img");progIm.src=LOGO;progAv.appendChild(progIm);
+    var progBub=document.createElement("div");progBub.className="bubble";
+    progBub.style.cssText="padding:12px;font-size:.85rem";
+    progBub.innerHTML="<div style='display:flex;align-items:center;gap:10px'><div class='typing-dots'><span></span><span></span><span></span></div>Sto componendo "+durationLabel+" di musica con voce...</div>";
+    progRow.appendChild(progAv);progRow.appendChild(progBub);
+    msgsEl.appendChild(progRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+
     fetch("/api/music/generate",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({description:desc,genre:genre,mood:mood,tempo:tempo,sessionId:sid})})
+      body:JSON.stringify({description:desc,genre:genre,mood:mood,tempo:tempo,key:key,duration:duration,sessionId:sid})})
       .then(function(r){return r.json();})
       .then(function(d){
-        if(d.error){addRow("\u274C Errore: "+d.error,"err");return;}
-        // Simula risposta music_gen
-        var fakeData={mode:"music_gen",musicData:d};
-        // Trigger the music handler manually
-        addRow("\uD83C\uDFB5 **"+d.title+"** generata!\n\n"+d.description,"ai");
+        // Rimuovi indicatore progresso
+        var pg=document.getElementById("musicProg");if(pg)pg.remove();
+        if(d.error){addRow("❌ Errore: "+d.error,"err");return;}
+        var voiceInfo=d.hasRealVoice?" 🎤 con voce ElevenLabs":" (spartito strumentale)";
+        addRow("🎵 **"+d.title+"**"+voiceInfo+"\n\n"+d.description,"ai");
         showAbcPlayer(d);
-      }).catch(function(e){addRow("\u274C Errore musica: "+e,"err");});
+      }).catch(function(e){
+        var pg=document.getElementById("musicProg");if(pg)pg.remove();
+        addRow("❌ Errore musica: "+e,"err");
+      });
+  }
   }
   function showAbcPlayer(md){
     var mRow=document.createElement("div");mRow.className="row ai";
+    var mAv=document.createElement("div");mAv.className="av";
+    var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
+    var mBub=document.createElement("div");mBub.className="bubble";
+    mBub.style.cssText="padding:12px;max-width:96%;width:680px";
+
+    // ── Info canzone ────────────────────────────────────────────────────
+    var infoDiv=document.createElement("div");
+    infoDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:.78rem;color:var(--muted)";
+    var tags=[
+      md.genre?"🎸 "+md.genre:"",
+      md.mood?"💫 "+md.mood:"",
+      md.tempo?"⚡ "+md.tempo+" BPM":"",
+      md.durationLabel?"⏱ "+md.durationLabel:""
+    ].filter(Boolean);
+    tags.forEach(function(t){
+      var s=document.createElement("span");
+      s.style.cssText="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2px 8px";
+      s.textContent=t;infoDiv.appendChild(s);
+    });
+    if(md.hasRealVoice){
+      var vb=document.createElement("span");
+      vb.style.cssText="background:rgba(0,200,150,.15);border:1px solid var(--accent);border-radius:12px;padding:2px 8px;color:var(--accent)";
+      vb.textContent="🎤 Voce ElevenLabs";infoDiv.appendChild(vb);
+    }
+    mBub.appendChild(infoDiv);
+
+    // ── Player audio reale (ElevenLabs) ─────────────────────────────────
+    if(md.audioB64){
+      var audioSec=document.createElement("div");
+      audioSec.style.cssText="background:var(--surface);border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid var(--border)";
+
+      var audioEl=document.createElement("audio");
+      audioEl.controls=true;
+      audioEl.style.cssText="width:100%;margin-bottom:8px";
+      audioEl.src="data:audio/mpeg;base64,"+md.audioB64;
+      audioSec.appendChild(audioEl);
+
+      // Bottoni download
+      var dlRow=document.createElement("div");dlRow.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
+
+      var dlMp3=document.createElement("a");dlMp3.className="abtn";
+      dlMp3.style.cssText="text-decoration:none;padding:7px 14px;border-radius:8px;background:var(--accent);color:#000;font-weight:700;font-size:.82rem";
+      dlMp3.innerHTML="⬇ Scarica MP3";
+      var mp3Blob=new Blob([_base64ToArrayBuffer(md.audioB64)],{type:"audio/mpeg"});
+      dlMp3.href=URL.createObjectURL(mp3Blob);
+      dlMp3.download=(md.title||"canzone").replace(/\s/g,"_")+".mp3";
+      dlRow.appendChild(dlMp3);
+
+      var dlAbcBtn=document.createElement("a");dlAbcBtn.className="abtn";
+      dlAbcBtn.style.cssText="text-decoration:none;padding:7px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.82rem;background:var(--surface)";
+      dlAbcBtn.innerHTML="⬇ Scarica .ABC";
+      var abcBlob=new Blob([md.abcNotation||""],{type:"text/plain"});
+      dlAbcBtn.href=URL.createObjectURL(abcBlob);
+      dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+      dlRow.appendChild(dlAbcBtn);
+
+      audioSec.appendChild(dlRow);
+      mBub.appendChild(audioSec);
+
+    } else {
+      // ── Fallback: ABCJS player (solo strumentale) ─────────────────────
+      var noteDiv=document.createElement("div");
+      noteDiv.style.cssText="background:rgba(245,158,11,.08);border:1px solid #f59e0b;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:.78rem;color:#f59e0b";
+      noteDiv.textContent="⚠️ "+(md.audioNote||"Voce non disponibile — riproduco solo spartito strumentale");
+      mBub.appendChild(noteDiv);
+
+      // Spartito ABCJS
+      var abcId="abc"+Date.now();
+      var abcDiv=document.createElement("div");abcDiv.id=abcId;
+      abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;min-height:80px";
+      mBub.appendChild(abcDiv);
+
+      var ctrlDiv=document.createElement("div");ctrlDiv.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center";
+      var playBtn=document.createElement("button");playBtn.className="abtn";
+      playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:.85rem";
+      playBtn.innerHTML="▶ Riproduci spartito";
+      var stopBtn=document.createElement("button");stopBtn.className="abtn";
+      stopBtn.style.cssText="background:var(--surface);color:var(--fg);padding:8px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:.85rem";
+      stopBtn.innerHTML="⏹ Stop";
+      var dlAbcBtn2=document.createElement("a");dlAbcBtn2.className="abtn";
+      dlAbcBtn2.style.cssText="text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.85rem;background:var(--surface)";
+      dlAbcBtn2.innerHTML="⬇ Scarica .ABC";
+      var abcBlob2=new Blob([md.abcNotation||""],{type:"text/plain"});
+      dlAbcBtn2.href=URL.createObjectURL(abcBlob2);
+      dlAbcBtn2.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+      ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);ctrlDiv.appendChild(dlAbcBtn2);
+      mBub.appendChild(ctrlDiv);
+
+      setTimeout(function(){
+        var abcText=md.abcNotation||"";
+        if(typeof ABCJS!=="undefined"&&abcText){
+          var visualObj=ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true,staffwidth:600});
+          var synth=null;var isPlaying=false;
+          playBtn.onclick=function(){
+            if(isPlaying)return;isPlaying=true;playBtn.innerHTML="⏳ Carico...";playBtn.disabled=true;
+            if(ABCJS.synth&&ABCJS.synth.supportsAudio()){
+              var audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+              synth=new ABCJS.synth.CreateSynth();
+              synth.init({audioContext:audioCtx,visualObj:visualObj[0],
+                options:{soundFontUrl:"https://paulrosen.github.io/midi-js-soundfonts/abcjs/"}})
+                .then(function(){return synth.prime();})
+                .then(function(){synth.start();playBtn.innerHTML="🎵 Suonando...";playBtn.disabled=false;})
+                .catch(function(e){playSimpleTones(abcText,audioCtx);playBtn.innerHTML="🎵 Suonando";playBtn.disabled=false;});
+            } else {playSimpleTones(abcText,new (window.AudioContext||window.webkitAudioContext)());playBtn.innerHTML="🎵 Suonando";playBtn.disabled=false;}
+          };
+          stopBtn.onclick=function(){if(synth){try{synth.stop();}catch(e){}}isPlaying=false;playBtn.innerHTML="▶ Riproduci spartito";playBtn.disabled=false;};
+        } else {
+          document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem;color:#333'>"+(md.abcNotation||"")+"</pre>";
+        }
+      },400);
+    }
+
+    // ── Testo/lyrics ─────────────────────────────────────────────────────
+    if(md.lyrics){
+      var lDiv=document.createElement("div");
+      lDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 8px 8px 0;font-size:.82rem;white-space:pre-line;margin-top:8px;max-height:300px;overflow-y:auto";
+      lDiv.innerHTML="🎤 <b>Testo completo:</b>\n\n"+(md.lyrics||"");
+      mBub.appendChild(lDiv);
+    }
+
+    mRow.appendChild(mAv);mRow.appendChild(mBub);
+    msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+  }
+
+// Helper: converte base64 in ArrayBuffer per download blob
+function _base64ToArrayBuffer(b64){
+  var bin=atob(b64);var buf=new ArrayBuffer(bin.length);var view=new Uint8Array(buf);
+  for(var i=0;i<bin.length;i++)view[i]=bin.charCodeAt(i);return buf;
+}
     var mAv=document.createElement("div");mAv.className="av";
     var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
     var mBub=document.createElement("div");mBub.className="bubble";
@@ -2085,6 +2232,16 @@ async function sendMsg(){
           <option value="C">Do (C)</option><option value="G">Sol (G)</option>
           <option value="D">Re (D)</option><option value="A">La (A)</option>
           <option value="F">Fa (F)</option><option value="Am">La minore</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">⏱ Durata canzone</label>
+        <select id="musicDuration" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
+          <option value="30">30 secondi</option>
+          <option value="60">1 minuto</option>
+          <option value="120" selected>2 minuti</option>
+          <option value="180">3 minuti</option>
+          <option value="240">4 minuti</option>
         </select>
       </div>
     </div>
