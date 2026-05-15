@@ -4260,55 +4260,99 @@ public class ChatController {
     @PostMapping("/video/analyze-frames")
     public ResponseEntity<Object> analyzeVideoFrames(@RequestBody Map<String,Object> body) {
         @SuppressWarnings("unchecked")
-        List<String> frames  = (List<String>) body.getOrDefault("frames", new ArrayList<>());
-        String task          = (String) body.getOrDefault("task","Descrivi la sequenza");
-        String sessionId     = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2      = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2       = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
-        String model2        = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+        List<Map<String,Object>> frames = (List<Map<String,Object>>) body.getOrDefault("frames", new ArrayList<>());
+        String task       = (String) body.getOrDefault("task",     "Descrivi dettagliatamente cosa vedi in questo video");
+        String fileName   = (String) body.getOrDefault("fileName", "video");
+        String sessionId  = (String) body.getOrDefault("sessionId","global");
+        int    numFrames  = frames.size();
+        String baseUrl2   = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2    = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String model2     = (String) body.getOrDefault("model",   env("AI_MODEL",   "llama-3.3-70b-versatile"));
 
         if (frames.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Lista frames vuota"));
 
-        List<Map<String,Object>> frameResults = new ArrayList<>();
+        // ── STEP 1: analisi individuale di ogni frame ─────────────────────
         StringBuilder fullTranscript = new StringBuilder();
+        fullTranscript.append("FILE VIDEO: ").append(fileName).append("\n");
+        fullTranscript.append("TASK UTENTE: ").append(task).append("\n\n");
 
-        for (int i = 0; i < Math.min(frames.size(), 5); i++) {
+        int analyzed = 0;
+        for (int i = 0; i < Math.min(frames.size(), 8); i++) {
             try {
-                String frameB64 = frames.get(i);
-                String frameTask = "Frame " + (i+1) + "/" + frames.size() + ": " + task;
-                String analysis = analyzeImageBase64(frameB64, frameTask, baseUrl2, apiKey2, model2);
-                Map<String,Object> fr = new LinkedHashMap<>();
-                fr.put("frame",    i+1);
-                fr.put("analysis", analysis);
-                frameResults.add(fr);
-                fullTranscript.append("Frame ").append(i+1).append(": ").append(analysis).append("\n\n");
+                String frameB64  = (String) frames.get(i).getOrDefault("frameBase64","");
+                int    timestamp = ((Number) frames.get(i).getOrDefault("timestamp", i)).intValue();
+                if (frameB64.isBlank()) continue;
+
+                String framePrompt = "Descrivi in dettaglio cosa vedi in questo frame del video. " +
+                    "Includi: soggetti, azioni, ambienti, testo visibile, colori dominanti. " +
+                    "Sii specifico e conciso.";
+                String analysis = analyzeImageBase64(frameB64, framePrompt, baseUrl2, apiKey2, model2);
+                fullTranscript.append("⏱ ")
+                    .append(timestamp > 0 ? timestamp + "s" : "Frame "+(i+1))
+                    .append(": ").append(analysis).append("\n\n");
+                analyzed++;
             } catch (Exception e) {
-                frameResults.add(Map.of("frame", i+1, "error", e.getMessage()));
+                log.warn("Frame {} analisi fallita: {}", i+1, e.getMessage());
             }
         }
 
-        // Sintesi finale della sequenza
-        String summary = "";
-        if (fullTranscript.length() > 0) {
-            try {
-                summary = callLLM(
-                    "Sei un analizzatore video. Sintetizza la sequenza di frame in italiano.",
-                    "Task: " + task + "\n\nAnalisi frame:\n" + fullTranscript,
-                    new ArrayList<>(), baseUrl2, apiKey2, model2, 800);
-                ragIndexDocument(sessionId + "/video_analysis_" + System.currentTimeMillis(), summary);
-            } catch (Exception e) {
-                summary = "Sintesi non disponibile: " + e.getMessage();
-            }
+        if (analyzed == 0)
+            return ResponseEntity.status(503).body(Map.of("error","Nessun frame analizzabile — controlla il formato video"));
+
+        // ── STEP 2: sintesi + esecuzione task dell'utente ─────────────────
+        // Classifica il tipo di task per risposta appropriata
+        String taskLow = task.toLowerCase();
+        boolean isCodeTask    = taskLow.matches(".*(implement|codic|programm|scriv.*codic|crea.*app|svilupp).*");
+        boolean isSummaryTask = taskLow.matches(".*(riassun|descr|spiega|raccont|analiz|cosa.*vedi|cosa.*succed).*");
+        boolean isExtractTask = taskLow.matches(".*(estrais?|copi|testo|trad|leggi|ocr|scritto|parole).*");
+
+        String synthesisPrompt;
+        if (isCodeTask) {
+            synthesisPrompt =
+                "Sei un esperto sviluppatore. Analizza la sequenza di frame di questo video e " +
+                "implementa esattamente quello che vedi. Produci codice funzionante e completo. " +
+                "Se vedi un'interfaccia UI, replicala in HTML/CSS/JS. " +
+                "Se vedi un algoritmo, implementalo nel linguaggio più appropriato.\n\n";
+        } else if (isExtractTask) {
+            synthesisPrompt =
+                "Estrai tutto il testo visibile nei frame del video. " +
+                "Organizza il contenuto in modo strutturato. Trascrivi fedelmente.\n\n";
+        } else {
+            synthesisPrompt =
+                "Sei un analizzatore video esperto. Basandoti sull'analisi dei frame, " +
+                "esegui il task richiesto dall'utente in modo completo e dettagliato. " +
+                "Rispondi in italiano con markdown.\n\n";
         }
+
+        String finalAnalysis;
+        try {
+            finalAnalysis = callLLM(
+                synthesisPrompt +
+                "IMPORTANTE: Esegui esattamente il task: '" + task + "'\n" +
+                "Non descrivere solo i frame — ESEGUI il task richiesto.",
+                "ANALISI FRAME VIDEO:\n" + fullTranscript.toString(),
+                new ArrayList<>(), baseUrl2, apiKey2, model2,
+                isCodeTask ? 3000 : 1500);
+
+            // Indicizza in RAG per follow-up nella stessa sessione
+            ragIndexDocument(sessionId + "/video_" + System.currentTimeMillis(),
+                "Video: " + fileName + "\nTask: " + task + "\n" + finalAnalysis);
+
+        } catch (Exception e) {
+            finalAnalysis = "⚠️ Sintesi parziale:\n\n" + fullTranscript.toString();
+        }
+
+        // ── Prefisso contestuale nella risposta ───────────────────────────
+        String prefix = "🎬 **Analisi video: " + fileName + "** (" + analyzed + "/" + numFrames + " frame)\n\n";
 
         return ResponseEntity.ok(Map.of(
-            "frames",    frameResults,
-            "summary",   summary,
-            "total",     frames.size(),
-            "analyzed",  frameResults.size(),
-            "ragIndexed",!summary.isBlank(),
-            "date",      today()
+            "analysis",   prefix + finalAnalysis,
+            "frameCount", analyzed,
+            "taskType",   isCodeTask ? "code" : isSummaryTask ? "summary" : isExtractTask ? "extract" : "generic",
+            "ragIndexed", true,
+            "sessionId",  sessionId,
+            "date",       today()
         ));
     }
 
