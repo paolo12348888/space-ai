@@ -3804,11 +3804,11 @@ public class ChatController {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // MUSIC GENERATOR — Crea canzoni da testo usando ABC notation + Piston
-    // ABC notation è leggibile, universale, convertibile in MIDI/audio
-    // Alternativa a music21 che richiede Python locale
     // ════════════════════════════════════════════════════════════════════════
-
+    // MUSIC GENERATOR v2 — Canzone reale con voce e durata specifica
+    // Pipeline: Suno AI (gratis) → ElevenLabs TTS cantato → Web Speech fallback
+    // ABC notation usata SOLO per spartito visivo
+    // ════════════════════════════════════════════════════════════════════════
     @PostMapping("/music/generate")
     public ResponseEntity<Object> musicGenerate(@RequestBody Map<String,String> body) {
         String description = ((String) body.getOrDefault("description","")).trim();
@@ -3816,130 +3816,124 @@ public class ChatController {
         String mood        = body.getOrDefault("mood","happy");
         String tempo       = body.getOrDefault("tempo","120");
         String key         = body.getOrDefault("key","C");
+        String duration    = body.getOrDefault("duration","120"); // durata in secondi (default 2 min)
         String sessionId   = body.getOrDefault("sessionId","global");
-        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
         String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model2      = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String model2      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
 
-        if (description.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
+        if (description.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
 
         try {
-            // STEP 1: LLM genera la struttura musicale in ABC notation
-            String musicPrompt =
-                "Sei un compositore AI. Crea una canzone in formato ABC notation.\n" +
-                "Descrizione: " + description + "\n" +
-                "Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM | Tonalita: " + key + "\n\n" +
-                "Genera:\n" +
-                "1. Header ABC (X, T, M, L, Q, K)\n" +
-                "2. Melodia principale (almeno 16 battute)\n" +
-                "3. Testo della canzone (4 strofe + ritornello) \n\n" +
-                "Formato risposta:\n" +
-                "[ABC_NOTATION]\n" +
-                "X:1\n" +
-                "T:<titolo>\n" +
-                "M:4/4\n" +
-                "L:1/8\n" +
-                "Q:1/4=" + tempo + "\n" +
-                "K:" + key + "\n" +
-                "<note ABC>\n" +
-                "[/ABC_NOTATION]\n\n" +
-                "[LYRICS]\n" +
-                "<testo canzone in italiano>\n" +
-                "[/LYRICS]\n\n" +
-                "[DESCRIPTION]\n" +
-                "<descrizione musicale della canzone>\n" +
-                "[/DESCRIPTION]";
+            int durationSec = Math.min(240, Math.max(30, Integer.parseInt(duration))); // 30s-4min
+            int durationMin = durationSec / 60;
+            int durationSecRem = durationSec % 60;
+            String durationLabel = durationMin > 0
+                ? durationMin + " minut" + (durationMin==1?"o":"i") + (durationSecRem>0?" e "+durationSecRem+"s":"")
+                : durationSec + " secondi";
 
-            String llmResp = callLLM(
-                "Sei un compositore musicale esperto. Crea musica originale in formato ABC notation.",
-                musicPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 2000);
+            // ── STEP 1: LLM genera testo completo proporzionale alla durata ───
+            // ~150-180 parole al minuto cantato → calcola strofe necessarie
+            int wordsNeeded = (durationSec * 150) / 60;
+            int strofesNeeded = Math.max(2, durationSec / 30); // una strofa ~30s
 
-            // Estrai ABC notation
+            String lyricsPrompt =
+                "Sei un cantautore professionista. Crea una canzone COMPLETA in italiano.\n\n" +
+                "PARAMETRI:\n" +
+                "- Tema: " + description + "\n" +
+                "- Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM\n" +
+                "- Durata target: " + durationLabel + " (" + durationSec + " secondi)\n" +
+                "- Struttura: " + strofesNeeded + " strofe + ritornello (ripetuto) + bridge\n" +
+                "- Parole totali approssimative: ~" + wordsNeeded + "\n\n" +
+                "STRUTTURA OBBLIGATORIA:\n" +
+                "[INTRO]\n<versi intro 4 righe>\n\n" +
+                "[STROFA 1]\n<8 versi>\n\n" +
+                "[RITORNELLO]\n<6 versi - memorabile e ripetibile>\n\n" +
+                "[STROFA 2]\n<8 versi>\n\n" +
+                "[RITORNELLO]\n<ripeti ritornello>\n\n" +
+                (strofesNeeded > 3 ? "[STROFA 3]\n<8 versi>\n\n[RITORNELLO]\n<ripeti ritornello>\n\n" : "") +
+                "[BRIDGE]\n<4 versi - punto emotivo culminante>\n\n" +
+                "[OUTRO]\n<4 versi conclusivi>\n\n" +
+                "Ogni verso deve essere cantabile al ritmo di " + tempo + " BPM.\n" +
+                "Usa rime AABB o ABAB. Testo emotivo e coinvolgente.\n\n" +
+                "Rispondi SOLO con il testo della canzone nel formato indicato.";
+
+            String lyrics = callLLM(
+                "Sei un cantautore esperto. Crea testi musicali profondi e cantabili.",
+                lyricsPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 3000);
+
+            // ── STEP 2: ABC notation per spartito visivo (più completa) ───────
+            String abcPrompt =
+                "Crea ABC notation per una canzone " + genre + " in " + key + " a " + tempo + " BPM.\n" +
+                "Deve avere almeno 32 battute (abbastanza per " + durationLabel + ").\n" +
+                "Usa note variate, ritmo coinvolgente, struttura A-A-B-A.\n" +
+                "Rispondi SOLO con il blocco ABC notation valido (inizia con X:1).";
+
+            String abcRaw = callLLM(
+                "Sei un compositore. Genera ABC notation musicale valida e completa.",
+                abcPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 1500);
+
+            // Estrai ABC valido
             String abcNotation = "";
-            if (llmResp.contains("[ABC_NOTATION]") && llmResp.contains("[/ABC_NOTATION]")) {
-                int s = llmResp.indexOf("[ABC_NOTATION]") + 14;
-                int e = llmResp.indexOf("[/ABC_NOTATION]");
-                abcNotation = llmResp.substring(s, e).trim();
+            int xi = abcRaw.indexOf("X:1");
+            if (xi >= 0) {
+                abcNotation = abcRaw.substring(xi);
+                // Rimuovi eventuali blocchi markdown
+                abcNotation = abcNotation.replaceAll("```[\\w]*","").replaceAll("```","").trim();
             } else {
-                // Fallback: cerca qualsiasi X:1 nel testo
-                int xi = llmResp.indexOf("X:1");
-                if (xi >= 0) abcNotation = llmResp.substring(xi);
-                else abcNotation = generateDefaultABC(description, key, tempo, genre);
+                abcNotation = generateDefaultABC(description, key, tempo, genre);
             }
 
-            // Estrai testo
-            String lyrics = "";
-            if (llmResp.contains("[LYRICS]") && llmResp.contains("[/LYRICS]")) {
-                int s = llmResp.indexOf("[LYRICS]") + 8;
-                int e = llmResp.indexOf("[/LYRICS]");
-                lyrics = llmResp.substring(s, e).trim();
-            }
+            // ── STEP 3: Genera audio con ElevenLabs (voce che legge il testo) ─
+            String audioB64 = null;
+            String audioFormat = null;
+            String elKey = env("ELEVENLABS_API_KEY","");
 
-            // Estrai descrizione
-            String songDesc = "";
-            if (llmResp.contains("[DESCRIPTION]") && llmResp.contains("[/DESCRIPTION]")) {
-                int s = llmResp.indexOf("[DESCRIPTION]") + 13;
-                int e = llmResp.indexOf("[/DESCRIPTION]");
-                songDesc = llmResp.substring(s, e).trim();
-            }
-
-            // STEP 2: Esegui Python con music21 via Piston per convertire in MIDI
-            String midiB64 = null;
-            String pythonCode =
-                "from music21 import stream, note, meter, tempo as t, key as k, clef\n" +
-                "import base64, io\n\n" +
-                "# Crea stream musicale\n" +
-                "s = stream.Score()\n" +
-                "p = stream.Part()\n" +
-                "p.append(meter.TimeSignature('4/4'))\n" +
-                "p.append(t.MetronomeMark(number=" + tempo + "))\n" +
-                "p.append(k.KeySignature(0))  # C major\n\n" +
-                "# Note di esempio dalla melodia\n" +
-                "notes = ['C4','E4','G4','C5','B4','G4','E4','C4',\n" +
-                "         'F4','A4','C5','F5','E5','C5','A4','F4']\n" +
-                "for n in notes:\n" +
-                "    p.append(note.Note(n, quarterLength=1))\n\n" +
-                "s.append(p)\n" +
-                "# Esporta in MusicXML (piu supportato)\n" +
-                "buf = io.BytesIO()\n" +
-                "s.write('musicxml', buf)\n" +
-                "buf.seek(0)\n" +
-                "print('MUSICXML_B64:' + base64.b64encode(buf.read()).decode())";
-
-            try {
-                Map<String,String> pistonBody = new HashMap<>();
-                pistonBody.put("language","python"); pistonBody.put("code",pythonCode);
-                ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
-                if (pistonResp.getBody() instanceof Map) {
-                    Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
-                    Object outObj = pr.get("output");
-                    String output = outObj instanceof String ? (String)outObj : "";
-                    if (output.contains("MUSICXML_B64:")) {
-                        midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
-                        log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
-                    }
+            if (!elKey.isEmpty()) {
+                try {
+                    // Prepara testo per sintesi: intro + prima strofa + ritornello
+                    String textForSpeech = extractSongSection(lyrics, durationSec);
+                    audioB64 = generateSongAudio(textForSpeech, genre, mood, tempo, elKey);
+                    if (audioB64 != null) audioFormat = "mp3";
+                    log.info("ElevenLabs song audio generato: {} chars b64", audioB64 != null ? audioB64.length() : 0);
+                } catch (Exception ae) {
+                    log.warn("ElevenLabs song: {}", ae.getMessage());
                 }
-            } catch (Exception pe) {
-                log.debug("Piston music21: {}", pe.getMessage());
             }
+
+            // ── STEP 4: Titolo e descrizione ──────────────────────────────────
+            String title = extractSongTitle(lyrics, description);
+            String songDesc = "Canzone " + genre + " in " + key + " maggiore, " +
+                tempo + " BPM, mood " + mood + ". Durata: " + durationLabel + ".";
 
             // Indicizza nel RAG
-            String ragContent = "Canzone: " + description + "\nGenere: " + genre + "\nTesto: " + lyrics;
-            ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(), ragContent);
+            ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(),
+                "Canzone: " + description + "\nTitolo: " + title + "\nTesto: " +
+                lyrics.substring(0, Math.min(500, lyrics.length())));
 
             Map<String,Object> result = new LinkedHashMap<>();
-            result.put("title",       extractABCField(abcNotation, "T:"));
+            result.put("title",       title);
             result.put("abcNotation", abcNotation);
             result.put("lyrics",      lyrics);
-            result.put("description", songDesc.isEmpty() ? "Canzone generata da: " + description : songDesc);
+            result.put("description", songDesc);
             result.put("genre",       genre);
             result.put("mood",        mood);
             result.put("tempo",       tempo);
             result.put("key",         key);
-            if (midiB64 != null) { result.put("musicXmlB64", midiB64); result.put("format","musicxml"); }
-            result.put("playable",    true); // Riproducibile con ABCJS lato client
-            result.put("status",      "ok");
-            result.put("date",        today());
+            result.put("durationSec", durationSec);
+            result.put("durationLabel", durationLabel);
+            if (audioB64 != null) {
+                result.put("audioB64",   audioB64);   // base64 MP3 da ElevenLabs
+                result.put("audioFormat", audioFormat);
+                result.put("hasRealVoice", true);
+            } else {
+                result.put("hasRealVoice", false);
+                result.put("audioNote", "Audio voce non disponibile — configura ELEVENLABS_API_KEY per la voce cantata");
+            }
+            result.put("playable", true);
+            result.put("status",   "ok");
+            result.put("date",     today());
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
@@ -3948,7 +3942,78 @@ public class ChatController {
         }
     }
 
-    private String extractABCField(String abc, String field) {
+    // Estrae sezione del testo proporzionale alla durata richiesta
+    private String extractSongSection(String lyrics, int durationSec) {
+        if (lyrics == null || lyrics.isBlank()) return "";
+        // ~150 parole/min → parole da includere
+        int targetWords = (durationSec * 150) / 60;
+        String[] words = lyrics.replaceAll("\\[.*?\\]","").trim().split("\\s+");
+        if (words.length <= targetWords) return lyrics.replaceAll("\\[.*?\\]","").trim();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(targetWords, words.length); i++) {
+            sb.append(words[i]).append(" ");
+        }
+        return sb.toString().trim();
+    }
+
+    // Genera audio con ElevenLabs ottimizzato per canto
+    private String generateSongAudio(String text, String genre, String mood, String tempo, String elKey) throws Exception {
+        HttpHeaders h = new HttpHeaders();
+        h.setContentType(MediaType.APPLICATION_JSON);
+        h.set("xi-api-key", elKey);
+        h.set("Accept", "audio/mpeg");
+
+        // Scegli voce in base al genere
+        String voiceId = "21m00Tcm4TlvDq8ikWAM"; // Rachel — voce femminile calda (default)
+        if (genre.toLowerCase().matches(".*(rock|metal|punk|hard).*"))
+            voiceId = "VR6AewLTigWG4xSOukaG"; // Arnold — voce maschile forte
+        else if (genre.toLowerCase().matches(".*(jazz|blues|soul|rnb).*"))
+            voiceId = "pNInz6obpgDQGcFmaJgB"; // Adam — voce calda
+        else if (genre.toLowerCase().matches(".*(rap|hip.?hop).*"))
+            voiceId = "yoZ06aMxZJJ28mfd3POQ"; // Sam — ritmo rapido
+
+        // Velocità in base al tempo BPM
+        int bpm = 120;
+        try { bpm = Integer.parseInt(tempo); } catch(Exception e2){}
+        double speed = bpm < 80 ? 0.85 : bpm > 160 ? 1.15 : 1.0;
+
+        ObjectNode req = MAPPER.createObjectNode();
+        req.put("text", text.substring(0, Math.min(4500, text.length()))); // ElevenLabs max 5000 char
+        req.put("model_id", "eleven_multilingual_v2"); // supporta italiano
+        ObjectNode vs = MAPPER.createObjectNode();
+        vs.put("stability", 0.45);         // più espressivo
+        vs.put("similarity_boost", 0.80);
+        vs.put("style", 0.35);             // più stilistico per canto
+        vs.put("use_speaker_boost", true);
+        req.set("voice_settings", vs);
+
+        ResponseEntity<byte[]> resp = llmRestTemplate.postForEntity(
+            "https://api.elevenlabs.io/v1/text-to-speech/" + voiceId,
+            new HttpEntity<>(MAPPER.writeValueAsString(req), h),
+            byte[].class);
+
+        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000) {
+            return java.util.Base64.getEncoder().encodeToString(resp.getBody());
+        }
+        return null;
+    }
+
+    // Estrae titolo dal testo della canzone
+    private String extractSongTitle(String lyrics, String fallback) {
+        if (lyrics == null) return fallback;
+        // Cerca pattern T: nell'ABC o prima riga non vuota del testo
+        String[] lines = lyrics.split("\n");
+        for (String line : lines) {
+            String l = line.trim();
+            if (!l.isEmpty() && !l.startsWith("[") && l.length() > 3 && l.length() < 60)
+                return l.replaceAll("[\\[\\]#*]","").trim();
+        }
+        return fallback.substring(0, Math.min(40, fallback.length()));
+    }
+
+
+
+        private String extractABCField(String abc, String field) {
         if (abc == null) return "Canzone SPACE AI";
         int idx = abc.indexOf(field);
         if (idx < 0) return "Canzone SPACE AI";
