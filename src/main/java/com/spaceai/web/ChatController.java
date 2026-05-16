@@ -3560,40 +3560,43 @@ public class ChatController {
         if (token.isEmpty()) throw new IllegalStateException("REPLICATE_API_TOKEN non configurato");
 
         String createUrl = "https://api.replicate.com/v1/predictions";
-        Map<String,Object> body = new LinkedHashMap<>();
-        body.put("version", model);
-        body.put("input", input);
+        Map<String,Object> bodyMap = new LinkedHashMap<>();
+        bodyMap.put("version", model);
+        bodyMap.put("input", input);
 
-        var req = org.springframework.http.RequestEntity.post(new java.net.URI(createUrl))
-            .header("Authorization", "Bearer " + token)
-            .header("Content-Type", "application/json")
-            .body(MAPPER.writeValueAsString(body));
+        // Headers con Bearer token
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.set("Authorization", "Bearer " + token);
+        headers.set("Content-Type", "application/json");
 
-        var resp = REST.exchange(req, String.class);
+        org.springframework.http.HttpEntity<String> entity =
+            new org.springframework.http.HttpEntity<>(MAPPER.writeValueAsString(bodyMap), headers);
+
+        ResponseEntity<String> resp = restTemplate.postForEntity(createUrl, entity, String.class);
         JsonNode node = MAPPER.readTree(resp.getBody());
-        String predId = node.path("id").asText();
+        String predId  = node.path("id").asText();
         String status  = node.path("status").asText();
 
         // Polling ogni 3 secondi, max 40 tentativi (120 sec)
+        org.springframework.http.HttpEntity<Void> pollEntity =
+            new org.springframework.http.HttpEntity<>(headers);
+
         for (int i = 0; i < 40 && !status.equals("succeeded") && !status.equals("failed"); i++) {
             Thread.sleep(3000);
-            var pollReq = org.springframework.http.RequestEntity.get(
-                new java.net.URI("https://api.replicate.com/v1/predictions/" + predId))
-                .header("Authorization", "Bearer " + token)
-                .build();
-            var pollResp = REST.exchange(pollReq, String.class);
+            String pollUrl = "https://api.replicate.com/v1/predictions/" + predId;
+            ResponseEntity<String> pollResp = restTemplate.exchange(
+                pollUrl, org.springframework.http.HttpMethod.GET, pollEntity, String.class);
             JsonNode pNode = MAPPER.readTree(pollResp.getBody());
             status = pNode.path("status").asText();
             if (status.equals("succeeded")) {
                 JsonNode output = pNode.path("output");
-                // MusicGen ritorna stringa URL, Bark ritorna oggetto con audio_out
                 if (output.isTextual()) return output.asText();
                 if (output.has("audio_out")) return output.path("audio_out").asText();
                 if (output.isArray() && output.size() > 0) return output.get(0).asText();
                 return output.toString();
             }
             if (status.equals("failed")) {
-                throw new RuntimeException("Replicate prediction failed: " + pNode.path("error").asText());
+                throw new RuntimeException("Replicate failed: " + pNode.path("error").asText());
             }
         }
         throw new RuntimeException("Replicate timeout dopo 120 secondi");
@@ -3601,7 +3604,7 @@ public class ChatController {
 
     /** Scarica un URL e ritorna i byte come base64 */
     private String downloadAsBase64(String url) throws Exception {
-        byte[] bytes = REST.getForObject(url, byte[].class);
+        byte[] bytes = restTemplate.getForObject(url, byte[].class);
         return bytes != null ? java.util.Base64.getEncoder().encodeToString(bytes) : "";
     }
 
