@@ -3467,7 +3467,7 @@ public class ChatController {
             }
             String block = raw.substring(idx + sec.length() + 1, end).trim();
             List<String> lines = new ArrayList<>();
-            for (String line : block.split("\|")) {
+            for (String line : block.split("\\|")) {
                 String l = line.trim();
                 if (!l.isEmpty()) lines.add(l);
             }
