@@ -1898,7 +1898,6 @@ async function sendMsg(){
         addRow("❌ Errore musica: "+e,"err");
       });
   }
-  }
   function showAbcPlayer(md){
     var mRow=document.createElement("div");mRow.className="row ai";
     var mAv=document.createElement("div");mAv.className="av";
@@ -2011,7 +2010,6 @@ async function sendMsg(){
           document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem;color:#333'>"+(md.abcNotation||"")+"</pre>";
         }
       },400);
-    }
 
     // ── Testo/lyrics ─────────────────────────────────────────────────────
     if(md.lyrics){
