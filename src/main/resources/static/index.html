@@ -108,20 +108,7 @@ textarea::placeholder{color:var(--muted)}
 .hint{text-align:center;font-size:.61rem;color:var(--muted);margin:5px auto 0;opacity:.45}
 </style>
   <!-- ABCJS: renderizza e riproduce notazione ABC (musica) -->
-  <!-- ABCJS: renderizza notazione ABC (partitura visiva) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-basic-min.js"></script>
-  <!-- Tone.js: sintesi audio avanzata per strumenti reali -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
-  <script>
-    // Sopprime il banner decorativo di Tone.js dalla console
-    (function(){
-      var _log = console.log;
-      console.log = function(){
-        if(arguments[0] && typeof arguments[0]==='string' && arguments[0].indexOf('Tone.js')>=0) return;
-        _log.apply(console, arguments);
-      };
-    })();
-  </script>
 </head>
 <body>
 <div class="sb-ov" id="sbOv" onclick="closeSB()"></div>
@@ -181,6 +168,7 @@ textarea::placeholder{color:var(--muted)}
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
         <span style="font-size:.6rem;color:#b060ff;opacity:.8;cursor:pointer" onclick="showNeuralPanel()">&#129504; neural</span>
         <span style="font-size:.6rem;color:#b060ff;opacity:.8">&#9889; quantum</span>
+        <span id="agentBadge" style="font-size:.6rem;color:#00e5ff;opacity:0;transition:opacity .5s;margin-left:4px;font-family:monospace">🤖 reasoner</span>
         <span style="font-size:.6rem;opacity:.7" id="emotionIndicator" title="Emozione rilevata">😐</span>
         <div class="dot"></div>
       </div>
@@ -191,31 +179,18 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <div class="chips">
-          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
-          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
-          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
-          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
-          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
-          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
-          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
-          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
-          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
-          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
-          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
-          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
-          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
-          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
-          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
-          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
-          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
-          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
-          <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
-          <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
-          <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
-          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
-          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
-          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
+        <div style="margin-top:18px;display:flex;flex-direction:column;gap:10px;align-items:center">
+          <p style="color:#4a6080;font-size:.8rem;font-family:monospace;letter-spacing:1px">
+            ✦ L'agente giusto viene scelto automaticamente ✦
+          </p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:500px">
+            <div class="chip" onclick="qs('Crea una canzone pop allegra sull amore')">&#127911; Crea Canzone</div>
+            <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Immagine AI</div>
+            <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
+            <div class="chip" onclick="qs('Scrivi codice Python per leggere un CSV')">&#128013; Codice Python</div>
+            <div class="chip" onclick="startSpaces()">&#127756; Voce SPACES</div>
+            <div class="chip" onclick="setMode('dream');qs('Idee creative per una startup AI')">&#129704; Dream Mode</div>
+          </div>
         </div>
       </div>
     </div>
@@ -899,235 +874,89 @@ async function sendMsg(){
       var data=await res.json();
       if(data.error){addRow("Errore: "+data.error,"err");}
       else{
-        if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+        if(data.agents){
+          lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+          // Mostra badge agente nel header (routing automatico visibile)
+          var agBadge=document.getElementById("agentBadge");
+          if(agBadge){
+            var agLabel=lastAgent.replace(/_/g," ");
+            agBadge.textContent="🤖 "+agLabel;
+            agBadge.style.opacity="1";
+          }
+        }
         lastQuery=text;
-        // ── Music Gen v2 — AI Pipeline (Replicate) + Fallback Web Audio ──
+        // ── Music Gen ─────────────────────────────────────────────────
         if(data.mode==="music_gen"&&data.musicData){
           var md=data.musicData;
-          // Messaggio intro
-          addRow("🎵 **"+(md.title||"Canzone generata")+"**\n\n"+
-            "🎸 Genere: "+md.genre+" | 😊 Mood: "+md.mood+" | ⏱ "+md.tempo+" BPM\n"+
-            "🎹 Strumenti: "+(md.instruments||"pianoforte, basso, batteria")+"\n\n"+
+          addRow("\uD83C\uDFB5 **"+( md.title||"Canzone generata")+"**\n\n"+
+            "\uD83C\uDFB8 Genere: "+md.genre+" | Mood: "+md.mood+" | Tempo: "+md.tempo+" BPM\n\n"+
             (md.description||""),"ai");
-
-          // Container player
+          // Player ABCJS
           var mRow=document.createElement("div");mRow.className="row ai";
           var mAv=document.createElement("div");mAv.className="av";
           var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
           var mBub=document.createElement("div");mBub.className="bubble";
-          mBub.style.cssText="padding:14px;max-width:98%;width:700px";
-
-          // ── ABC Score (partitura visiva) ──
-          var abcDiv=document.createElement("div");
-          abcDiv.id="abc_"+Date.now();
-          abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;max-height:200px;overflow-y:auto";
+          mBub.style.cssText="padding:12px;max-width:96%;width:680px";
+          // ABC player container
+          var abcDiv=document.createElement("div");abcDiv.id="abc_"+Date.now();
+          abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
           mBub.appendChild(abcDiv);
-
-          // ── Progress bar ──
-          var progWrap=document.createElement("div");
-          progWrap.style.cssText="background:#1a2744;border-radius:4px;height:4px;margin:8px 0;overflow:hidden";
-          var progBar=document.createElement("div");
-          progBar.style.cssText="width:0%;height:100%;background:var(--accent);transition:width 0.5s linear";
-          progWrap.appendChild(progBar);mBub.appendChild(progWrap);
-
-          // ── Testo karaoke ──
-          var lyrKar=document.createElement("div");
-          lyrKar.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);"+
-            "padding:10px 14px;border-radius:0 8px 8px 0;font-size:.9rem;min-height:60px;"+
-            "margin-bottom:8px;white-space:pre-line;line-height:1.8";
-          var hasAI = md.mode==="full_ai"&&(md.musicBase64||md.vocalBase64);
-          lyrKar.innerHTML = hasAI
-            ? "🎵 <em>Canzone AI generata con Replicate! Premi ▶ per ascoltare.</em>"
-            : (md.replicateConfigured===false
-                ? "⚠️ <em>Replicate non configurato — uso sintesi browser. Aggiungi REPLICATE_API_TOKEN per musica AI reale.</em>"
-                : "🎤 <em>Premi Riproduci per ascoltare la canzone...</em>");
-          mBub.appendChild(lyrKar);
-
-          // ── Testo completo ──
-          if(md.lyrics){
-            var lyrFull=document.createElement("details");
-            lyrFull.style.cssText="margin-bottom:8px;cursor:pointer";
-            var lyrSum=document.createElement("summary");
-            lyrSum.style.cssText="font-size:.8rem;color:var(--accent);padding:4px 0";
-            lyrSum.textContent="📃 Testo completo";
-            var lyrPre=document.createElement("pre");
-            lyrPre.style.cssText="font-size:.8rem;white-space:pre-wrap;padding:8px;"+
-              "background:rgba(0,0,0,0.3);border-radius:6px;margin-top:6px;color:#c8d8f0";
-            lyrPre.textContent=md.lyrics||"";
-            lyrFull.appendChild(lyrSum);lyrFull.appendChild(lyrPre);
-            mBub.appendChild(lyrFull);
-          }
-
-          // ── Controls ──
-          var ctrlDiv=document.createElement("div");
-          ctrlDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center";
-
-          var playBtn=document.createElement("button");
-          playBtn.className="abtn";
-          playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;min-width:110px";
-          playBtn.innerHTML="▶ Riproduci";
-
-          var stopBtn=document.createElement("button");
-          stopBtn.className="abtn";stopBtn.innerHTML="⏹ Stop";
-
-          var dlBtn=document.createElement("a");
-          dlBtn.className="abtn";dlBtn.style.textDecoration="none";dlBtn.innerHTML="⬇ ABC";
-
-          // Volume
-          var volLabel=document.createElement("span");
-          volLabel.style.cssText="font-size:.75rem;color:#4a6080;margin-left:4px";
-          volLabel.textContent="🔊";
-          var volSlider=document.createElement("input");
-          volSlider.type="range";volSlider.min="0";volSlider.max="1";
-          volSlider.step="0.05";volSlider.value="0.7";
-          volSlider.style.cssText="width:70px;accent-color:var(--accent)";
-
-          ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);
-          ctrlDiv.appendChild(dlBtn);ctrlDiv.appendChild(volLabel);ctrlDiv.appendChild(volSlider);
+          // Controls
+          var ctrlDiv=document.createElement("div");ctrlDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px";
+          var playMusicBtn=document.createElement("button");
+          playMusicBtn.className="abtn";playMusicBtn.style.cssText="background:var(--accent);color:#000;font-weight:700";
+          playMusicBtn.innerHTML="\u25B6 Riproduci";
+          var stopMusicBtn=document.createElement("button");stopMusicBtn.className="abtn";
+          stopMusicBtn.innerHTML="\u23F9 Stop";
+          var dlAbcBtn=document.createElement("a");
+          dlAbcBtn.className="abtn";dlAbcBtn.style.textDecoration="none";
+          dlAbcBtn.innerHTML="\u2B07 Scarica ABC";
+          ctrlDiv.appendChild(playMusicBtn);ctrlDiv.appendChild(stopMusicBtn);ctrlDiv.appendChild(dlAbcBtn);
           mBub.appendChild(ctrlDiv);
+          // Lyrics
+          if(md.lyrics){
+            var lyrDiv=document.createElement("div");
+            lyrDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
+            lyrDiv.innerHTML="\uD83C\uDFA4 <strong>Testo:</strong>\n"+md.lyrics;
+            mBub.appendChild(lyrDiv);
+          }
           mRow.appendChild(mAv);mRow.appendChild(mBub);
           msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
-
-          // ── Render partitura ABC ──
-          var abcText=md.abcNotation||"";
-          var abcId=abcDiv.id;
+          // Render ABC notation with ABCJS
+          var abcId=abcDiv.id;var abcText=md.abcNotation||"";
           setTimeout(function(){
             if(typeof ABCJS!=="undefined"&&abcText){
-              ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true,staffwidth:620});
+              var visualObj=ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true});
+              // Setup audio
+              var synth=null;
+              playMusicBtn.onclick=function(){
+                ABCJS.renderAbc(abcId,abcText,{responsive:"resize"});
+                if(typeof ABCJS.synth!=="undefined"){
+                  var audioCtx=new AudioContext();
+                  synth=new ABCJS.synth.CreateSynth();
+                  synth.init({audioContext:audioCtx,visualObj:visualObj[0],options:{}})
+                    .then(function(){return synth.prime();})
+                    .then(function(){synth.start();playMusicBtn.innerHTML="\u23F3 Suonando...";})
+                    .catch(function(e){
+                      // Fallback: usa Web Audio API basic tone
+                      playSimpleTones(abcText,audioCtx);
+                    });
+                } else {
+                  playSimpleTones(abcText,new AudioContext());
+                }
+              };
+              stopMusicBtn.onclick=function(){
+                if(synth)synth.stop();
+                playMusicBtn.innerHTML="\u25B6 Riproduci";
+              };
             } else {
-              abcDiv.innerHTML="<pre style='font-size:.7rem;color:#333'>"+abcText+"</pre>";
+              abcDiv.innerHTML="<pre style='font-size:.75rem'>"+abcText+"</pre>";
             }
+            // Download ABC file
             var blob=new Blob([abcText],{type:"text/plain"});
-            dlBtn.href=URL.createObjectURL(blob);
-            dlBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-          },400);
-
-          // ── MOTORE AUDIO COMPLETO ──
-          var songCtx=null, songStopped=false, songInterval=null;
-
-          playBtn.onclick=function(){
-            if(songCtx){try{songCtx.close();}catch(e){}}
-            if(window.speechSynthesis)window.speechSynthesis.cancel();
-            songStopped=false;
-            playBtn.innerHTML="⏳ Suonando...";
-            playBtn.disabled=true;
-            progBar.style.width="0%";
-
-            var vol=parseFloat(volSlider.value)||0.7;
-            var bpm=parseInt(md.tempo)||120;
-
-            // ════════════════════════════════════════════
-            // MODALITÀ 1: Audio AI reale (Replicate)
-            // ════════════════════════════════════════════
-            if(md.mode==="full_ai"&&(md.musicBase64||md.vocalBase64)){
-              try{
-                songCtx=new (window.AudioContext||window.webkitAudioContext)();
-              }catch(e){
-                lyrKar.innerHTML="❌ Web Audio non disponibile";
-                playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
-              }
-              lyrKar.innerHTML="🎵 <strong>"+( md.title||"Canzone")+"</strong><br><em>Riproduzione in corso...</em>";
-
-              var tracksReady=0, totalTracks=0;
-              var musicBuf=null, vocalBuf=null;
-
-              function tryPlay(){
-                tracksReady++;
-                if(tracksReady<totalTracks)return;
-                // Entrambe le tracce pronte — sovrapponi
-                var maxDur=Math.max(
-                  musicBuf?musicBuf.duration:0,
-                  vocalBuf?vocalBuf.duration:0)||30;
-
-                var masterGain=songCtx.createGain();
-                masterGain.gain.value=vol;
-                masterGain.connect(songCtx.destination);
-
-                if(musicBuf){
-                  var mSrc=songCtx.createBufferSource();
-                  mSrc.buffer=musicBuf;
-                  var mGain=songCtx.createGain();
-                  mGain.gain.value=vocalBuf?0.6:1.0; // abbassa musica se c'è voce
-                  mSrc.connect(mGain);mGain.connect(masterGain);
-                  mSrc.start(0);
-                }
-                if(vocalBuf){
-                  var vSrc=songCtx.createBufferSource();
-                  vSrc.buffer=vocalBuf;
-                  var vGain=songCtx.createGain();
-                  vGain.gain.value=1.0;
-                  vSrc.connect(vGain);vGain.connect(masterGain);
-                  vSrc.start(0);
-                }
-
-                // Progress + karaoke
-                var elapsed=0;
-                var pi=setInterval(function(){
-                  if(songStopped){clearInterval(pi);return;}
-                  elapsed+=0.5;
-                  progBar.style.width=Math.min(100,(elapsed/maxDur)*100)+"%";
-                  if(elapsed>=maxDur){
-                    clearInterval(pi);
-                    playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;
-                    progBar.style.width="100%";
-                  }
-                },500);
-
-                // Karaoke sincrono
-                singLyrics(md,lyrKar,bpm);
-              }
-
-              // Decodifica musica
-              if(md.musicBase64){
-                totalTracks++;
-                var mBytes=base64ToArrayBuffer(md.musicBase64);
-                songCtx.decodeAudioData(mBytes,
-                  function(buf){musicBuf=buf;tryPlay();},
-                  function(e){log.warn&&console.warn("Music decode:",e);tryPlay();}
-                );
-              }
-              // Decodifica voce
-              if(md.vocalBase64){
-                totalTracks++;
-                var vBytes=base64ToArrayBuffer(md.vocalBase64);
-                songCtx.decodeAudioData(vBytes,
-                  function(buf){vocalBuf=buf;tryPlay();},
-                  function(e){console.warn("Vocal decode:",e);tryPlay();}
-                );
-              }
-              if(totalTracks===0){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;}
-
-            } else {
-              // ════════════════════════════════════════════
-              // MODALITÀ 2: Fallback Web Audio + Speech
-              // ════════════════════════════════════════════
-              try{
-                songCtx=new (window.AudioContext||window.webkitAudioContext)();
-              }catch(e){
-                lyrKar.innerHTML="❌ Web Audio non disponibile";
-                playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
-              }
-              var notes=parseABCtoFreqs(abcText,bpm);
-              var totalDur=notes.reduce(function(s,n){return s+n.dur;},0)||25;
-              playWithWebAudio(notes,vol,songCtx,md,lyrKar,progBar,totalDur,
-                function(){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;});
-              if(md.lyrics&&typeof SpeechSynthesisUtterance!=="undefined"){
-                setTimeout(function(){
-                  if(!songStopped) singLyrics(md,lyrKar,bpm);
-                },600);
-              }
-            }
-          };
-
-          stopBtn.onclick=function(){
-            songStopped=true;
-            if(songCtx){try{songCtx.close();}catch(e){}}
-            if(window.speechSynthesis)window.speechSynthesis.cancel();
-            if(songInterval)clearInterval(songInterval);
-            playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;
-            progBar.style.width="0%";
-            lyrKar.innerHTML="🎤 <em>Riproduzione fermata.</em>";
-          };
+            dlAbcBtn.href=URL.createObjectURL(blob);
+            dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+          },500);
         }
         // ── Audio Gen ─────────────────────────────────────────────────
         if(data.mode==="audio_gen"||data.audioBase64||data.webSpeech){
@@ -1247,6 +1076,16 @@ async function sendMsg(){
           } else {
             var prefix=data.webSearch==="true"?"🌐 **Live** · ":"";
             addRow(prefix+data.response,"ai");
+            // ── Etichetta routing agente automatico ──
+            if(data.agents){
+              var agName=(data.agents+"").replace(/[\[\]]/g,"").split(",")[0].trim()||"reasoner";
+              var agTag=document.createElement("div");
+              agTag.style.cssText="font-size:.68rem;color:#1e3a5a;font-family:monospace;"+
+                "padding:1px 12px 6px;text-align:right;margin-top:-4px;opacity:.7";
+              agTag.textContent="⚡ "+agName.replace(/_/g," ");
+              var aiRows=document.getElementById("msgs").querySelectorAll(".row.ai");
+              if(aiRows.length>0) aiRows[aiRows.length-1].appendChild(agTag);
+            }
             if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
           }
         }
@@ -1572,240 +1411,16 @@ async function sendMsg(){
       }
     },300);
   }
-  // ═══════════════════════════════════════════════════════════════════
-  // SPACE AI — Music Engine v2
-  // parseABCtoFreqs: converte ABC notation in array di {freq, dur}
-  // playWithWebAudio: suona con oscillatori multipli (melodia + basso + pad)
-  // singLyrics: canta il testo sincronizzato con Web Speech API
-  // ═══════════════════════════════════════════════════════════════════
-
-  var ABC_NOTE_MAP = {
-    "C":261.63,"D":293.66,"E":329.63,"F":349.23,"G":392.00,"A":440.00,"B":493.88,
-    "c":523.25,"d":587.33,"e":659.25,"f":698.46,"g":783.99,"a":880.00,"b":987.77,
-    "C,":130.81,"D,":146.83,"E,":164.81,"F,":174.61,"G,":196.00,"A,":220.00,"B,":246.94,
-    "C'":1046.50,"D'":1174.66,"E'":1318.51,"F'":1396.91,"G'":1567.98,"A'":1760.00
-  };
-  var ABC_DUR_MAP = {"8":0.25,"4":0.5,"2":1,"1":2,"3":0.333,"6":0.167,"":0.5};
-
-  function parseABCtoFreqs(abcText, bpm) {
-    if(!abcText) return [];
-    var beat = 60/Math.max(60,bpm);
-    var notes = [];
-    // Rimuovi header ABC (righe che iniziano con lettera maiuscola seguita da :)
-    var lines = abcText.split("\n").filter(function(l){
-      return l.trim() && !l.match(/^[A-Za-z]:/) && !l.startsWith("%");
-    });
-    var body = lines.join(" ").replace(/\|:/g,"").replace(/:\|/g,"").replace(/\|/g," ");
-    // Parsa nota per nota con regex
-    var noteRe = /([_^]?)([A-Ga-g][,']*)(\d*)/g;
-    var m;
-    while((m=noteRe.exec(body))!==null){
-      var acc=m[1], noteName=m[2], durStr=m[3];
-      // Accidentali
-      var baseFreq = ABC_NOTE_MAP[noteName] || 440;
-      if(acc==="^") baseFreq *= 1.0595;  // semitono su
-      if(acc==="_") baseFreq *= 0.9439;  // semitono giù
-      var dur = (ABC_DUR_MAP[durStr] || 0.5) * beat * 2;
-      notes.push({freq:baseFreq, dur:Math.max(0.1,dur)});
-    }
-    return notes.length > 4 ? notes : generateDefaultNotes(bpm);
-  }
-
-  function generateDefaultNotes(bpm){
-    var beat=60/Math.max(60,bpm);
-    var freqs=[261.63,329.63,392.00,523.25,493.88,392.00,329.63,261.63,
-               349.23,440.00,523.25,698.46,659.25,523.25,440.00,349.23];
-    return freqs.map(function(f){return {freq:f,dur:beat*2};});
-  }
-
-  function playWithWebAudio(notes, vol, ctx, md, lyrKar, progBar, totalDur, onEnd){
-    if(!notes||notes.length===0){if(onEnd)onEnd();return;}
-    var now=ctx.currentTime;
-    var t=now+0.1;
-    var bpm=parseInt(md&&md.tempo)||120;
-    var beat=60/bpm;
-
-    // Master gain
-    var masterGain=ctx.createGain();
-    masterGain.gain.setValueAtTime(vol*0.8,now);
-    masterGain.connect(ctx.destination);
-
-    // Reverb semplice (convolution approssimato)
-    var convolver=ctx.createConvolver();
-    try{
-      var bufLen=ctx.sampleRate*1.5;
-      var revBuf=ctx.createBuffer(2,bufLen,ctx.sampleRate);
-      for(var ch=0;ch<2;ch++){
-        var d=revBuf.getChannelData(ch);
-        for(var i=0;i<bufLen;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/bufLen,2)*0.3;
-      }
-      convolver.buffer=revBuf;
-      var dryGain=ctx.createGain();dryGain.gain.value=0.7;
-      var wetGain=ctx.createGain();wetGain.gain.value=0.3;
-      convolver.connect(wetGain);wetGain.connect(masterGain);
-      dryGain.connect(masterGain);
-      var dest=dryGain;
-    }catch(e){var dest=masterGain;}
-
-    // ── Melodia principale (sine + triangle blend) ──
-    notes.forEach(function(n,i){
-      var dur=Math.min(n.dur,beat*4);
-
-      // Oscillatore principale
-      var osc=ctx.createOscillator();
-      var g=ctx.createGain();
-      osc.type="triangle";
-      osc.frequency.setValueAtTime(n.freq,t);
-      osc.frequency.setTargetAtTime(n.freq*1.001,t,0.05); // lieve vibrato
-      g.gain.setValueAtTime(0,t);
-      g.gain.linearRampToValueAtTime(0.4,t+0.02);
-      g.gain.setValueAtTime(0.35,t+dur*0.7);
-      g.gain.linearRampToValueAtTime(0,t+dur);
-      osc.connect(g);g.connect(dest||masterGain);
-      osc.start(t);osc.stop(t+dur+0.05);
-
-      // Armonico (ottava sopra, piano)
-      var osc2=ctx.createOscillator();
-      var g2=ctx.createGain();
-      osc2.type="sine";
-      osc2.frequency.value=n.freq*2;
-      g2.gain.setValueAtTime(0,t);
-      g2.gain.linearRampToValueAtTime(0.1,t+0.02);
-      g2.gain.linearRampToValueAtTime(0,t+dur);
-      osc2.connect(g2);g2.connect(dest||masterGain);
-      osc2.start(t);osc2.stop(t+dur+0.05);
-
-      t+=dur;
-    });
-
-    // ── Linea basso (root note ogni 2 beat) ──
-    var bassT=now+0.1;
-    var bassFreqs=notes.filter(function(_,i){return i%4===0;}).slice(0,16);
-    bassFreqs.forEach(function(n){
-      var osc=ctx.createOscillator();var g=ctx.createGain();
-      osc.type="sawtooth";
-      osc.frequency.value=n.freq/2;
-      g.gain.setValueAtTime(0,bassT);
-      g.gain.linearRampToValueAtTime(0.2,bassT+0.03);
-      g.gain.linearRampToValueAtTime(0,bassT+beat*2-0.05);
-      osc.connect(g);g.connect(masterGain);
-      osc.start(bassT);osc.stop(bassT+beat*2);
-      bassT+=beat*2;
-    });
-
-    // ── Pad accordale (chord ogni 4 beat) ──
-    var padT=now+0.15;
-    var chordRoots=notes.filter(function(_,i){return i%8===0;}).slice(0,8);
-    chordRoots.forEach(function(n){
-      [1,1.25,1.5].forEach(function(ratio){
-        var osc=ctx.createOscillator();var g=ctx.createGain();
-        osc.type="sine";
-        osc.frequency.value=n.freq*ratio;
-        g.gain.setValueAtTime(0,padT);
-        g.gain.linearRampToValueAtTime(0.08,padT+0.2);
-        g.gain.linearRampToValueAtTime(0,padT+beat*4);
-        osc.connect(g);g.connect(masterGain);
-        osc.start(padT);osc.stop(padT+beat*4+0.1);
-      });
-      padT+=beat*4;
-    });
-
-    // Progress bar
-    var elapsed=0;var progInterval=setInterval(function(){
-      elapsed+=0.5;
-      var pct=Math.min(100,(elapsed/Math.max(1,totalDur))*100);
-      progBar.style.width=pct+"%";
-      if(pct>=100){clearInterval(progInterval);if(onEnd)setTimeout(onEnd,400);}
-    },500);
-  }
-
-  function playWithTone(notes,bpm,vol,ctx,md,lyrKar,progBar,totalDur,onEnd){
-    // Fallback a WebAudio se Tone non disponibile correttamente
-    playWithWebAudio(notes,vol,ctx,md,lyrKar,progBar,totalDur,onEnd);
-  }
-
-  function singLyrics(md,lyrKar,bpm){
-    if(!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    var bpmVal=parseInt(bpm)||120;
-    var beatMs=60000/bpmVal;
-
-    // Costruisci lista frase→sezione
-    var phrases=[];
-    var struct=md.lyricsStructured||{};
-    var order=["VERSE1","CHORUS","VERSE2","CHORUS","BRIDGE","CHORUS"];
-    var sectionNames={VERSE1:"🎵 Strofa 1",CHORUS:"🎤 Ritornello",VERSE2:"🎵 Strofa 2",BRIDGE:"🌉 Bridge"};
-    order.forEach(function(sec){
-      if(!struct[sec]) return;
-      phrases.push({text:"— "+( sectionNames[sec]||sec)+" —",isHeader:true});
-      struct[sec].forEach(function(line){phrases.push({text:line,isHeader:false});});
-    });
-
-    // Fallback: split del testo piatto per righe
-    if(phrases.length<=2&&md.lyrics){
-      md.lyrics.split("\n").forEach(function(l){
-        if(l.trim()) phrases.push({text:l.trim(),isHeader:l.includes(":")&&l.length<30});
-      });
-    }
-
-    var idx=0;
-    var msPerPhrase=Math.max(1800, beatMs*4);
-
-    function singNext(){
-      if(idx>=phrases.length||!window.speechSynthesis){
-        lyrKar.innerHTML="🎵 <em>Canzone terminata</em>";return;
-      }
-      var ph=phrases[idx];idx++;
-
-      // Evidenzia nel karaoke
-      var html="";
-      phrases.forEach(function(p,i){
-        var cur=i===idx-1;
-        var past=i<idx-1;
-        if(p.isHeader){
-          html+="<span style='font-size:.75rem;color:#4a6080;display:block;margin-top:6px'>"+p.text+"</span>";
-        } else {
-          html+="<span style='"+(cur?"color:#00e5ff;font-weight:700;font-size:1rem;text-shadow:0 0 8px #00e5ff88"
-            :past?"color:#4a6080":"color:#7a9aaa")+";display:block;padding:1px 0'>"+p.text+"</span>";
-        }
-      });
-      lyrKar.innerHTML=html;
-      // Scroll alla riga corrente
-      var spans=lyrKar.querySelectorAll("span");
-      if(spans[idx-1]) spans[idx-1].scrollIntoView({block:"nearest",behavior:"smooth"});
-
-      if(!ph.isHeader){
-        var utt=new SpeechSynthesisUtterance(ph.text);
-        utt.lang="it-IT";utt.rate=0.82;utt.pitch=1.1;utt.volume=0.9;
-        // Seleziona voce italiana se disponibile
-        var voices=window.speechSynthesis.getVoices();
-        var itVoice=voices.find(function(v){return v.lang.startsWith("it")&&v.name.toLowerCase().includes("female");})
-          ||voices.find(function(v){return v.lang.startsWith("it");});
-        if(itVoice) utt.voice=itVoice;
-        utt.onend=function(){setTimeout(singNext,beatMs*0.5);};
-        utt.onerror=function(){setTimeout(singNext,msPerPhrase);};
-        window.speechSynthesis.speak(utt);
-      } else {
-        setTimeout(singNext,400);
-      }
-    }
-    // Aspetta che le voci siano caricate
-    if(window.speechSynthesis.getVoices().length===0){
-      window.speechSynthesis.onvoiceschanged=function(){singNext();};
-    } else { singNext(); }
-  }
-
-  /** Converte base64 in ArrayBuffer per Web Audio API */
-  function base64ToArrayBuffer(b64){
-    var bin=atob(b64), buf=new ArrayBuffer(bin.length), view=new Uint8Array(buf);
-    for(var i=0;i<bin.length;i++) view[i]=bin.charCodeAt(i);
-    return buf;
-  }
-
-  // Mantieni playSimpleTones per compatibilità con altri usi
   function playSimpleTones(abcText,ctx){
-    playWithWebAudio(parseABCtoFreqs(abcText,120),0.5,ctx,null,
-      document.createElement("div"),document.createElement("div"),15,null);
+    // Fallback Web Audio: suona toni semplici per 3 secondi
+    var freqs=[261,329,392,523,493,392,329,261,349,440,523,698,659,523,440,349];
+    freqs.forEach(function(f,i){
+      var osc=ctx.createOscillator();var g=ctx.createGain();
+      osc.connect(g);g.connect(ctx.destination);
+      osc.frequency.value=f;g.gain.setValueAtTime(0.3,ctx.currentTime+i*0.4);
+      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+i*0.4+0.35);
+      osc.start(ctx.currentTime+i*0.4);osc.stop(ctx.currentTime+i*0.4+0.4);
+    });
   }
 
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
