@@ -1419,7 +1419,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:_lockedMode||curMode||"auto",userEmail:window._loggedEmail||""})
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:_lockedMode||curMode||"auto",userEmail:window._loggedEmail||"",clientDate:new Date().toISOString()})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
