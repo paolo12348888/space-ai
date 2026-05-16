@@ -3545,6 +3545,216 @@ public class ChatController {
             "c2cd e2dc | B4 G4 | A2Bc d2e2 | G8 :|";
     }
 
+
+    // ════════════════════════════════════════════════════════════════════════
+    // REPLICATE MUSIC PIPELINE
+    // Step 1: MusicGen (Meta) → musica strumentale MP3 da prompt
+    // Step 2: Bark (Suno)     → voce cantata realistica MP3
+    // Step 3: Frontend        → sovrappone i due audio con Web Audio API
+    // Env richiesta: REPLICATE_API_TOKEN (da replicate.com/account/api-tokens)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /** Chiama Replicate e aspetta il risultato (polling fino a 120 sec) */
+    private String callReplicate(String model, Map<String,Object> input) throws Exception {
+        String token = env("REPLICATE_API_TOKEN", "");
+        if (token.isEmpty()) throw new IllegalStateException("REPLICATE_API_TOKEN non configurato");
+
+        String createUrl = "https://api.replicate.com/v1/predictions";
+        Map<String,Object> body = new LinkedHashMap<>();
+        body.put("version", model);
+        body.put("input", input);
+
+        var req = org.springframework.http.RequestEntity.post(new java.net.URI(createUrl))
+            .header("Authorization", "Bearer " + token)
+            .header("Content-Type", "application/json")
+            .body(MAPPER.writeValueAsString(body));
+
+        var resp = REST.exchange(req, String.class);
+        JsonNode node = MAPPER.readTree(resp.getBody());
+        String predId = node.path("id").asText();
+        String status  = node.path("status").asText();
+
+        // Polling ogni 3 secondi, max 40 tentativi (120 sec)
+        for (int i = 0; i < 40 && !status.equals("succeeded") && !status.equals("failed"); i++) {
+            Thread.sleep(3000);
+            var pollReq = org.springframework.http.RequestEntity.get(
+                new java.net.URI("https://api.replicate.com/v1/predictions/" + predId))
+                .header("Authorization", "Bearer " + token)
+                .build();
+            var pollResp = REST.exchange(pollReq, String.class);
+            JsonNode pNode = MAPPER.readTree(pollResp.getBody());
+            status = pNode.path("status").asText();
+            if (status.equals("succeeded")) {
+                JsonNode output = pNode.path("output");
+                // MusicGen ritorna stringa URL, Bark ritorna oggetto con audio_out
+                if (output.isTextual()) return output.asText();
+                if (output.has("audio_out")) return output.path("audio_out").asText();
+                if (output.isArray() && output.size() > 0) return output.get(0).asText();
+                return output.toString();
+            }
+            if (status.equals("failed")) {
+                throw new RuntimeException("Replicate prediction failed: " + pNode.path("error").asText());
+            }
+        }
+        throw new RuntimeException("Replicate timeout dopo 120 secondi");
+    }
+
+    /** Scarica un URL e ritorna i byte come base64 */
+    private String downloadAsBase64(String url) throws Exception {
+        byte[] bytes = REST.getForObject(url, byte[].class);
+        return bytes != null ? java.util.Base64.getEncoder().encodeToString(bytes) : "";
+    }
+
+    /**
+     * PIPELINE COMPLETA: Genera canzone con voce cantata + musica reale via Replicate
+     * 1. LLM → testo canzone + descrizione musicale
+     * 2. MusicGen → audio strumentale MP3
+     * 3. Bark → voce cantata MP3
+     * Ritorna entrambi i base64 + testo per il frontend
+     */
+    @PostMapping("/music/generate/ai")
+    public ResponseEntity<Object> musicGenerateAI(@RequestBody Map<String,String> body) {
+        String description = body.getOrDefault("description","").trim();
+        String genre       = body.getOrDefault("genre","pop");
+        String mood        = body.getOrDefault("mood","happy");
+        String tempo       = body.getOrDefault("tempo","120");
+        String sessionId   = body.getOrDefault("sessionId","global");
+        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY",""));
+        String model2      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+
+        if (description.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error","Descrizione obbligatoria"));
+
+        boolean hasReplicate = !env("REPLICATE_API_TOKEN","").isEmpty();
+        Map<String,Object> result = new LinkedHashMap<>();
+
+        try {
+            // ── STEP 1: LLM genera testo canzone + prompt musicale ──
+            String llmPrompt =
+                "Sei un compositore e paroliere italiano professionista.\n" +
+                "Crea una canzone su: " + description + "\n" +
+                "Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM\n\n" +
+                "Rispondi SOLO con questi tag:\n\n" +
+                "[TITLE]titolo breve e originale[/TITLE]\n\n" +
+                "[MUSIC_PROMPT]descrizione in inglese della musica per MusicGen, max 200 caratteri, " +
+                "specifica: strumenti, genere, BPM, atmosfera. Esempio: 'upbeat pop song with electric guitar, " +
+                "drums and bass, 120 BPM, energetic and catchy'[/MUSIC_PROMPT]\n\n" +
+                "[BARK_TEXT]testo da cantare, max 200 caratteri, scrivi [laughter] per risate, " +
+                "[clears throat] per effetti vocali. Solo il testo cantato principale.[/BARK_TEXT]\n\n" +
+                "[LYRICS]\n" +
+                "VERSE1:\nriga1|riga2|riga3|riga4\n" +
+                "CHORUS:\nriga1|riga2|riga3|riga4\n" +
+                "VERSE2:\nriga1|riga2|riga3|riga4\n" +
+                "[/LYRICS]\n\n" +
+                "[DESCRIPTION]descrizione poetica della canzone in italiano, 1-2 righe[/DESCRIPTION]";
+
+            String llmResp = callLLM(
+                "Sei un compositore musicale e paroliere. Rispondi sempre in formato strutturato.",
+                llmPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 2000);
+
+            String title       = extractTag(llmResp, "TITLE");
+            String musicPrompt = extractTag(llmResp, "MUSIC_PROMPT");
+            String barkText    = extractTag(llmResp, "BARK_TEXT");
+            String lyricsRaw   = extractTag(llmResp, "LYRICS");
+            String songDesc    = extractTag(llmResp, "DESCRIPTION");
+
+            if (title.isEmpty())    title = "Canzone - " + description.substring(0, Math.min(25, description.length()));
+            if (musicPrompt.isEmpty()) musicPrompt = genre + " song, " + mood + ", " + tempo + " BPM, with instruments";
+            if (barkText.isEmpty()) barkText = "♪ " + description + " ♪";
+
+            Map<String,List<String>> lyricsMap = parseLyricsStructured(lyricsRaw);
+            String lyricsFlat  = buildFlatLyrics(lyricsMap, lyricsRaw);
+
+            result.put("title",            title);
+            result.put("description",      songDesc.isEmpty() ? "Canzone " + genre + " su: " + description : songDesc);
+            result.put("lyrics",           lyricsFlat);
+            result.put("lyricsStructured", lyricsMap);
+            result.put("musicPrompt",      musicPrompt);
+            result.put("genre",            genre);
+            result.put("mood",             mood);
+            result.put("tempo",            tempo);
+
+            if (!hasReplicate) {
+                // Nessun token Replicate → ritorna solo testo + fallback Web Audio
+                result.put("status",       "text_only");
+                result.put("mode",         "fallback");
+                result.put("replicateConfigured", false);
+                result.put("message",      "Configura REPLICATE_API_TOKEN per la generazione audio AI reale");
+                return ResponseEntity.ok(result);
+            }
+
+            // ── STEP 2: MusicGen → musica strumentale ──
+            String musicAudioUrl = null;
+            try {
+                Map<String,Object> musicInput = new LinkedHashMap<>();
+                musicInput.put("prompt",           musicPrompt);
+                musicInput.put("model_version",    "stereo-large");
+                musicInput.put("output_format",    "mp3");
+                musicInput.put("normalization_strategy", "peak");
+                musicInput.put("duration",         30); // 30 secondi
+                // MusicGen versione stereo-large di Meta
+                musicAudioUrl = callReplicate(
+                    "671ac645ce5e552cc0f9ed4c5804efab5c8928045c13f7ebe6ec06e1af0bc7d6",
+                    musicInput);
+                log.info("MusicGen OK: {}", musicAudioUrl);
+            } catch (Exception me) {
+                log.warn("MusicGen failed: {}", me.getMessage());
+            }
+
+            // ── STEP 3: Bark → voce cantata ──
+            String vocalAudioUrl = null;
+            try {
+                Map<String,Object> barkInput = new LinkedHashMap<>();
+                barkInput.put("prompt",      barkText);
+                barkInput.put("text_temp",   0.7);
+                barkInput.put("waveform_temp", 0.7);
+                // Bark di suno-ai su Replicate
+                vocalAudioUrl = callReplicate(
+                    "b76242b40d67c76ab6742e987628a2a9ac019e11d56ab96c4e91ce03b79b2787",
+                    barkInput);
+                log.info("Bark OK: {}", vocalAudioUrl);
+            } catch (Exception be) {
+                log.warn("Bark failed: {}", be.getMessage());
+            }
+
+            // ── Scarica e converti in base64 ──
+            if (musicAudioUrl != null && !musicAudioUrl.isEmpty()) {
+                try {
+                    result.put("musicBase64", downloadAsBase64(musicAudioUrl));
+                    result.put("musicUrl",    musicAudioUrl);
+                } catch (Exception de) { log.warn("Download music failed: {}", de.getMessage()); }
+            }
+            if (vocalAudioUrl != null && !vocalAudioUrl.isEmpty()) {
+                try {
+                    result.put("vocalBase64", downloadAsBase64(vocalAudioUrl));
+                    result.put("vocalUrl",    vocalAudioUrl);
+                } catch (Exception de) { log.warn("Download vocal failed: {}", de.getMessage()); }
+            }
+
+            result.put("status",              "ok");
+            result.put("mode",                result.containsKey("musicBase64") ? "full_ai" : "text_only");
+            result.put("replicateConfigured", true);
+            result.put("hasSinging",          result.containsKey("vocalBase64"));
+            result.put("hasMusic",            result.containsKey("musicBase64"));
+            result.put("date",                today());
+
+            // Indicizza RAG
+            ragIndexDocument(sessionId + "/music_ai_" + System.currentTimeMillis(),
+                "Canzone AI: " + title + " | " + description + " | " + lyricsFlat);
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.warn("MusicGenerateAI error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of(
+                "error",   e.getMessage(),
+                "status",  "error",
+                "hint",    "Verifica REPLICATE_API_TOKEN su replicate.com/account/api-tokens"
+            ));
+        }
+    }
+
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
         String q = msg.toLowerCase();
@@ -3552,7 +3762,8 @@ public class ChatController {
                q.contains("scrivi una canzone") || q.contains("musica per") ||
                q.contains("genera musica") || q.contains("crea musica") ||
                q.contains("melodia") || q.contains("canzone su") ||
-               q.contains("music") || q.contains("song");
+               q.contains("canzone") || q.contains("music") || q.contains("song") ||
+               q.contains("canzone") || q.contains("brano") || q.contains("hit");
     }
 
     @PostMapping("/audio/generate")
@@ -4900,7 +5111,9 @@ public class ChatController {
                     musicBody.put("mood",   qlv.contains("triste")?"sad":qlv.contains("allegra")?"happy":
                         qlv.contains("romantica")?"romantic":qlv.contains("energica")?"energetic":"happy");
                     musicBody.put("tempo",  qlv.contains("lenta")?"70":qlv.contains("veloce")?"160":"120");
-                    ResponseEntity<Object> mResp = musicGenerate(musicBody);
+                    // Usa pipeline AI (Replicate) se token configurato, altrimenti fallback ABC
+                    ResponseEntity<Object> mResp = !env("REPLICATE_API_TOKEN","").isEmpty()
+                        ? musicGenerateAI(musicBody) : musicGenerate(musicBody);
                     Object mb = mResp.getBody();
                     Map<String,Object> mRespMap = new HashMap<>();
                     mRespMap.put("status","ok"); mRespMap.put("mode","music_gen");
