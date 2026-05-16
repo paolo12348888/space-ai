@@ -112,6 +112,16 @@ textarea::placeholder{color:var(--muted)}
   <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-basic-min.js"></script>
   <!-- Tone.js: sintesi audio avanzata per strumenti reali -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <script>
+    // Sopprime il banner decorativo di Tone.js dalla console
+    (function(){
+      var _log = console.log;
+      console.log = function(){
+        if(arguments[0] && typeof arguments[0]==='string' && arguments[0].indexOf('Tone.js')>=0) return;
+        _log.apply(console, arguments);
+      };
+    })();
+  </script>
 </head>
 <body>
 <div class="sb-ov" id="sbOv" onclick="closeSB()"></div>
