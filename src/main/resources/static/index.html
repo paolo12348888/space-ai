@@ -901,7 +901,7 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
-        // ── Music Gen v2 — Tone.js + Web Speech canto sincronizzato ──────
+        // ── Music Gen v2 — AI Pipeline (Replicate) + Fallback Web Audio ──
         if(data.mode==="music_gen"&&data.musicData){
           var md=data.musicData;
           // Messaggio intro
@@ -935,7 +935,12 @@ async function sendMsg(){
           lyrKar.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);"+
             "padding:10px 14px;border-radius:0 8px 8px 0;font-size:.9rem;min-height:60px;"+
             "margin-bottom:8px;white-space:pre-line;line-height:1.8";
-          lyrKar.innerHTML="🎤 <em>Premi Riproduci per ascoltare la canzone cantata...</em>";
+          var hasAI = md.mode==="full_ai"&&(md.musicBase64||md.vocalBase64);
+          lyrKar.innerHTML = hasAI
+            ? "🎵 <em>Canzone AI generata con Replicate! Premi ▶ per ascoltare.</em>"
+            : (md.replicateConfigured===false
+                ? "⚠️ <em>Replicate non configurato — uso sintesi browser. Aggiungi REPLICATE_API_TOKEN per musica AI reale.</em>"
+                : "🎤 <em>Premi Riproduci per ascoltare la canzone...</em>");
           mBub.appendChild(lyrKar);
 
           // ── Testo completo ──
@@ -1002,40 +1007,115 @@ async function sendMsg(){
 
           playBtn.onclick=function(){
             if(songCtx){try{songCtx.close();}catch(e){}}
+            if(window.speechSynthesis)window.speechSynthesis.cancel();
             songStopped=false;
             playBtn.innerHTML="⏳ Suonando...";
             playBtn.disabled=true;
             progBar.style.width="0%";
 
-            try{
-              songCtx=new (window.AudioContext||window.webkitAudioContext)();
-            }catch(e){
-              lyrKar.innerHTML="❌ Web Audio non disponibile in questo browser";
-              playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
-            }
-
             var vol=parseFloat(volSlider.value)||0.7;
             var bpm=parseInt(md.tempo)||120;
-            var abcSrc=abcText;
 
-            // ── Estrai frequenze dalla notazione ABC ──
-            var notes=parseABCtoFreqs(abcSrc,bpm);
-            var totalDur=notes.reduce(function(s,n){return s+n.dur;},0)||30;
+            // ════════════════════════════════════════════
+            // MODALITÀ 1: Audio AI reale (Replicate)
+            // ════════════════════════════════════════════
+            if(md.mode==="full_ai"&&(md.musicBase64||md.vocalBase64)){
+              try{
+                songCtx=new (window.AudioContext||window.webkitAudioContext)();
+              }catch(e){
+                lyrKar.innerHTML="❌ Web Audio non disponibile";
+                playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
+              }
+              lyrKar.innerHTML="🎵 <strong>"+( md.title||"Canzone")+"</strong><br><em>Riproduzione in corso...</em>";
 
-            // ── Suona melodia con Tone.js o Web Audio puro ──
-            if(typeof Tone!=="undefined"){
-              playWithTone(notes,bpm,vol,songCtx,md,lyrKar,progBar,totalDur,
-                function(){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;});
+              var tracksReady=0, totalTracks=0;
+              var musicBuf=null, vocalBuf=null;
+
+              function tryPlay(){
+                tracksReady++;
+                if(tracksReady<totalTracks)return;
+                // Entrambe le tracce pronte — sovrapponi
+                var maxDur=Math.max(
+                  musicBuf?musicBuf.duration:0,
+                  vocalBuf?vocalBuf.duration:0)||30;
+
+                var masterGain=songCtx.createGain();
+                masterGain.gain.value=vol;
+                masterGain.connect(songCtx.destination);
+
+                if(musicBuf){
+                  var mSrc=songCtx.createBufferSource();
+                  mSrc.buffer=musicBuf;
+                  var mGain=songCtx.createGain();
+                  mGain.gain.value=vocalBuf?0.6:1.0; // abbassa musica se c'è voce
+                  mSrc.connect(mGain);mGain.connect(masterGain);
+                  mSrc.start(0);
+                }
+                if(vocalBuf){
+                  var vSrc=songCtx.createBufferSource();
+                  vSrc.buffer=vocalBuf;
+                  var vGain=songCtx.createGain();
+                  vGain.gain.value=1.0;
+                  vSrc.connect(vGain);vGain.connect(masterGain);
+                  vSrc.start(0);
+                }
+
+                // Progress + karaoke
+                var elapsed=0;
+                var pi=setInterval(function(){
+                  if(songStopped){clearInterval(pi);return;}
+                  elapsed+=0.5;
+                  progBar.style.width=Math.min(100,(elapsed/maxDur)*100)+"%";
+                  if(elapsed>=maxDur){
+                    clearInterval(pi);
+                    playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;
+                    progBar.style.width="100%";
+                  }
+                },500);
+
+                // Karaoke sincrono
+                singLyrics(md,lyrKar,bpm);
+              }
+
+              // Decodifica musica
+              if(md.musicBase64){
+                totalTracks++;
+                var mBytes=base64ToArrayBuffer(md.musicBase64);
+                songCtx.decodeAudioData(mBytes,
+                  function(buf){musicBuf=buf;tryPlay();},
+                  function(e){log.warn&&console.warn("Music decode:",e);tryPlay();}
+                );
+              }
+              // Decodifica voce
+              if(md.vocalBase64){
+                totalTracks++;
+                var vBytes=base64ToArrayBuffer(md.vocalBase64);
+                songCtx.decodeAudioData(vBytes,
+                  function(buf){vocalBuf=buf;tryPlay();},
+                  function(e){console.warn("Vocal decode:",e);tryPlay();}
+                );
+              }
+              if(totalTracks===0){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;}
+
             } else {
+              // ════════════════════════════════════════════
+              // MODALITÀ 2: Fallback Web Audio + Speech
+              // ════════════════════════════════════════════
+              try{
+                songCtx=new (window.AudioContext||window.webkitAudioContext)();
+              }catch(e){
+                lyrKar.innerHTML="❌ Web Audio non disponibile";
+                playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
+              }
+              var notes=parseABCtoFreqs(abcText,bpm);
+              var totalDur=notes.reduce(function(s,n){return s+n.dur;},0)||25;
               playWithWebAudio(notes,vol,songCtx,md,lyrKar,progBar,totalDur,
                 function(){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;});
-            }
-
-            // ── Canta il testo con Web Speech API ──
-            if(md.lyrics&&typeof SpeechSynthesisUtterance!=="undefined"){
-              setTimeout(function(){
-                if(!songStopped) singLyrics(md,lyrKar,bpm);
-              },800);
+              if(md.lyrics&&typeof SpeechSynthesisUtterance!=="undefined"){
+                setTimeout(function(){
+                  if(!songStopped) singLyrics(md,lyrKar,bpm);
+                },600);
+              }
             }
           };
 
@@ -1713,6 +1793,13 @@ async function sendMsg(){
     if(window.speechSynthesis.getVoices().length===0){
       window.speechSynthesis.onvoiceschanged=function(){singNext();};
     } else { singNext(); }
+  }
+
+  /** Converte base64 in ArrayBuffer per Web Audio API */
+  function base64ToArrayBuffer(b64){
+    var bin=atob(b64), buf=new ArrayBuffer(bin.length), view=new Uint8Array(buf);
+    for(var i=0;i<bin.length;i++) view[i]=bin.charCodeAt(i);
+    return buf;
   }
 
   // Mantieni playSimpleTones per compatibilità con altri usi
