@@ -19,65 +19,14 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
-
-// ── Configurazione CORS production-safe ─────────────────────────────────────
-// ALLOWED_ORIGINS env var: lista separata da virgola delle origini permesse
-// Esempio: https://space-ai-940e.onrender.com,https://mio-dominio.com
-// Se non impostata → fallback a onrender.com (NON wildcard *)
-@org.springframework.context.annotation.Configuration
-class CorsConfig implements org.springframework.web.servlet.config.annotation.WebMvcConfigurer {
-    @Override
-    public void addCorsMappings(org.springframework.web.servlet.config.annotation.CorsRegistry registry) {
-        String originsEnv = System.getenv("ALLOWED_ORIGINS");
-        String[] origins;
-        if (originsEnv != null && !originsEnv.isBlank()) {
-            origins = originsEnv.split(",");
-        } else {
-            origins = new String[]{"https://space-ai-940e.onrender.com"};
-        }
-        registry.addMapping("/api/**")
-            .allowedOrigins(origins)
-            .allowedMethods("GET","POST","PUT","DELETE","OPTIONS")
-            .allowedHeaders("*")
-            .allowCredentials(false)
-            .maxAge(3600);
-    }
-}
-// ────────────────────────────────────────────────────────────────────────────
-
 @RestController
 @RequestMapping("/api")
+@CrossOrigin(origins = "*")
 public class ChatController {
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    // ── Account creatore: nessun rate limit, nessun circuit breaker ──────────
-    private static final String CREATOR_EMAIL = "elettronicmarket01@gmail.com";
-    // ────────────────────────────────────────────────────────────────────────
     private final AgentLoop agentLoop;
     private final RestTemplate restTemplate = new RestTemplate();
-
-    // ── RestTemplate dedicato ai provider LLM con timeout espliciti ─────────
-    private static final int LLM_CONNECT_TIMEOUT_MS = 8_000;   // 8s per aprire connessione
-    private static final int LLM_READ_TIMEOUT_MS    = 45_000;  // 45s per risposta completa
-    private static final int LLM_MAX_RETRIES        = 2;       // tentativi per provider
-    private static final long LLM_BACKOFF_BASE_MS   = 1_500;   // backoff: 1.5s, 3s
-
-    private final RestTemplate llmRestTemplate;
-    {
-        org.springframework.http.client.SimpleClientHttpRequestFactory f =
-            new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        f.setConnectTimeout(LLM_CONNECT_TIMEOUT_MS);
-        f.setReadTimeout(LLM_READ_TIMEOUT_MS);
-        llmRestTemplate = new RestTemplate(f);
-    }
-    // ── metriche per ogni provider ──────────────────────────────────────────
-    private final Map<String, AtomicInteger> providerSuccess = new ConcurrentHashMap<>(Map.of(
-        "groq", new AtomicInteger(0), "gemini", new AtomicInteger(0), "deepseek", new AtomicInteger(0)
-    ));
-    private final Map<String, AtomicInteger> providerFailure = new ConcurrentHashMap<>(Map.of(
-        "groq", new AtomicInteger(0), "gemini", new AtomicInteger(0), "deepseek", new AtomicInteger(0)
-    ));
-    // ────────────────────────────────────────────────────────────────────────
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, List<Map<String,String>>> neuralMemory = new ConcurrentHashMap<>();
     private final Map<String, Map<String,Object>> userProfiles = new ConcurrentHashMap<>();
@@ -87,37 +36,8 @@ public class ChatController {
     // Evita chiamate duplicate alla LLM per domande identiche
     // KNN Cache: ring buffer di 500 entry con embedding per similarità semantica
     private static class KnnCacheEntry {
-        final byte[] embedding; // INT4 quantizzato: float[512] → byte[256] (-75% RAM)
-        final float  embMin, embMax;
-        final String response;
-        final long   timestamp;
-
-        KnnCacheEntry(float[] e, String r) {
-            float mn = e[0], mx = e[0];
-            for (float v : e) { if (v < mn) mn = v; if (v > mx) mx = v; }
-            this.embMin = mn; this.embMax = mx;
-            float scale = (mx - mn) < 1e-8f ? 1f : (mx - mn) / 15f;
-            byte[] out = new byte[(e.length + 1) / 2];
-            for (int i = 0; i < e.length; i++) {
-                int q = Math.max(0, Math.min(15, Math.round((e[i] - mn) / scale)));
-                if (i % 2 == 0) out[i/2]  = (byte)(q << 4);
-                else             out[i/2] |= (byte)(q & 0x0F);
-            }
-            this.embedding = out;
-            this.response  = r;
-            this.timestamp = System.currentTimeMillis();
-        }
-
-        float[] dequantize() {
-            float scale = (embMax - embMin) < 1e-8f ? 1f : (embMax - embMin) / 15f;
-            float[] vec = new float[embedding.length * 2];
-            for (int i = 0; i < embedding.length; i++) {
-                vec[i*2]   = embMin + ((embedding[i] >> 4) & 0x0F) * scale;
-                if (i*2+1 < vec.length)
-                    vec[i*2+1] = embMin + (embedding[i] & 0x0F) * scale;
-            }
-            return vec;
-        }
+        final float[] embedding; final String response; final long timestamp;
+        KnnCacheEntry(float[] e, String r){ embedding=e; response=r; timestamp=System.currentTimeMillis(); }
     }
     private final KnnCacheEntry[] ringCache = new KnnCacheEntry[500];
     private final AtomicInteger   cacheIdx  = new AtomicInteger(0);
@@ -127,13 +47,8 @@ public class ChatController {
     private static final long CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuti
     private final AtomicInteger cacheHits = new AtomicInteger(0);
     private final Map<String, AtomicInteger> sessionRequests = new ConcurrentHashMap<>();
-    private final Map<String, Long>          sessionWindows  = new ConcurrentHashMap<>();
+    private final Map<String, Long> sessionWindows = new ConcurrentHashMap<>();
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
-
-    // Rate limiting per IP — più difficile da aggirare del solo sessionId
-    private final Map<String, AtomicInteger> ipRequests = new ConcurrentHashMap<>();
-    private final Map<String, Long>          ipWindows  = new ConcurrentHashMap<>();
-    private static final int MAX_REQUESTS_PER_MINUTE_IP = 60; // soglia IP più alta (può avere più sessioni)
     private final AtomicInteger failureCount = new AtomicInteger(0);
     private volatile long circuitOpenTime   = 0;
     // Rate limit tracker — 429 da Groq
@@ -149,8 +64,7 @@ public class ChatController {
     private final AtomicLong totalResponseTimeMs = new AtomicLong(0);
     // Simulazione qubit ispirata a Zuchongzhi/Jiuzhang
     private static final int QUBIT_COUNT = 32; // qubit simulati
-    // Ridotto da 2^16 (512KB) a 512 entries (4KB) — nessuna perdita funzionale
-    private final double[] quantumState = new double[512];
+    private final double[] quantumState = new double[1 << Math.min(QUBIT_COUNT, 16)]; // 2^16 stati
     private final Random quantumRng = new Random();
     private volatile boolean quantumInitialized = false;
     private void initQuantumState() {
@@ -347,29 +261,12 @@ public class ChatController {
     private final AtomicInteger               docCount  = new AtomicInteger(0);
 
     private static class RagChunk {
-        final String  docId;
-        final String  text;        // testo del chunk (o caption per immagini)
-        final float[] embedding;
-        final int     chunkIndex;
-        final long    timestamp;
-        // Campi multimodali (null per chunk testuali)
-        final String  imageBase64; // null se chunk testuale
-        final String  imageType;   // "image/jpeg", "image/png", null se testuale
-
-        // Costruttore testo (compatibile con codice esistente)
+        final String docId; final String text; final float[] embedding;
+        final int chunkIndex; final long timestamp;
         RagChunk(String docId, String text, float[] embedding, int chunkIndex) {
             this.docId=docId; this.text=text; this.embedding=embedding;
             this.chunkIndex=chunkIndex; this.timestamp=System.currentTimeMillis();
-            this.imageBase64=null; this.imageType=null;
         }
-        // Costruttore immagine
-        RagChunk(String docId, String caption, float[] embedding,
-                 int chunkIndex, String imageBase64, String imageType) {
-            this.docId=docId; this.text=caption; this.embedding=embedding;
-            this.chunkIndex=chunkIndex; this.timestamp=System.currentTimeMillis();
-            this.imageBase64=imageBase64; this.imageType=imageType;
-        }
-        boolean isImage() { return imageBase64 != null; }
     }
 
     private List<String> tokenize(String text) {
@@ -443,81 +340,6 @@ public class ChatController {
         log.info("RAG indexed: docId={} chunks={} vocab={}", docId, chunks.size(), vocabSize.get());
         return chunks.size();
     }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // MULTIMODAL RAG — indicizzazione e retrieval di immagini
-    // Strategia: genera caption LLM → embed caption → salva con imageBase64
-    // Nessuna dipendenza esterna (CLIP non richiesto)
-    // ════════════════════════════════════════════════════════════════════════
-
-    // Indicizza un'immagine nel RAG: genera caption → embed → salva chunk
-    private void ragIndexImage(String docId, String imageBase64, String imageType,
-                                String contextHint,
-                                String baseUrl, String apiKey, String model) {
-        try {
-            // Genera caption dell'immagine tramite LLM vision
-            String caption = analyzeImageBase64(imageBase64,
-                "Descrivi questa immagine in dettaglio in italiano: " +
-                "oggetti presenti, colori, composizione, testo visibile, contesto. " +
-                (contextHint != null ? "Contesto: " + contextHint : ""),
-                baseUrl, apiKey, model);
-            if (caption == null || caption.isBlank()) return;
-
-            // Embed la caption (testo) — stesso spazio vettoriale dei chunk testuali
-            float[] embedding = embed(caption);
-            List<RagChunk> chunks = ragStore.computeIfAbsent(docId, k -> new ArrayList<>());
-            int idx = chunks.size();
-            chunks.add(new RagChunk(docId, caption, embedding, idx, imageBase64, imageType));
-            log.info("Multimodal RAG: immagine indicizzata docId={} captionLen={}",
-                docId, caption.length());
-        } catch (Exception e) {
-            log.warn("ragIndexImage fallito: {}", e.getMessage());
-        }
-    }
-
-    // Retrieval unificato testo+immagini — restituisce oggetto con chunks misti
-    private static class RagResult {
-        final String textContext;
-        final List<RagChunk> imageChunks; // chunk immagine rilevanti
-        RagResult(String textContext, List<RagChunk> imageChunks) {
-            this.textContext = textContext;
-            this.imageChunks = imageChunks;
-        }
-    }
-
-    private RagResult ragRetrieveMultimodal(String query, String sessionId) {
-        if (ragStore.isEmpty()) return new RagResult("", new ArrayList<>());
-        float[] qEmb = embed(query);
-        List<double[]> scored = new ArrayList<>();
-        List<RagChunk> all = new ArrayList<>();
-        for (Map.Entry<String, List<RagChunk>> e : ragStore.entrySet()) {
-            boolean isSession = e.getKey().startsWith(sessionId);
-            for (RagChunk c : e.getValue()) {
-                double sim = cosineSimilarity(qEmb, c.embedding) + (isSession ? 0.1 : 0);
-                if (sim >= SIM_THRESHOLD) {
-                    scored.add(new double[]{sim, all.size()});
-                }
-                all.add(c);
-            }
-        }
-        scored.sort((a,b) -> Double.compare(b[0], a[0]));
-        StringBuilder textSb = new StringBuilder();
-        List<RagChunk> imgChunks = new ArrayList<>();
-        int textCount = 0, imgCount = 0;
-        for (double[] s : scored) {
-            RagChunk c = all.get((int)s[1]);
-            if (c.isImage()) {
-                if (imgCount < 2) { imgChunks.add(c); imgCount++; } // max 2 immagini
-            } else {
-                if (textCount < RAG_TOP_K) {
-                    textSb.append(c.text).append("\n---\n");
-                    textCount++;
-                }
-            }
-        }
-        return new RagResult(textSb.toString().trim(), imgChunks);
-    }
-    // ════════════════════════════════════════════════════════════════════════
 
     private String ragRetrieve(String query, String sessionId) {
         if (ragStore.isEmpty()) return "";
@@ -662,8 +484,8 @@ public class ChatController {
         if (bloomMightContain(normalized)) return;
         bloomAdd(normalized);
         List<String> ltm = longTermMemory.computeIfAbsent(sessionId, k -> new ArrayList<>());
-        if (fact.length() > 50 && ltm.size() < 50 && !ltm.contains(fact)) {
-            String stored = fact.substring(0, Math.min(150, fact.length()));
+        if (fact.length() > 50 && ltm.size() < 100 && !ltm.contains(fact)) {
+            String stored = fact.substring(0, Math.min(200, fact.length()));
             ltm.add(stored);
             // Aggiorna vocabolario embedding con il nuovo fatto
             updateVocab(tokenize(stored));
@@ -1444,109 +1266,34 @@ public class ChatController {
         return ctx.toString().replaceAll(" · $", "").trim();
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // PROMPT CACHING — cache della parte statica del system prompt
-    // Riduce token ripetuti per sessione (~60-70% del system prompt è statico)
-    // ════════════════════════════════════════════════════════════════════════
-    // Cache: hash(staticPart) → staticPart già costruita
-    private final Map<String, String> promptStaticCache = new ConcurrentHashMap<>();
-    private static final int PROMPT_CACHE_MAX = 50;   // max sessioni in cache
-    private static final long PROMPT_CACHE_TTL = 300_000L; // 5 minuti
-    private final Map<String, Long> promptCacheTimestamps = new ConcurrentHashMap<>();
-
-    // Parte STATICA del system prompt (uguale per tutte le query della stessa sessione)
-    private String buildStaticSystemPrompt(String mode) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata al mondo. Data OGGI: ")
-          .append(today()).append(".\n");
-        sb.append("IMPORTANTE - La tua conoscenza base arriva fino a ").append(KNOWLEDGE_CUTOFF)
-          .append(". Per il ").append(CURRENT_DATE_CONTEXT)
-          .append(" e eventi recenti, hai gia eseguito una ricerca web - usa quei dati.\n");
-        sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ")
-          .append("knowledge graph, LTM, ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
-        sb.append("Modalita: ").append(mode).append(".\n");
-        sb.append("Rispondi in italiano con markdown. Sii preciso e coerente con le conversazioni precedenti.\n");
-        return sb.toString();
-    }
-
-    // Parte DINAMICA (cambia ad ogni query: memoria, RAG, emozione)
-    private String buildDynamicSystemPrompt(String sessionId, String query) {
-        StringBuilder sb = new StringBuilder();
+    private String buildSystemPrompt(String mode, String sessionId, String query) {
         String kgTop   = getTopKGConcepts(sessionId);
         String emotion = emotionState.getOrDefault(sessionId, "neutral");
-        int    ltmSize = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
-        sb.append("Knowledge graph: ").append(knowledgeGraph.size())
-          .append(" nodi, LTM: ").append(ltmSize).append(" fatti.\n");
+        int ltmSize    = longTermMemory.getOrDefault(sessionId, new ArrayList<>()).size();
+        int kgSize     = knowledgeGraph.size();
+        StringBuilder sb = new StringBuilder();
+        sb.append("Sei SPACE AI v4.0, la piattaforma AI piu avanzata al mondo. Data OGGI: ").append(today()).append(".\n");
+        sb.append("IMPORTANTE - La tua conoscenza base (da Llama) arriva fino a ").append(KNOWLEDGE_CUTOFF).append(". ");
+        sb.append("Per tutto cio che riguarda il ").append(CURRENT_DATE_CONTEXT).append(" e eventi recenti, ");
+        sb.append("hai gia eseguito una ricerca web aggiornata - usa quei dati come fonte primaria.\n");
+        sb.append("Possiedi: rete neurale autonoma, motore quantistico 32 qubit, ");
+        sb.append("knowledge graph ").append(kgSize).append(" nodi, LTM ").append(ltmSize).append(" fatti, ");
+        sb.append("ricerca web in tempo reale (Tavily + DuckDuckGo).\n");
+        // MSA UNIFICATO: unico meccanismo di retrieval — aggrega tutto
         String msaMem = msaRetrieveUnified(query, sessionId);
         if (!msaMem.isEmpty())
             sb.append("MEMORIA ATTIVA (MSA): ").append(msaMem).append("\n");
+        // RAG: contesto dai documenti indicizzati
         String ragCtx = ragRetrieve(query, sessionId);
-        if (!ragCtx.isEmpty()) sb.append(ragCtx);
-        if (!kgTop.isEmpty()) sb.append("CONCETTI KG: ").append(kgTop).append("\n");
-        sb.append("Emozione utente: ").append(emotion).append(".\n");
+        if (!ragCtx.isEmpty())
+            sb.append(ragCtx);
+        if (!kgTop.isEmpty())
+            sb.append("CONCETTI KG: ").append(kgTop).append("\n");
+        sb.append("Emozione utente rilevata: ").append(emotion).append(".\n");
+        sb.append("Modalita: ").append(mode).append(".\n");
+        sb.append("Usa la tua memoria per essere coerente con le conversazioni precedenti. ");
+        sb.append("Rispondi in italiano con markdown. Sii preciso, autonomo e cosciente della tua architettura.");
         return sb.toString();
-    }
-
-    // Recupera il prefisso statico dalla cache (o lo costruisce)
-    private String getCachedStaticPrompt(String mode) {
-        String cacheKey = "static_" + mode + "_" + today();
-        long now = System.currentTimeMillis();
-        Long ts = promptCacheTimestamps.get(cacheKey);
-        if (ts != null && now - ts < PROMPT_CACHE_TTL && promptStaticCache.containsKey(cacheKey)) {
-            return promptStaticCache.get(cacheKey); // HIT
-        }
-        // MISS — costruisce e salva
-        String staticPart = buildStaticSystemPrompt(mode);
-        if (promptStaticCache.size() >= PROMPT_CACHE_MAX) {
-            // evict entry più vecchia
-            promptCacheTimestamps.entrySet().stream()
-                .min(Map.Entry.comparingByValue())
-                .ifPresent(e -> { promptStaticCache.remove(e.getKey());
-                                  promptCacheTimestamps.remove(e.getKey()); });
-        }
-        promptStaticCache.put(cacheKey, staticPart);
-        promptCacheTimestamps.put(cacheKey, now);
-        return staticPart;
-    }
-    // ════════════════════════════════════════════════════════════════════════
-
-    private String buildSystemPrompt(String mode, String sessionId, String query) {
-        // ── Modalità SPACES: risposta vocale stile Alexa/Google ──────────────
-        if ("spaces".equals(mode) || query.startsWith("[SPACES_VOICE_MODE]")) {
-            return buildSpacesVoicePrompt(sessionId, query);
-        }
-        // Parte statica (cachata) + parte dinamica (fresca ogni query)
-        return getCachedStaticPrompt(mode) + buildDynamicSystemPrompt(sessionId, query);
-    }
-
-    // System prompt dedicato per SPACES — risposte brevi, naturali, parlate
-    private String buildSpacesVoicePrompt(String sessionId, String query) {
-        String emotion = emotionState.getOrDefault(sessionId, "neutral");
-        String msaMem  = msaRetrieveUnified(query.replace("[SPACES_VOICE_MODE]","").trim(), sessionId);
-
-        return "Sei SPACE AI in modalità vocale assistente, come Alexa o Google Assistant.\n\n" +
-               "REGOLE FONDAMENTALI PER LA RISPOSTA VOCALE:\n" +
-               "1. Rispondi in modo NATURALE e CONVERSAZIONALE — come parlerebbe una persona\n" +
-               "2. Massimo 2-3 frasi per risposta semplice, 5 per risposta complessa\n" +
-               "3. ZERO markdown: niente **, ##, -, *, backtick, tabelle, elenchi puntati\n" +
-               "4. ZERO introduzioni tipo 'Certo!', 'Assolutamente!', 'Ottima domanda!'\n" +
-               "5. VAI DIRETTO alla risposta — come fa Alexa\n" +
-               "6. Se è una domanda semplice → risposta in 1 frase\n" +
-               "7. Se chiede di fare qualcosa → conferma brevemente cosa stai facendo\n" +
-               "8. Usa il nome dell'utente se lo conosci\n" +
-               "9. Parla in prima persona, tono amichevole e diretto\n" +
-               "10. Se non sai qualcosa → dillo chiaramente in una frase\n\n" +
-               "ESEMPI CORRETTI:\n" +
-               "Domanda: 'che ore sono?' → 'Sono le tre e mezza del pomeriggio.'\n" +
-               "Domanda: 'com'è il tempo a Roma?' → 'A Roma oggi ci sono 22 gradi e cielo sereno.'\n" +
-               "Domanda: 'genera un immagine di un tramonto' → 'Sto generando l immagine del tramonto.'\n" +
-               "Domanda: 'chi ha vinto la Champions?' → 'Il Real Madrid ha vinto la Champions League.'\n\n" +
-               "ESEMPI SBAGLIATI (da evitare):\n" +
-               "❌ 'Certo! Ecco alcune informazioni: **Roma** è...'\n" +
-               "❌ 'Assolutamente! Analizziamo insieme questo argomento...'\n" +
-               "❌ Risposta con liste puntate o tabelle\n\n" +
-               "Emozione rilevata: " + emotion + ". Adatta il tono di conseguenza.\n" +
-               (msaMem.isEmpty() ? "" : "Ricordi utili: " + msaMem.substring(0, Math.min(200, msaMem.length())) + "\n");
     }
     // Calcola reward basato su lunghezza risposta e interazione
     private double computeReward(String query, String response, String agent) {
@@ -1644,6 +1391,7 @@ public class ChatController {
         this.agentLoop = agentLoop;
         initQuantumState();
         loadBrainState();
+        // Fix 3: Assicura collection Qdrant all'avvio
         if (qdrantEnabled()) {
             qdrantEnsureCollection();
             log.info("Qdrant collection verificata: {}", QDRANT_COLLECTION);
@@ -1652,68 +1400,6 @@ public class ChatController {
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
             this::cleanExpiredCache, 10, 10, java.util.concurrent.TimeUnit.MINUTES);
     }
-
-    // ── VALIDAZIONE ENV ALL'AVVIO ─────────────────────────────────────────
-    @jakarta.annotation.PostConstruct
-    public void validateEnvOnStartup() {
-        log.info("=== SPACE AI — Validazione environment ===");
-        // Il sistema usa AI_API_KEY come chiave principale (compatibile con Groq/OpenAI)
-        boolean hasAiKey     = !env("AI_API_KEY","").isEmpty();
-        boolean hasGroq      = !env("AI_API_KEY", env("GROQ_API_KEY","")).isEmpty();
-        boolean hasGemini    = !env("GEMINI_API_KEY","").isEmpty();
-        boolean hasDeepSeek  = !env("DEEPSEEK_API_KEY","").isEmpty();
-
-        if (!hasAiKey && !hasGroq && !hasGemini && !hasDeepSeek) {
-            log.error("CRITICO: Nessun provider LLM configurato! Imposta AI_API_KEY o GROQ_API_KEY");
-        } else {
-            if (hasAiKey)    log.info("  ✅ AI_API_KEY             presente (provider principale)");
-            if (hasGroq)     log.info("  ✅ GROQ_API_KEY           presente");
-            if (hasGemini)   log.info("  ✅ GEMINI_API_KEY         presente");
-            if (hasDeepSeek) log.info("  ✅ DEEPSEEK_API_KEY       presente");
-        }
-        // Opzionali
-        if (!env("AI_BASE_URL","").isEmpty())
-            log.info("  ✅ AI_BASE_URL            = {}", env("AI_BASE_URL",""));
-        if (!env("AI_MODEL","").isEmpty())
-            log.info("  ✅ AI_MODEL               = {}", env("AI_MODEL",""));
-        if (env("SUPABASE_URL","").isEmpty())
-            log.warn("  ⚠️  SUPABASE_URL           non configurata (storico chat disabilitato)");
-        else
-            log.info("  ✅ SUPABASE_URL           presente");
-        if (env("TAVILY_API_KEY","").isEmpty())
-            log.warn("  ⚠️  TAVILY_API_KEY         non configurata (web search ridotta)");
-        else
-            log.info("  ✅ TAVILY_API_KEY         presente");
-        if (env("ELEVENLABS_API_KEY","").isEmpty())
-            log.warn("  ⚠️  ELEVENLABS_API_KEY     non configurata (TTS qualità ridotta)");
-        if (env("PISTON_URL","").isEmpty())
-            log.warn("  ⚠️  PISTON_URL             non configurata (esecuzione codice disabilitata)");
-        String origins = env("ALLOWED_ORIGINS","");
-        if (origins.isEmpty())
-            log.warn("  ⚠️  ALLOWED_ORIGINS        non configurata — uso fallback onrender.com");
-        else
-            log.info("  ✅ ALLOWED_ORIGINS        = {}", origins);
-        log.info("==========================================");
-    }
-    // ─────────────────────────────────────────────────────────────────────
-    // ── Helper: shutdown graceful di un ExecutorService ──────────────────
-    private void shutdownExecutor(String name, java.util.concurrent.ExecutorService ex) {
-        if (ex == null || ex.isShutdown()) return;
-        ex.shutdown();
-        try {
-            if (!ex.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                ex.shutdownNow();
-                log.warn("{} forzato dopo timeout", name);
-            } else {
-                log.info("{} chiuso correttamente", name);
-            }
-        } catch (InterruptedException ie) {
-            ex.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
-    // ─────────────────────────────────────────────────────────────────────
-
     private String getCached(String key) {
         // 1. KNN semantica (soglia alta = quasi identico)
         String knn = knnCacheGet(key);
@@ -1733,7 +1419,7 @@ public class ChatController {
         knnCachePut(key, value);  // salva nel ring buffer KNN
         responseCache.put(key, value);
         cacheTimestamps.put(key, System.currentTimeMillis());
-        if (responseCache.size() > 100) cleanExpiredCache();
+        if (responseCache.size() > 500) cleanExpiredCache();
     }
     private String knnCacheGet(String query) {
         float[] qv = embed(query);
@@ -1741,7 +1427,7 @@ public class ChatController {
         for (KnnCacheEntry e : ringCache) {
             if (e == null) continue;
             if (System.currentTimeMillis() - e.timestamp > 1_800_000) continue; // 30 min TTL
-            double sim = cosineSimilarity(qv, e.dequantize());
+            double sim = cosineSimilarity(qv, e.embedding);
             if (sim > bestSim && sim > 0.92) { bestSim = sim; bestResp = e.response; }
         }
         if (bestResp != null) log.debug("KNN cache hit sim={}", String.format("%.3f", bestSim));
@@ -1769,35 +1455,6 @@ public class ChatController {
         int reqs = sessionRequests.computeIfAbsent(sessionId, k -> new AtomicInteger(0)).incrementAndGet();
         return reqs > MAX_REQUESTS_PER_MINUTE;
     }
-
-    // Rate limiting per IP — resiste al cambio di sessionId
-    private boolean isIpRateLimited(jakarta.servlet.http.HttpServletRequest request) {
-        String ip = extractClientIp(request);
-        if (ip == null || ip.isBlank()) return false; // se non riusciamo a leggere l'IP, non blocchiamo
-        long now = System.currentTimeMillis();
-        Long window = ipWindows.get(ip);
-        if (window == null || now - window > 60000) {
-            ipWindows.put(ip, now);
-            ipRequests.put(ip, new AtomicInteger(0));
-        }
-        int reqs = ipRequests.computeIfAbsent(ip, k -> new AtomicInteger(0)).incrementAndGet();
-        if (reqs > MAX_REQUESTS_PER_MINUTE_IP) {
-            log.warn("IP rate limit superato: {} ({} req/min)", ip, reqs);
-            return true;
-        }
-        return false;
-    }
-
-    // Estrae l'IP reale considerando proxy/load balancer (X-Forwarded-For)
-    private String extractClientIp(jakarta.servlet.http.HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim(); // primo IP della catena = client reale
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (realIp != null && !realIp.isBlank()) return realIp.trim();
-        return request.getRemoteAddr();
-    }
     private boolean isCircuitOpen() {
         if (failureCount.get() < FAILURE_THRESHOLD) return false;
         long now = System.currentTimeMillis();
@@ -1806,32 +1463,6 @@ public class ChatController {
             return false;
         }
         return true;
-    }
-    // circuit breaker per provider singolo — true se quel provider va evitato
-    private final Map<String, Long>    providerCircuitOpenTime = new ConcurrentHashMap<>();
-    private final Map<String, Integer> providerCircuitFails    = new ConcurrentHashMap<>();
-    private static final int  PROVIDER_FAIL_THRESHOLD = 3;
-    private static final long PROVIDER_CIRCUIT_RESET_MS = 60_000; // 1 minuto
-
-    private boolean isProviderCircuitOpen(String provider) {
-        int fails = providerCircuitFails.getOrDefault(provider, 0);
-        if (fails < PROVIDER_FAIL_THRESHOLD) return false;
-        long openTime = providerCircuitOpenTime.getOrDefault(provider, 0L);
-        if (System.currentTimeMillis() - openTime > PROVIDER_CIRCUIT_RESET_MS) {
-            providerCircuitFails.put(provider, 0); // reset
-            return false;
-        }
-        return true;
-    }
-    private void recordProviderFailure(String provider) {
-        int fails = providerCircuitFails.merge(provider, 1, Integer::sum);
-        if (fails >= PROVIDER_FAIL_THRESHOLD) {
-            providerCircuitOpenTime.put(provider, System.currentTimeMillis());
-            log.warn("Circuit breaker APERTO per provider: {} dopo {} fallimenti", provider, fails);
-        }
-    }
-    private void recordProviderSuccess(String provider) {
-        providerCircuitFails.put(provider, 0);
     }
     private void recordSuccess() { failureCount.set(0); }
     private void recordFailure() {
@@ -1844,49 +1475,18 @@ public class ChatController {
     private int estimateTokens(String text) {
         return text == null ? 0 : text.split("\\s+").length * 4 / 3;
     }
-    // ── Data contestuale: usa quella inviata dal client (browser dell'utente)
-    //    per evitare sfasamenti dovuti al fuso UTC del server Render.
-    //    Se il client non la invia, fallback a LocalDateTime.now() server-side.
-    private static final ThreadLocal<String> CLIENT_DATE_OVERRIDE = new ThreadLocal<>();
-
-    /** Imposta la data del client per la durata della richiesta corrente. */
-    private void setClientDate(String isoDateFromBrowser) {
-        if (isoDateFromBrowser != null && !isoDateFromBrowser.isBlank()) {
-            try {
-                java.time.ZonedDateTime zdt = java.time.ZonedDateTime.parse(isoDateFromBrowser);
-                String formatted = zdt.format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
-                CLIENT_DATE_OVERRIDE.set(formatted);
-            } catch (Exception e) {
-                // formato non riconosciuto → ignora, userà server time
-                CLIENT_DATE_OVERRIDE.remove();
-            }
-        } else {
-            CLIENT_DATE_OVERRIDE.remove();
-        }
-    }
-
-    /** Pulisce il thread-local alla fine della richiesta. */
-    private void clearClientDate() {
-        CLIENT_DATE_OVERRIDE.remove();
-    }
-
     private String today() {
-        String override = CLIENT_DATE_OVERRIDE.get();
-        if (override != null) return override;
-        // Fallback: orario server con fuso Europe/Rome
-        return LocalDateTime.now(java.time.ZoneId.of("Europe/Rome"))
-            .format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
+        return LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
     }
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
 
     // ── PERSISTENZA BRAIN STATE ───────────────────────────────────
     @jakarta.annotation.PreDestroy
     public void saveBrainState() {
-        // Shutdown graceful di TUTTI gli executor
-        log.info("SPACE AI shutdown — chiusura executor...");
-        shutdownExecutor("rlhfExecutor",    rlhfExecutor);
-        shutdownExecutor("mainExecutor",    executor);
-        log.info("Executor chiusi. Salvataggio brain state...");
+        // Fix 4: Shutdown RLHF executor
+        rlhfExecutor.shutdown();
+        try { rlhfExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
         try {
             com.fasterxml.jackson.databind.node.ObjectNode state = MAPPER.createObjectNode();
             com.fasterxml.jackson.databind.node.ObjectNode wNode = MAPPER.createObjectNode();
@@ -2001,62 +1601,6 @@ public class ChatController {
         if (profile.containsKey("style")) ctx.append("Preferisce risposte: ").append(profile.get("style")).append(". ");
         return ctx.toString();
     }
-    // Ritorna risultati web con metadati per citazioni in-line
-    private List<Map<String,String>> searchWebWithSources(String query) {
-        List<Map<String,String>> sources = new ArrayList<>();
-        String key = env("TAVILY_API_KEY", "");
-        if (key.isEmpty()) return sources;
-        try {
-            ObjectNode req = MAPPER.createObjectNode();
-            req.put("api_key", key); req.put("query", query);
-            req.put("search_depth", "advanced"); req.put("max_results", 5);
-            req.put("include_answer", true);
-            HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
-            ResponseEntity<String> resp = restTemplate.postForEntity(
-                "https://api.tavily.com/search",
-                new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
-            JsonNode json = MAPPER.readTree(resp.getBody());
-            // Risposta sintetica come fonte [0]
-            if (json.has("answer") && !json.path("answer").asText().isBlank()) {
-                Map<String,String> ans = new LinkedHashMap<>();
-                ans.put("index", "0"); ans.put("title", "Sintesi Tavily");
-                ans.put("url", ""); ans.put("content", json.path("answer").asText());
-                sources.add(ans);
-            }
-            JsonNode results = json.path("results");
-            if (results.isArray()) {
-                int i = 1;
-                for (JsonNode r : results) {
-                    Map<String,String> src = new LinkedHashMap<>();
-                    src.put("index", String.valueOf(i++));
-                    src.put("title",   r.path("title").asText());
-                    src.put("url",     r.path("url").asText());
-                    String c = r.path("content").asText();
-                    src.put("content", c.substring(0, Math.min(300, c.length())));
-                    sources.add(src);
-                }
-            }
-        } catch (Exception e) { log.warn("Tavily sources: {}", e.getMessage()); }
-        return sources;
-    }
-
-    // Costruisce contesto con citazioni numerate per il LLM
-    private String buildCitationContext(List<Map<String,String>> sources) {
-        if (sources.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder("FONTI DISPONIBILI (usa [n] per citare):\n\n");
-        for (Map<String,String> s : sources) {
-            if (s.get("index").equals("0")) continue;
-            sb.append("[").append(s.get("index")).append("] ")
-              .append(s.get("title")).append("\n")
-              .append("   ").append(s.get("content")).append("\n")
-              .append("   URL: ").append(s.get("url")).append("\n\n");
-        }
-        sb.append("\nISTRUZIONI: Nella tua risposta cita le fonti con [1], [2], ecc. " +
-                  "Es: 'Secondo [1], il PIL italiano è cresciuto del 2%.' " +
-                  "Alla fine elenca le fonti usate come: **Fonti:** [1] titolo - url");
-        return sb.toString();
-    }
-
     private String searchWeb(String query) {
         String key = env("TAVILY_API_KEY", "");
         if (key.isEmpty()) return null;
@@ -2131,16 +1675,18 @@ public class ChatController {
     }
 
     // Decide se usare Agent Loop (query complesse multi-step)
-    // NON chiamare se il frontend ha già una mode specifica — gestito nel dispatch
     private boolean needsAgentLoop(String msg) {
         String q = msg.toLowerCase();
-        // Soglia alzata a 80 char: evita di intercettare domande semplici
-        if (q.length() > 80 &&
-            (q.contains("analizza e") || q.contains("confronta e") ||
-             q.contains("cerca e poi") || q.contains("esegui e"))) return true;
-        // Solo keyword esplicitamente multi-step — NON "video", "codice", "scrivi" ecc.
-        return q.contains("agent loop") || q.contains("multi-step") ||
-               q.contains("step by step autonomo") || q.contains("esegui in sequenza");
+        // Soglia 40 char: query lunghe sono quasi sempre multi-step
+        if (q.length() > 40) return true;
+        // Keyword espliciti anche per query brevi
+        return q.contains("analizza") || q.contains("confronta") || q.contains("compara") ||
+               q.contains("cerca") || q.contains("codice") || q.contains("programma") ||
+               q.contains("report") || q.contains("articolo") || q.contains("github") ||
+               q.contains("naviga") || q.contains("video") || q.contains("esegui") ||
+               q.contains("calcola") || q.contains("sviluppa") || q.contains("scrivi") ||
+               q.contains("riassumi") || q.contains("spiega") || q.contains("dimmi") ||
+               q.contains("trova") || q.contains("cerca e") || q.contains("leggi");
     }
 
     // Cerca su web — pipeline: Tavily → SerpAPI/Google → DuckDuckGo
@@ -3054,9 +2600,9 @@ public class ChatController {
         String goal      = ((String) body.getOrDefault("goal","")).trim();
         String context   = body.getOrDefault("context","");   // contesto aziendale opzionale
         String sessionId = body.getOrDefault("sessionId","global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Goal obbligatorio"));
 
@@ -3246,9 +2792,9 @@ public class ChatController {
     public ResponseEntity<Object> manusCreateTask(@RequestBody Map<String,String> body) {
         String goal      = ((String) body.getOrDefault("goal", "")).trim();
         String sessionId = body.getOrDefault("sessionId", "global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Fornisci un goal"));
 
@@ -3339,12 +2885,12 @@ public class ChatController {
             "\"tool\":\"web_search\", \"params\":\"...\"}]}\n\n" +
             "OBIETTIVO: " + task.goal;
 
-        String planJson = callLLMJson("Sei un pianificatore JSON. Rispondi SOLO con JSON valido.",
+        String planJson = callLLM("Sei un pianificatore JSON. Rispondi SOLO con JSON valido.",
             planPrompt, new ArrayList<>(), baseUrl, apiKey, model, 1500);
 
         // Parse JSON subtasks
         try {
-            String cleaned = planJson; // già validato da callLLMJson
+            String cleaned = planJson.replaceAll("```json","").replaceAll("```","").trim();
             JsonNode plan = MAPPER.readTree(cleaned);
             JsonNode subs = plan.path("subtasks");
             if (subs.isArray()) {
@@ -3511,42 +3057,6 @@ public class ChatController {
         runtimes.put("cpp",        new String[]{"c++",        "10.2.0"});
         runtimes.put("c",          new String[]{"c",          "10.2.0"});
 
-        // ── Wrapper per Python: intercetta matplotlib e PIL per output IMAGE_B64 ──
-        if (language.equals("python")) {
-            String plotWrapper =
-                "import sys, io, base64\n" +
-                "try:\n" +
-                "    import matplotlib\n" +
-                "    matplotlib.use('Agg')  # backend non-interattivo\n" +
-                "    import matplotlib.pyplot as _plt_orig\n" +
-                "    _plt_show_orig = _plt_orig.show\n" +
-                "    def _plt_show_patched(*args, **kwargs):\n" +
-                "        buf = io.BytesIO()\n" +
-                "        _plt_orig.savefig(buf, format='png', bbox_inches='tight', dpi=100)\n" +
-                "        buf.seek(0)\n" +
-                "        b64 = base64.b64encode(buf.read()).decode()\n" +
-                "        print('IMAGE_B64:data:image/png;base64,' + b64)\n" +
-                "        _plt_orig.clf()\n" +
-                "    _plt_orig.show = _plt_show_patched\n" +
-                "    import matplotlib.pyplot as plt  # ri-esporta il patchato\n" +
-                "except ImportError:\n" +
-                "    pass\n\n" +
-                "# ── CODICE UTENTE ──\n";
-            code = plotWrapper + code;
-
-            // Se il codice usa plt.savefig invece di plt.show, converti anche quello
-            if (code.contains("plt.savefig") && !code.contains("IMAGE_B64")) {
-                code = code + "\n" +
-                    "\ntry:\n" +
-                    "    import io, base64, matplotlib.pyplot as _p\n" +
-                    "    buf2 = io.BytesIO()\n" +
-                    "    _p.savefig(buf2, format='png', bbox_inches='tight', dpi=100)\n" +
-                    "    buf2.seek(0)\n" +
-                    "    print('IMAGE_B64:data:image/png;base64,' + base64.b64encode(buf2.read()).decode())\n" +
-                    "except: pass\n";
-            }
-        }
-        // ─────────────────────────────────────────────────────────────────────────
         String[] runtime = runtimes.getOrDefault(language, new String[]{"python","3.10.0"});
 
         try {
@@ -3584,26 +3094,12 @@ public class ChatController {
             String stderr   = run.path("stderr").asText();
             int    exitCode = run.path("code").asInt();
 
-            // ── Rileva immagini base64 nell'output (matplotlib/PIL plots) ──
-            List<String> images = new ArrayList<>();
-            StringBuilder cleanOutput = new StringBuilder();
-            for (String line : output.split("\n")) {
-                if (line.startsWith("IMAGE_B64:")) {
-                    images.add(line.substring(10).trim());
-                } else {
-                    cleanOutput.append(line).append("\n");
-                }
-            }
-            // ────────────────────────────────────────────────────────────────
-
             Map<String,Object> r = new LinkedHashMap<>();
             r.put("language", language);
             r.put("exitCode", exitCode);
-            r.put("output",   cleanOutput.toString().trim().isEmpty()
-                ? "(nessun output)" : cleanOutput.toString().trim());
-            r.put("stderr",   stderr.isEmpty() ? null : stderr);
+            r.put("output",   output.isEmpty() ? "(nessun output)" : output);
+            r.put("stderr",   stderr.isEmpty()  ? null : stderr);
             r.put("success",  exitCode == 0);
-            if (!images.isEmpty()) r.put("images", images); // lista di base64 da mostrare
             r.put("date",     today());
             return ResponseEntity.ok(r);
 
@@ -3625,9 +3121,9 @@ public class ChatController {
         String url       = ((String) body.getOrDefault("url", "")).trim();
         String task      = body.getOrDefault("task", "Estrai il contenuto principale");
         String sessionId = body.getOrDefault("sessionId", "global");
-        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
 
         if (url.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","URL obbligatorio"));
         if (!url.startsWith("http")) url = "https://" + url;
@@ -3835,10 +3331,11 @@ public class ChatController {
 
     // ════════════════════════════════════════════════════════════════════════
     // ════════════════════════════════════════════════════════════════════════
-    // MUSIC GENERATOR v2 — Canzone reale con voce e durata specifica
-    // Pipeline: Suno AI (gratis) → ElevenLabs TTS cantato → Web Speech fallback
-    // ABC notation usata SOLO per spartito visivo
+    // MUSIC GENERATOR v2 — LLM genera ABC + Testo strutturato per frase
+    // Frontend: Tone.js (strumenti reali) + Web Speech API sincronizzata
+    // Nessuna dipendenza esterna — funziona sempre in produzione
     // ════════════════════════════════════════════════════════════════════════
+
     @PostMapping("/music/generate")
     public ResponseEntity<Object> musicGenerate(@RequestBody Map<String,String> body) {
         String description = ((String) body.getOrDefault("description","")).trim();
@@ -3846,204 +3343,192 @@ public class ChatController {
         String mood        = body.getOrDefault("mood","happy");
         String tempo       = body.getOrDefault("tempo","120");
         String key         = body.getOrDefault("key","C");
-        String duration    = body.getOrDefault("duration","120"); // durata in secondi (default 2 min)
         String sessionId   = body.getOrDefault("sessionId","global");
         String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
+        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY",""));
         String model2      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
 
         if (description.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
 
         try {
-            int durationSec = Math.min(240, Math.max(30, Integer.parseInt(duration))); // 30s-4min
-            int durationMin = durationSec / 60;
-            int durationSecRem = durationSec % 60;
-            String durationLabel = durationMin > 0
-                ? durationMin + " minut" + (durationMin==1?"o":"i") + (durationSecRem>0?" e "+durationSecRem+"s":"")
-                : durationSec + " secondi";
+            // ── STEP 1: LLM genera struttura musicale completa ──
+            String musicPrompt =
+                "Sei un compositore e paroliere professionista italiano.\n" +
+                "Crea una canzone COMPLETA basata su questa richiesta: " + description + "\n" +
+                "Genere: " + genre + " | Umore: " + mood + " | Tempo: " + tempo + " BPM | Tonalità: " + key + "\n\n" +
+                "FORMATO OBBLIGATORIO — rispetta esattamente questi tag:\n\n" +
+                "[TITLE]titolo della canzone[/TITLE]\n\n" +
+                "[ABC]\n" +
+                "X:1\n" +
+                "T:titolo\n" +
+                "M:4/4\n" +
+                "L:1/8\n" +
+                "Q:1/4=" + tempo + "\n" +
+                "K:" + key + "\n" +
+                "% Strofa 1\n" +
+                "|: almeno 8 battute di note ABC reali :|\n" +
+                "% Ritornello\n" +
+                "|: almeno 8 battute diverse per il ritornello :|\n" +
+                "% Strofa 2\n" +
+                "|: variazione della strofa 1 :|\n" +
+                "[/ABC]\n\n" +
+                "[LYRICS_STRUCTURED]\n" +
+                "VERSE1:\n" +
+                "riga 1 del testo|riga 2|riga 3|riga 4\n" +
+                "CHORUS:\n" +
+                "riga 1 ritornello|riga 2|riga 3|riga 4\n" +
+                "VERSE2:\n" +
+                "riga 1|riga 2|riga 3|riga 4\n" +
+                "BRIDGE:\n" +
+                "riga 1 bridge|riga 2\n" +
+                "[/LYRICS_STRUCTURED]\n\n" +
+                "[INSTRUMENTS]strumento principale, strumento basso, strumento ritmo[/INSTRUMENTS]\n\n" +
+                "[DESCRIPTION]descrizione evocativa della canzone in 2 righe[/DESCRIPTION]\n\n" +
+                "REGOLE: testo in italiano, melodia originale con note reali (non ripetere sempre le stesse), " +
+                "ogni sezione ABC deve avere almeno 8 battute, il ritornello deve essere diverso dalla strofa.";
 
-            // ── STEP 1: LLM genera testo completo proporzionale alla durata ───
-            // ~150-180 parole al minuto cantato → calcola strofe necessarie
-            int wordsNeeded = (durationSec * 150) / 60;
-            int strofesNeeded = Math.max(2, durationSec / 30); // una strofa ~30s
+            String llmResp = callLLM(
+                "Sei un compositore musicale e paroliere esperto. Crea sempre musica originale completa.",
+                musicPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 3000);
 
-            String lyricsPrompt =
-                "Sei un cantautore professionista. Crea una canzone COMPLETA in italiano.\n\n" +
-                "PARAMETRI:\n" +
-                "- Tema: " + description + "\n" +
-                "- Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM\n" +
-                "- Durata target: " + durationLabel + " (" + durationSec + " secondi)\n" +
-                "- Struttura: " + strofesNeeded + " strofe + ritornello (ripetuto) + bridge\n" +
-                "- Parole totali approssimative: ~" + wordsNeeded + "\n\n" +
-                "STRUTTURA OBBLIGATORIA:\n" +
-                "[INTRO]\n<versi intro 4 righe>\n\n" +
-                "[STROFA 1]\n<8 versi>\n\n" +
-                "[RITORNELLO]\n<6 versi - memorabile e ripetibile>\n\n" +
-                "[STROFA 2]\n<8 versi>\n\n" +
-                "[RITORNELLO]\n<ripeti ritornello>\n\n" +
-                (strofesNeeded > 3 ? "[STROFA 3]\n<8 versi>\n\n[RITORNELLO]\n<ripeti ritornello>\n\n" : "") +
-                "[BRIDGE]\n<4 versi - punto emotivo culminante>\n\n" +
-                "[OUTRO]\n<4 versi conclusivi>\n\n" +
-                "Ogni verso deve essere cantabile al ritmo di " + tempo + " BPM.\n" +
-                "Usa rime AABB o ABAB. Testo emotivo e coinvolgente.\n\n" +
-                "Rispondi SOLO con il testo della canzone nel formato indicato.";
+            // ── Estrai campi ──
+            String title       = extractTag(llmResp, "TITLE");
+            String abcNotation = extractTag(llmResp, "ABC");
+            String lyricsRaw   = extractTag(llmResp, "LYRICS_STRUCTURED");
+            String instruments = extractTag(llmResp, "INSTRUMENTS");
+            String songDesc    = extractTag(llmResp, "DESCRIPTION");
 
-            String lyrics = callLLM(
-                "Sei un cantautore esperto. Crea testi musicali profondi e cantabili.",
-                lyricsPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 3000);
-
-            // ── STEP 2: ABC notation per spartito visivo (più completa) ───────
-            String abcPrompt =
-                "Crea ABC notation per una canzone " + genre + " in " + key + " a " + tempo + " BPM.\n" +
-                "Deve avere almeno 32 battute (abbastanza per " + durationLabel + ").\n" +
-                "Usa note variate, ritmo coinvolgente, struttura A-A-B-A.\n" +
-                "Rispondi SOLO con il blocco ABC notation valido (inizia con X:1).";
-
-            String abcRaw = callLLM(
-                "Sei un compositore. Genera ABC notation musicale valida e completa.",
-                abcPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 1500);
-
-            // Estrai ABC valido
-            String abcNotation = "";
-            int xi = abcRaw.indexOf("X:1");
-            if (xi >= 0) {
-                abcNotation = abcRaw.substring(xi);
-                // Rimuovi eventuali blocchi markdown
-                abcNotation = abcNotation.replaceAll("```[\\w]*","").replaceAll("```","").trim();
-            } else {
-                abcNotation = generateDefaultABC(description, key, tempo, genre);
+            // Fallback ABC
+            if (abcNotation.isEmpty()) {
+                int xi = llmResp.indexOf("X:1");
+                abcNotation = xi >= 0 ? llmResp.substring(xi) : generateRichABC(description, key, tempo, genre, mood);
             }
+            if (title.isEmpty()) title = extractABCField(abcNotation, "T:");
+            if (title.isEmpty()) title = "Canzone - " + description.substring(0, Math.min(30, description.length()));
 
-            // ── STEP 3: Genera audio con ElevenLabs (voce che legge il testo) ─
-            String audioB64 = null;
-            String audioFormat = null;
-            String elKey = env("ELEVENLABS_API_KEY","");
+            // ── Struttura testo per sezione (per sincronizzazione cantata) ──
+            Map<String,List<String>> lyricsMap = parseLyricsStructured(lyricsRaw);
 
-            if (!elKey.isEmpty()) {
-                try {
-                    // Prepara testo per sintesi: intro + prima strofa + ritornello
-                    String textForSpeech = extractSongSection(lyrics, durationSec);
-                    audioB64 = generateSongAudio(textForSpeech, genre, mood, tempo, elKey);
-                    if (audioB64 != null) audioFormat = "mp3";
-                    log.info("ElevenLabs song audio generato: {} chars b64", audioB64 != null ? audioB64.length() : 0);
-                } catch (Exception ae) {
-                    log.warn("ElevenLabs song: {}", ae.getMessage());
-                }
-            }
+            // Testo piatto per compatibilità
+            String lyricsFlat = buildFlatLyrics(lyricsMap, lyricsRaw);
 
-            // ── STEP 4: Titolo e descrizione ──────────────────────────────────
-            String title = extractSongTitle(lyrics, description);
-            String songDesc = "Canzone " + genre + " in " + key + " maggiore, " +
-                tempo + " BPM, mood " + mood + ". Durata: " + durationLabel + ".";
-
-            // Indicizza nel RAG
+            // ── Indicizza RAG ──
             ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(),
-                "Canzone: " + description + "\nTitolo: " + title + "\nTesto: " +
-                lyrics.substring(0, Math.min(500, lyrics.length())));
+                "Canzone: " + title + " | " + description + " | " + lyricsFlat);
 
             Map<String,Object> result = new LinkedHashMap<>();
-            result.put("title",       title);
-            result.put("abcNotation", abcNotation);
-            result.put("lyrics",      lyrics);
-            result.put("description", songDesc);
-            result.put("genre",       genre);
-            result.put("mood",        mood);
-            result.put("tempo",       tempo);
-            result.put("key",         key);
-            result.put("durationSec", durationSec);
-            result.put("durationLabel", durationLabel);
-            if (audioB64 != null) {
-                result.put("audioB64",   audioB64);   // base64 MP3 da ElevenLabs
-                result.put("audioFormat", audioFormat);
-                result.put("hasRealVoice", true);
-            } else {
-                result.put("hasRealVoice", false);
-                result.put("audioNote", "Audio voce non disponibile — configura ELEVENLABS_API_KEY per la voce cantata");
-            }
-            result.put("playable", true);
-            result.put("status",   "ok");
-            result.put("date",     today());
+            result.put("title",            title);
+            result.put("abcNotation",      abcNotation);
+            result.put("lyrics",           lyricsFlat);
+            result.put("lyricsStructured", lyricsMap);       // per la sincronizzazione
+            result.put("instruments",      instruments.isEmpty() ? "pianoforte, basso, batteria" : instruments);
+            result.put("description",      songDesc.isEmpty() ? "Canzone " + genre + " - " + description : songDesc);
+            result.put("genre",            genre);
+            result.put("mood",             mood);
+            result.put("tempo",            tempo);
+            result.put("key",              key);
+            result.put("bpm",              parseBpm(tempo));
+            result.put("playable",         true);
+            result.put("hasSinging",       true);   // flag per il frontend
+            result.put("status",           "ok");
+            result.put("date",             today());
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
-            log.warn("MusicGen error: {}", e.getMessage());
-            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+            log.warn("MusicGen v2 error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage(),
+                "hint", "Riprova — il modello LLM potrebbe aver avuto un timeout"));
         }
     }
 
-    // Estrae sezione del testo proporzionale alla durata richiesta
-    private String extractSongSection(String lyrics, int durationSec) {
-        if (lyrics == null || lyrics.isBlank()) return "";
-        // ~150 parole/min → parole da includere
-        int targetWords = (durationSec * 150) / 60;
-        String[] words = lyrics.replaceAll("\\[.*?\\]","").trim().split("\\s+");
-        if (words.length <= targetWords) return lyrics.replaceAll("\\[.*?\\]","").trim();
+    /** Estrae contenuto tra [TAG] e [/TAG] */
+    private String extractTag(String text, String tag) {
+        String open = "[" + tag + "]", close = "[/" + tag + "]";
+        int s = text.indexOf(open);
+        int e = text.indexOf(close);
+        if (s < 0 || e < 0 || e <= s) return "";
+        return text.substring(s + open.length(), e).trim();
+    }
+
+    /** Parsa il testo strutturato VERSE1/CHORUS/VERSE2/BRIDGE */
+    private Map<String,List<String>> parseLyricsStructured(String raw) {
+        Map<String,List<String>> map = new LinkedHashMap<>();
+        if (raw.isEmpty()) return map;
+        String[] sections = {"VERSE1","CHORUS","VERSE2","BRIDGE","VERSE3","OUTRO"};
+        for (String sec : sections) {
+            int idx = raw.indexOf(sec + ":");
+            if (idx < 0) continue;
+            int end = raw.length();
+            // Trova la prossima sezione
+            for (String other : sections) {
+                int nxt = raw.indexOf(other + ":", idx + sec.length() + 1);
+                if (nxt > idx && nxt < end) end = nxt;
+            }
+            String block = raw.substring(idx + sec.length() + 1, end).trim();
+            List<String> lines = new ArrayList<>();
+            for (String line : block.split("\|")) {
+                String l = line.trim();
+                if (!l.isEmpty()) lines.add(l);
+            }
+            if (!lines.isEmpty()) map.put(sec, lines);
+        }
+        return map;
+    }
+
+    private String buildFlatLyrics(Map<String,List<String>> map, String fallback) {
+        if (map.isEmpty()) return fallback;
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < Math.min(targetWords, words.length); i++) {
-            sb.append(words[i]).append(" ");
+        String[] order = {"VERSE1","CHORUS","VERSE2","CHORUS","BRIDGE","CHORUS"};
+        for (String sec : order) {
+            if (!map.containsKey(sec)) continue;
+            String label = switch(sec) {
+                case "VERSE1","VERSE2","VERSE3" -> "🎵 Strofa";
+                case "CHORUS" -> "🎤 Ritornello";
+                case "BRIDGE" -> "🌉 Bridge";
+                default -> sec;
+            };
+            sb.append(label).append(":\n");
+            map.get(sec).forEach(l -> sb.append(l).append("\n"));
+            sb.append("\n");
         }
         return sb.toString().trim();
     }
 
-    // Genera audio con ElevenLabs ottimizzato per canto
-    private String generateSongAudio(String text, String genre, String mood, String tempo, String elKey) throws Exception {
-        HttpHeaders h = new HttpHeaders();
-        h.setContentType(MediaType.APPLICATION_JSON);
-        h.set("xi-api-key", elKey);
-        h.set("Accept", "audio/mpeg");
-
-        // Scegli voce in base al genere
-        String voiceId = "21m00Tcm4TlvDq8ikWAM"; // Rachel — voce femminile calda (default)
-        if (genre.toLowerCase().matches(".*(rock|metal|punk|hard).*"))
-            voiceId = "VR6AewLTigWG4xSOukaG"; // Arnold — voce maschile forte
-        else if (genre.toLowerCase().matches(".*(jazz|blues|soul|rnb).*"))
-            voiceId = "pNInz6obpgDQGcFmaJgB"; // Adam — voce calda
-        else if (genre.toLowerCase().matches(".*(rap|hip.?hop).*"))
-            voiceId = "yoZ06aMxZJJ28mfd3POQ"; // Sam — ritmo rapido
-
-        // Velocità in base al tempo BPM
-        int bpm = 120;
-        try { bpm = Integer.parseInt(tempo); } catch(Exception e2){}
-        double speed = bpm < 80 ? 0.85 : bpm > 160 ? 1.15 : 1.0;
-
-        ObjectNode req = MAPPER.createObjectNode();
-        req.put("text", text.substring(0, Math.min(4500, text.length()))); // ElevenLabs max 5000 char
-        req.put("model_id", "eleven_multilingual_v2"); // supporta italiano
-        ObjectNode vs = MAPPER.createObjectNode();
-        vs.put("stability", 0.45);         // più espressivo
-        vs.put("similarity_boost", 0.80);
-        vs.put("style", 0.35);             // più stilistico per canto
-        vs.put("use_speaker_boost", true);
-        req.set("voice_settings", vs);
-
-        ResponseEntity<byte[]> resp = llmRestTemplate.postForEntity(
-            "https://api.elevenlabs.io/v1/text-to-speech/" + voiceId,
-            new HttpEntity<>(MAPPER.writeValueAsString(req), h),
-            byte[].class);
-
-        if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null && resp.getBody().length > 1000) {
-            return java.util.Base64.getEncoder().encodeToString(resp.getBody());
-        }
-        return null;
+    private int parseBpm(String tempo) {
+        try { return Integer.parseInt(tempo.trim()); }
+        catch (Exception e) { return 120; }
     }
 
-    // Estrae titolo dal testo della canzone
-    private String extractSongTitle(String lyrics, String fallback) {
-        if (lyrics == null) return fallback;
-        // Cerca pattern T: nell'ABC o prima riga non vuota del testo
-        String[] lines = lyrics.split("\n");
-        for (String line : lines) {
-            String l = line.trim();
-            if (!l.isEmpty() && !l.startsWith("[") && l.length() > 3 && l.length() < 60)
-                return l.replaceAll("[\\[\\]#*]","").trim();
-        }
-        return fallback.substring(0, Math.min(40, fallback.length()));
+    private String generateRichABC(String desc, String key, String tempo, String genre, String mood) {
+        // Melodie pre-costruite per genere
+        String melody = switch(genre.toLowerCase()) {
+            case "jazz" ->
+                "|: E2 G2 B2 gf | e4 d2 B2 | G2 B2 d2 gf | e6 d2 |\n" +
+                "c2 e2 g2 ec | B4 A2 G2 | F2 A2 c2 AF | G8 :|\n" +
+                "|: b2 ag fe dc | B4 G4 | A2 cB AG FE | D6 E2 |\n" +
+                "F2 AF G2 EG | F4 D4 | E2 GF ED CB | C8 :|";
+            case "rock" ->
+                "|: G,2 G,2 G4 | D2 D2 D4 | G,2 B,2 D2 G2 | B4 A2 G2 |\n" +
+                "F2 A2 c2 AF | G4 E4 | D2 F2 A2 dA | G8 :|\n" +
+                "|: d4 d2 cB | A4 A2 G2 | F2 A2 c2 AF | G4 E4 |\n" +
+                "D2 B,2 G,2 B,2 | D4 B,4 | G,2 D2 G2 d2 | G8 :|";
+            case "classical" ->
+                "|: c2 de f2 ed | c4 A4 | G2 AB c2 BA | G6 E2 |\n" +
+                "F2 GA B2 AG | F4 D4 | E2 FG A2 GF | E8 :|\n" +
+                "|: e2 fg a2 gf | e4 c4 | d2 ef g2 fe | d6 B2 |\n" +
+                "c2 de f2 ed | c4 A4 | G2 AB c2 d2 | G8 :|";
+            default -> // pop
+                "|: G2 AB c2 BA | G4 E4 | F2 GA B2 AG | F6 D2 |\n" +
+                "c2 de f2 ed | c4 A4 | G2 AB c2 d2 | G8 :|\n" +
+                "|: e2 ef g2 fe | e4 c4 | d2 de f2 ed | d6 B2 |\n" +
+                "c2 cd e2 dc | B4 G4 | A2 Bc d2 e2 | G8 :|";
+        };
+        return "X:1\nT:" + desc.substring(0,Math.min(30,desc.length())) +
+            "\nM:4/4\nL:1/8\nQ:1/4=" + tempo + "\nK:" + key + "\n" + melody;
     }
 
-
-
-        private String extractABCField(String abc, String field) {
+    private String extractABCField(String abc, String field) {
         if (abc == null) return "Canzone SPACE AI";
         int idx = abc.indexOf(field);
         if (idx < 0) return "Canzone SPACE AI";
@@ -4389,99 +3874,55 @@ public class ChatController {
     @PostMapping("/video/analyze-frames")
     public ResponseEntity<Object> analyzeVideoFrames(@RequestBody Map<String,Object> body) {
         @SuppressWarnings("unchecked")
-        List<Map<String,Object>> frames = (List<Map<String,Object>>) body.getOrDefault("frames", new ArrayList<>());
-        String task       = (String) body.getOrDefault("task",     "Descrivi dettagliatamente cosa vedi in questo video");
-        String fileName   = (String) body.getOrDefault("fileName", "video");
-        String sessionId  = (String) body.getOrDefault("sessionId","global");
-        int    numFrames  = frames.size();
-        String baseUrl2   = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2    = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model2     = (String) body.getOrDefault("model",   env("AI_MODEL",   "llama-3.3-70b-versatile"));
+        List<String> frames  = (List<String>) body.getOrDefault("frames", new ArrayList<>());
+        String task          = (String) body.getOrDefault("task","Descrivi la sequenza");
+        String sessionId     = (String) body.getOrDefault("sessionId","global");
+        String baseUrl2      = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2       = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
+        String model2        = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
 
         if (frames.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Lista frames vuota"));
 
-        // ── STEP 1: analisi individuale di ogni frame ─────────────────────
+        List<Map<String,Object>> frameResults = new ArrayList<>();
         StringBuilder fullTranscript = new StringBuilder();
-        fullTranscript.append("FILE VIDEO: ").append(fileName).append("\n");
-        fullTranscript.append("TASK UTENTE: ").append(task).append("\n\n");
 
-        int analyzed = 0;
-        for (int i = 0; i < Math.min(frames.size(), 8); i++) {
+        for (int i = 0; i < Math.min(frames.size(), 5); i++) {
             try {
-                String frameB64  = (String) frames.get(i).getOrDefault("frameBase64","");
-                int    timestamp = ((Number) frames.get(i).getOrDefault("timestamp", i)).intValue();
-                if (frameB64.isBlank()) continue;
-
-                String framePrompt = "Descrivi in dettaglio cosa vedi in questo frame del video. " +
-                    "Includi: soggetti, azioni, ambienti, testo visibile, colori dominanti. " +
-                    "Sii specifico e conciso.";
-                String analysis = analyzeImageBase64(frameB64, framePrompt, baseUrl2, apiKey2, model2);
-                fullTranscript.append("⏱ ")
-                    .append(timestamp > 0 ? timestamp + "s" : "Frame "+(i+1))
-                    .append(": ").append(analysis).append("\n\n");
-                analyzed++;
+                String frameB64 = frames.get(i);
+                String frameTask = "Frame " + (i+1) + "/" + frames.size() + ": " + task;
+                String analysis = analyzeImageBase64(frameB64, frameTask, baseUrl2, apiKey2, model2);
+                Map<String,Object> fr = new LinkedHashMap<>();
+                fr.put("frame",    i+1);
+                fr.put("analysis", analysis);
+                frameResults.add(fr);
+                fullTranscript.append("Frame ").append(i+1).append(": ").append(analysis).append("\n\n");
             } catch (Exception e) {
-                log.warn("Frame {} analisi fallita: {}", i+1, e.getMessage());
+                frameResults.add(Map.of("frame", i+1, "error", e.getMessage()));
             }
         }
 
-        if (analyzed == 0)
-            return ResponseEntity.status(503).body(Map.of("error","Nessun frame analizzabile — controlla il formato video"));
-
-        // ── STEP 2: sintesi + esecuzione task dell'utente ─────────────────
-        // Classifica il tipo di task per risposta appropriata
-        String taskLow = task.toLowerCase();
-        boolean isCodeTask    = taskLow.matches(".*(implement|codic|programm|scriv.*codic|crea.*app|svilupp).*");
-        boolean isSummaryTask = taskLow.matches(".*(riassun|descr|spiega|raccont|analiz|cosa.*vedi|cosa.*succed).*");
-        boolean isExtractTask = taskLow.matches(".*(estrais?|copi|testo|trad|leggi|ocr|scritto|parole).*");
-
-        String synthesisPrompt;
-        if (isCodeTask) {
-            synthesisPrompt =
-                "Sei un esperto sviluppatore. Analizza la sequenza di frame di questo video e " +
-                "implementa esattamente quello che vedi. Produci codice funzionante e completo. " +
-                "Se vedi un'interfaccia UI, replicala in HTML/CSS/JS. " +
-                "Se vedi un algoritmo, implementalo nel linguaggio più appropriato.\n\n";
-        } else if (isExtractTask) {
-            synthesisPrompt =
-                "Estrai tutto il testo visibile nei frame del video. " +
-                "Organizza il contenuto in modo strutturato. Trascrivi fedelmente.\n\n";
-        } else {
-            synthesisPrompt =
-                "Sei un analizzatore video esperto. Basandoti sull'analisi dei frame, " +
-                "esegui il task richiesto dall'utente in modo completo e dettagliato. " +
-                "Rispondi in italiano con markdown.\n\n";
+        // Sintesi finale della sequenza
+        String summary = "";
+        if (fullTranscript.length() > 0) {
+            try {
+                summary = callLLM(
+                    "Sei un analizzatore video. Sintetizza la sequenza di frame in italiano.",
+                    "Task: " + task + "\n\nAnalisi frame:\n" + fullTranscript,
+                    new ArrayList<>(), baseUrl2, apiKey2, model2, 800);
+                ragIndexDocument(sessionId + "/video_analysis_" + System.currentTimeMillis(), summary);
+            } catch (Exception e) {
+                summary = "Sintesi non disponibile: " + e.getMessage();
+            }
         }
-
-        String finalAnalysis;
-        try {
-            finalAnalysis = callLLM(
-                synthesisPrompt +
-                "IMPORTANTE: Esegui esattamente il task: '" + task + "'\n" +
-                "Non descrivere solo i frame — ESEGUI il task richiesto.",
-                "ANALISI FRAME VIDEO:\n" + fullTranscript.toString(),
-                new ArrayList<>(), baseUrl2, apiKey2, model2,
-                isCodeTask ? 3000 : 1500);
-
-            // Indicizza in RAG per follow-up nella stessa sessione
-            ragIndexDocument(sessionId + "/video_" + System.currentTimeMillis(),
-                "Video: " + fileName + "\nTask: " + task + "\n" + finalAnalysis);
-
-        } catch (Exception e) {
-            finalAnalysis = "⚠️ Sintesi parziale:\n\n" + fullTranscript.toString();
-        }
-
-        // ── Prefisso contestuale nella risposta ───────────────────────────
-        String prefix = "🎬 **Analisi video: " + fileName + "** (" + analyzed + "/" + numFrames + " frame)\n\n";
 
         return ResponseEntity.ok(Map.of(
-            "analysis",   prefix + finalAnalysis,
-            "frameCount", analyzed,
-            "taskType",   isCodeTask ? "code" : isSummaryTask ? "summary" : isExtractTask ? "extract" : "generic",
-            "ragIndexed", true,
-            "sessionId",  sessionId,
-            "date",       today()
+            "frames",    frameResults,
+            "summary",   summary,
+            "total",     frames.size(),
+            "analyzed",  frameResults.size(),
+            "ragIndexed",!summary.isBlank(),
+            "date",      today()
         ));
     }
 
@@ -4489,9 +3930,9 @@ public class ChatController {
     public ResponseEntity<Object> videoGenerate(@RequestBody Map<String,String> body) {
         String description = ((String)body.getOrDefault("description", body.getOrDefault("goal",""))).trim();
         String sessionId   = body.getOrDefault("sessionId", "global");
-        String baseUrl     = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey      = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model       = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl     = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey      = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model       = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
         if (description.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Fornisci una descrizione del video"));
         String html = generateVideoHtml(description, sessionId, baseUrl, apiKey, model);
@@ -4620,9 +4061,9 @@ public class ChatController {
     public ResponseEntity<Object> orchestrateSubAgents(@RequestBody Map<String,Object> body) {
         String goal      = ((String) body.getOrDefault("goal","")).trim();
         String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model2    = (String) body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
         @SuppressWarnings("unchecked")
         List<String> requestedAgents = (List<String>) body.getOrDefault("agents",
             List.of("researcher","analyst"));
@@ -4761,9 +4202,9 @@ public class ChatController {
         String params    = (String) arguments.getOrDefault("query",
                            arguments.getOrDefault("params", "").toString());
         String sessionId = (String) body.getOrDefault("sessionId", "global");
-        String baseUrl   = env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey    = env("AI_API_KEY", env("GROQ_API_KEY",""));
-        String model     = env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl   = env("GROQ_BASE_URL","https://api.groq.com/openai/v1");
+        String apiKey    = env("GROQ_API_KEY","");
+        String model     = env("GROQ_MODEL","llama-3.3-70b-versatile");
         if (toolName.isEmpty() || params.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","name e arguments.query obbligatori"));
         try {
@@ -4784,217 +4225,157 @@ public class ChatController {
 
     /**
      * Traduce e ottimizza il prompt IT→EN per Stable Diffusion / Pollinations.
-     * Usa LLM per traduzione accurata + quality tags professionali adattivi.
+     * Usa un dizionario esteso + LLM fallback per scene complesse.
      */
     private String enhancePromptForSD(String prompt) {
-        if (prompt == null || prompt.isBlank()) return "a breathtaking space scene, ultra detailed, 8k uhd, masterpiece";
-
-        // ── Step 1: Pulizia comandi italiani ─────────────────────────────────
-        String cleaned = prompt
-            .replaceAll("(?i)\\b(crea(re)?|genera(re)?|disegna(re)?|mostra(re)?|fammi\\s+vedere|fai\\s+un[a]?)\\b", "")
-            .replaceAll("(?i)\\b(immagine\\s+(di|del|della|dello|dei|degli)?|foto\\s+di|illustrazione\\s+di)\\b", "")
-            .replaceAll("(?i)\\b(alta\\s+qualità|alta\\s+risoluzione|dettagliata|realistica)\\b", "")
+        if (prompt == null || prompt.isBlank()) return "a beautiful space scene, highly detailed, 4k";
+        // Dizionario IT->EN per termini visivi comuni
+        String eng = prompt.toLowerCase()
+            .replaceAll("(?i)\bcrea(re)?\b", "").replaceAll("(?i)\bgenera(re)?\b", "")
+            .replaceAll("(?i)\bdisegna(re)?\b", "").replaceAll("(?i)\bmostrar?e?\b", "show")
+            .replaceAll("(?i)\bimmagine di\b", "").replaceAll("(?i)\bimmagine del\b", "")
+            .replaceAll("(?i)\bimmagine della\b", "").replaceAll("(?i)\bimmagine\b", "")
+            .replaceAll("(?i)\bun uomo\b", "a man").replaceAll("(?i)\buna donna\b", "a woman")
+            .replaceAll("(?i)\bun bambino\b", "a child").replaceAll("(?i)\buna persona\b", "a person")
+            .replaceAll("(?i)\bseduto\b", "sitting").replaceAll("(?i)\bin piedi\b", "standing")
+            .replaceAll("(?i)\bche vola\b", "flying").replaceAll("(?i)\bche corre\b", "running")
+            .replaceAll("(?i)\bsu un\b", "on a").replaceAll("(?i)\bsu una\b", "on a")
+            .replaceAll("(?i)\bsu dei\b", "on some").replaceAll("(?i)\bsopra un\b", "above a")
+            .replaceAll("(?i)\bmissile\b", "missile").replaceAll("(?i)\brazzo\b", "rocket")
+            .replaceAll("(?i)\baereo\b", "airplane").replaceAll("(?i)\belicottero\b", "helicopter")
+            .replaceAll("(?i)\bmacchina\b", "car").replaceAll("(?i)\bmoto\b", "motorcycle")
+            .replaceAll("(?i)\bbarca\b", "boat").replaceAll("(?i)\bcarro armato\b", "tank")
+            .replaceAll("(?i)\bgatto\b", "cat").replaceAll("(?i)\bcane\b", "dog")
+            .replaceAll("(?i)\bcavallo\b", "horse").replaceAll("(?i)\borso\b", "bear")
+            .replaceAll("(?i)\bcielo\b", "sky").replaceAll("(?i)\bmare\b", "sea")
+            .replaceAll("(?i)\bmontagna\b", "mountain").replaceAll("(?i)\bcittà\b", "city")
+            .replaceAll("(?i)\bforesta\b", "forest").replaceAll("(?i)\bdeserto\b", "desert")
+            .replaceAll("(?i)\bnotte\b", "night").replaceAll("(?i)\bgiorno\b", "daytime")
+            .replaceAll("(?i)\btramonto\b", "sunset").replaceAll("(?i)\balba\b", "sunrise")
+            .replaceAll("(?i)\besplosione\b", "explosion").replaceAll("(?i)\bfuoco\b", "fire")
+            .replaceAll("(?i)\bbandiera\b", "flag").replaceAll("(?i)\bguerra\b", "war scene")
+            .replaceAll("(?i)\biraniano\b", "iranian").replaceAll("(?i)\bitaliano\b", "italian")
+            .replaceAll("(?i)\bamericano\b", "american").replaceAll("(?i)\brusso\b", "russian")
+            .replaceAll("(?i)\bcinese\b", "chinese").replaceAll("(?i)\bfrancese\b", "french")
+            .replaceAll("(?i)\bpresidente\b", "president").replaceAll("(?i)\bguarriero\b", "warrior")
+            .replaceAll("(?i)\bsoldato\b", "soldier").replaceAll("(?i)\bastronauta\b", "astronaut")
+            .replaceAll("(?i)\brobot\b", "robot").replaceAll("(?i)\balieno\b", "alien")
+            .replaceAll("(?i)\bvestito\b", "wearing").replaceAll("(?i)\babito\b", "suit")
+            .replaceAll("(?i)\bcravatta\b", "tie").replaceAll("(?i)\bcappello\b", "hat")
+            .replaceAll("(?i)\bocchiali\b", "glasses").replaceAll("(?i)\buniforme\b", "uniform")
+            .replaceAll("(?i)\bsullo sfondo\b", "in the background")
+            .replaceAll("(?i)\bdavanti a\b", "in front of")
+            .replaceAll("(?i)\bcon\b", "with").replaceAll("(?i)\be\b", "and")
+            .replaceAll("(?i)\bil\b", "").replaceAll("(?i)\bla\b", "")
+            .replaceAll("(?i)\blo\b", "").replaceAll("(?i)\bles?\b", "")
+            .replaceAll("(?i)\bdel\b", "of the").replaceAll("(?i)\bdella\b", "of the")
+            .replaceAll("(?i)\bdei\b", "of").replaceAll("(?i)\bdi\b", "of")
             .replaceAll("\\s{2,}", " ").trim();
-        if (cleaned.isBlank()) cleaned = prompt.trim();
-
-        // ── Step 2: Traduzione LLM (per prompt complessi) ────────────────────
-        String eng = cleaned;
-        try {
-            String baseUrl = env("AI_BASE_URL","https://api.groq.com/openai/v1");
-            String apiKey  = env("AI_API_KEY", env("GROQ_API_KEY",""));
-            if (!apiKey.isEmpty() && cleaned.length() > 8) {
-                // Usa modello veloce per la traduzione
-                String translationPrompt =
-                    "Translate this image description to English for an AI image generator. " +
-                    "Keep it concise and visual. Return ONLY the translated description, nothing else.\n" +
-                    "Input: " + cleaned;
-                ObjectNode req = MAPPER.createObjectNode();
-                req.put("model", "llama-3.1-8b-instant"); // modello veloce
-                req.put("max_tokens", 200);
-                req.put("temperature", 0.1);
-                ArrayNode msgs = MAPPER.createArrayNode();
-                ObjectNode sys = MAPPER.createObjectNode();
-                sys.put("role","system");
-                sys.put("content","You are a translator. Translate Italian image descriptions to English. Reply with ONLY the translation.");
-                msgs.add(sys);
-                ObjectNode usr = MAPPER.createObjectNode();
-                usr.put("role","user"); usr.put("content",translationPrompt); msgs.add(usr);
-                req.set("messages", msgs);
-                HttpHeaders h = new HttpHeaders();
-                h.setContentType(MediaType.APPLICATION_JSON); h.setBearerAuth(apiKey);
-                String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
-                ResponseEntity<String> resp = llmRestTemplate.postForEntity(
-                    endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
-                String translated = MAPPER.readTree(resp.getBody())
-                    .path("choices").get(0).path("message").path("content").asText().trim();
-                if (!translated.isBlank() && translated.length() > 3) {
-                    eng = translated;
-                    log.debug("Prompt tradotto LLM: [{}] → [{}]", cleaned, eng);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Traduzione LLM fallita, uso dizionario: {}", e.getMessage());
-            // Fallback dizionario essenziale
-            eng = cleaned
-                .replaceAll("(?i)\\bun uomo\\b","a man").replaceAll("(?i)\\buna donna\\b","a woman")
-                .replaceAll("(?i)\\bun bambino\\b","a child").replaceAll("(?i)\\buna persona\\b","a person")
-                .replaceAll("(?i)\\bgatto\\b","cat").replaceAll("(?i)\\bcane\\b","dog")
-                .replaceAll("(?i)\\bcielo\\b","sky").replaceAll("(?i)\\bmare\\b","sea")
-                .replaceAll("(?i)\\bmontagna\\b","mountain").replaceAll("(?i)\\bcittà\\b","city")
-                .replaceAll("(?i)\\btramonto\\b","sunset").replaceAll("(?i)\\balba\\b","sunrise")
-                .replaceAll("(?i)\\bnotte\\b","night").replaceAll("(?i)\\bforesta\\b","forest")
-                .replaceAll("(?i)\\bastronauta\\b","astronaut").replaceAll("(?i)\\brobot\\b","robot")
-                .replaceAll("(?i)\\bspazio\\b","outer space").replaceAll("(?i)\\bgalassia\\b","galaxy")
-                .replaceAll("(?i)\\bdrago\\b","dragon").replaceAll("(?i)\\bcastello\\b","castle")
-                .replaceAll("\\s{2,}"," ").trim();
-        }
-
-        // ── Step 3: Quality tags professionali adattivi ──────────────────────
-        String engLow = eng.toLowerCase();
-        String negativeHint = " --no blur, noise, grain, low quality, watermark, text, deformed, ugly";
-
-        String qualityBase;
-        if (engLow.matches(".*(portrait|person|man|woman|face|girl|boy|human|model|character).*"))
-            qualityBase = ", ultra-detailed portrait, photorealistic, RAW photo, DSLR, sharp focus, " +
-                "professional studio lighting, skin texture detail, 8k uhd, masterpiece, best quality, " +
-                "bokeh background, perfect anatomy, intricate details";
-        else if (engLow.matches(".*(landscape|nature|mountain|forest|ocean|river|valley|field).*"))
-            qualityBase = ", epic landscape photography, golden hour lighting, volumetric light, " +
-                "National Geographic style, ultra detailed, 8k uhd, HDR, award winning photo, " +
-                "atmospheric perspective, depth of field, hyperrealistic";
-        else if (engLow.matches(".*(space|galaxy|nebula|cosmos|planet|star|universe|asteroid).*"))
-            qualityBase = ", stunning space art, NASA quality, hyperrealistic nebula, " +
-                "volumetric lighting, cinematic, ultra detailed, 8k, Hubble telescope style, " +
-                "deep space photography, award winning digital art";
-        else if (engLow.matches(".*(anime|manga|cartoon|studio.?ghibli|pixar).*"))
-            qualityBase = ", anime style, vibrant colors, ultra detailed, 4k, " +
-                "studio quality, professional illustration, clean lineart, beautiful shading";
-        else if (engLow.matches(".*(city|building|architecture|street|urban|interior).*"))
-            qualityBase = ", architectural visualization, ultra detailed, 8k, " +
-                "photorealistic render, dramatic lighting, professional photography, " +
-                "sharp details, HDR, cinematic composition";
-        else if (engLow.matches(".*(fantasy|magic|dragon|wizard|sword|castle|mythical).*"))
-            qualityBase = ", epic fantasy art, ultra detailed, cinematic lighting, " +
-                "artstation trending, 8k, vibrant colors, professional digital painting, " +
-                "dramatic atmosphere, masterpiece";
-        else if (engLow.matches(".*(food|meal|dish|cuisine|restaurant|cooking).*"))
-            qualityBase = ", professional food photography, macro lens, soft diffused lighting, " +
-                "ultra detailed textures, 8k, commercial quality, shallow depth of field";
-        else if (engLow.matches(".*(car|vehicle|motorcycle|aircraft|ship|mechanical).*"))
-            qualityBase = ", automotive photography, studio lighting, ultra detailed, " +
-                "8k, photorealistic render, chrome reflections, professional CGI quality";
+        if (eng.isBlank() || eng.length() < 5) eng = prompt; // fallback al testo originale
+        // Manus-style quality tokens — adattivi per tipo di immagine
+        String qualityTags;
+        if (eng.contains("portrait") || eng.contains("person") || eng.contains("man") || eng.contains("woman") || eng.contains("face"))
+            qualityTags = ", ultra detailed portrait, photorealistic, studio lighting, 8k, sharp focus, masterpiece, best quality";
+        else if (eng.contains("landscape") || eng.contains("nature") || eng.contains("sky") || eng.contains("mountain"))
+            qualityTags = ", epic landscape, cinematic, golden hour lighting, 8k uhd, ultra detailed, award winning photo";
+        else if (eng.contains("space") || eng.contains("galaxy") || eng.contains("cosmos") || eng.contains("planet"))
+            qualityTags = ", space art, stunning nebula, stars, cinematic, ultra detailed, 8k, digital art, trending on artstation";
+        else if (eng.contains("anime") || eng.contains("cartoon") || eng.contains("manga"))
+            qualityTags = ", anime style, vibrant colors, highly detailed, 4k, studio quality";
+        else if (eng.contains("architecture") || eng.contains("building") || eng.contains("city"))
+            qualityTags = ", architectural visualization, ultra detailed, 8k, photorealistic render, dramatic lighting";
         else
-            qualityBase = ", ultra detailed, photorealistic, cinematic lighting, 8k uhd, " +
-                "sharp focus, masterpiece, best quality, professional photography, HDR";
-
-        return eng + qualityBase;
+            qualityTags = ", highly detailed, photorealistic, cinematic lighting, 4k, sharp focus, masterpiece, best quality";
+        return eng + qualityTags;
     }
 
-
     private String generateImage(String prompt) {
+        // ── STEP 1: Traduci sempre il prompt in inglese prima di inviarlo ─────
+        // Questo è il bug principale: prima si passava il prompt italiano grezzo
         String engPrompt = enhancePromptForSD(prompt);
-        log.info("Image prompt: [{}]", engPrompt.substring(0, Math.min(120, engPrompt.length())));
+        log.info("Image prompt IT: [{}] -> EN: [{}]", prompt, engPrompt);
 
-        // RestTemplate con timeout esteso per immagini ad alta risoluzione
+        // ── RestTemplate con timeout ottimizzati ────────────────────────────
         org.springframework.web.client.RestTemplate imgClient =
             new org.springframework.web.client.RestTemplate();
         try {
             org.springframework.http.client.SimpleClientHttpRequestFactory f =
                 new org.springframework.http.client.SimpleClientHttpRequestFactory();
-            f.setConnectTimeout(12000);  // 12s connect
-            f.setReadTimeout(60000);     // 60s read (immagini HD richiedono più tempo)
+            f.setConnectTimeout(10000);  // 10s connect
+            f.setReadTimeout(30000);     // 30s read (Pollinations risponde in ~5-15s)
             imgClient.setRequestFactory(f);
         } catch (Exception ex) { log.warn("Timeout config: {}", ex.getMessage()); }
 
-        // ── PRIORITÀ 1: Pollinations — modelli ordinati per qualità ──────────
-        // flux-realism: migliore per fotorealismo
-        // flux: bilanciato qualità/velocità
-        // flux-pro: massima qualità (più lento)
-        // turbo: fallback veloce
-        String[][] pollinationModels = {
-            {"flux-realism", "1280", "1280"}, // massima qualità fotorealistica
-            {"flux",         "1344", "1024"}, // formato panoramico — meno sgranato
-            {"flux-pro",     "1024", "1024"}, // pro — più dettagliato
-            {"turbo",        "1024", "1024"}, // fallback veloce
-        };
-        for (String[] pm : pollinationModels) {
+        // ── PRIORITÀ 1: Pollinations FLUX (gratis, no key, ottima qualità) ──
+        // Usa SEMPRE il prompt in inglese tradotto
+        String[] pollinationModels = {"flux", "turbo", "flux-realism"};
+        for (String pModel : pollinationModels) {
             try {
-                String pModel = pm[0];
-                int    width  = Integer.parseInt(pm[1]);
-                int    height = Integer.parseInt(pm[2]);
-                long   seed   = Math.abs(engPrompt.hashCode()) % 99999;
+                // Seed fisso per coerenza, basato sull hash del prompt (non sul tempo!)
+                long seed = Math.abs(engPrompt.hashCode()) % 99999;
                 String encoded = java.net.URLEncoder.encode(engPrompt, "UTF-8")
                     .replace("+", "%20").replace("%2C", ",");
                 String url = "https://image.pollinations.ai/prompt/" + encoded
-                    + "?width=" + width + "&height=" + height
-                    + "&nologo=true&enhance=true&safe=false"
+                    + "?width=1024&height=1024&nologo=true&enhance=true"
                     + "&model=" + pModel + "&seed=" + seed;
-                log.info("Pollinations {} ({}x{}) request", pModel, width, height);
+                log.info("Pollinations {} request: {}", pModel, url.substring(0, Math.min(120, url.length())));
                 ResponseEntity<byte[]> resp = imgClient.getForEntity(url, byte[].class);
                 if (resp.getStatusCode().is2xxSuccessful()
                         && resp.getBody() != null
-                        && resp.getBody().length > 10000) { // soglia più alta: 10KB min
-                    log.info("Pollinations {} OK: {} KB", pModel, resp.getBody().length/1024);
+                        && resp.getBody().length > 5000) {
+                    log.info("Pollinations {} OK: {} bytes", pModel, resp.getBody().length);
                     return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
                 }
-                log.warn("Pollinations {} risposta insufficiente: {} bytes", pModel,
-                    resp.getBody() == null ? 0 : resp.getBody().length);
+                log.warn("Pollinations {} risposta insufficiente: {} bytes",
+                    pModel, resp.getBody() == null ? 0 : resp.getBody().length);
             } catch (Exception e) {
-                log.warn("Pollinations {} fallito: {}", pm[0], e.getMessage());
+                log.warn("Pollinations {} fallito: {}", pModel, e.getMessage());
             }
         }
 
-        // ── PRIORITÀ 2: HuggingFace con parametri qualità top ────────────────
+        // ── PRIORITÀ 2: HuggingFace SD (se HF_TOKEN disponibile) ─────────
         String hfKey = env("HF_TOKEN", "");
         if (!hfKey.isEmpty()) {
-            // Modelli ordinati per qualità output
-            String[][] hfModels = {
-                {"black-forest-labs/FLUX.1-dev",             "1024", "1024", "28", "3.5"},  // FLUX dev — massima qualità
-                {"black-forest-labs/FLUX.1-schnell",         "1024", "1024", "4",  "0.0"},  // FLUX schnell — veloce
-                {"stabilityai/stable-diffusion-xl-base-1.0", "1024", "1024", "40", "7.5"},  // SDXL
-                {"stabilityai/stable-diffusion-3-medium-diffusers","1024","1024","28","7.0"} // SD3
+            String[] hfModels = {
+                "black-forest-labs/FLUX.1-schnell",        // FLUX schnell - veloce
+                "stabilityai/stable-diffusion-xl-base-1.0", // SDXL
+                "runwayml/stable-diffusion-v1-5"            // SD 1.5 fallback
             };
-            for (String[] hm : hfModels) {
+            for (String hfModel : hfModels) {
                 try {
                     HttpHeaders h = new HttpHeaders();
                     h.setContentType(MediaType.APPLICATION_JSON);
                     h.setBearerAuth(hfKey);
                     ObjectNode req = MAPPER.createObjectNode();
-                    req.put("inputs", engPrompt);
+                    req.put("inputs", engPrompt); // SEMPRE il prompt in inglese
                     ObjectNode params = MAPPER.createObjectNode();
-                    params.put("num_inference_steps", Integer.parseInt(hm[3]));
-                    params.put("guidance_scale",      Double.parseDouble(hm[4]));
-                    params.put("width",               Integer.parseInt(hm[1]));
-                    params.put("height",              Integer.parseInt(hm[2]));
-                    params.put("wait_for_model",      true);
-                    params.put("use_cache",           false);
-                    // Negative prompt per ridurre artefatti
-                    if (!hm[0].contains("FLUX.1-schnell")) // schnell non supporta negative
-                        params.put("negative_prompt",
-                            "blurry, low quality, noise, grain, watermark, text, " +
-                            "deformed, ugly, bad anatomy, disfigured, poorly drawn, " +
-                            "extra limbs, cloned face, oversaturated");
+                    params.put("num_inference_steps", 20);
+                    params.put("guidance_scale", 7.5);
+                    params.put("width", 768);
+                    params.put("height", 768);
+                    params.put("wait_for_model", true);
+                    params.put("use_cache", false);
                     req.set("parameters", params);
                     ResponseEntity<byte[]> resp = imgClient.postForEntity(
-                        "https://api-inference.huggingface.co/models/" + hm[0],
+                        "https://api-inference.huggingface.co/models/" + hfModel,
                         new HttpEntity<>(MAPPER.writeValueAsString(req), h),
                         byte[].class);
                     if (resp.getStatusCode().is2xxSuccessful()
                             && resp.getBody() != null
-                            && resp.getBody().length > 5000) {
-                        log.info("HF {} OK: {} KB", hm[0], resp.getBody().length/1024);
+                            && resp.getBody().length > 3000) {
+                        log.info("HF {} OK: {} bytes", hfModel, resp.getBody().length);
                         return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(resp.getBody());
                     }
                 } catch (Exception e) {
-                    log.warn("HF model {} fallito: {}", hm[0], e.getMessage());
+                    log.warn("HF model {} fallito: {}", hfModel, e.getMessage());
                 }
             }
         }
 
-        // ── FALLBACK: placeholder informativo ─────────────────────────────────
-        log.warn("Tutti i motori immagine falliti per: {}", engPrompt.substring(0, Math.min(80, engPrompt.length())));
+        // ── FALLBACK: SVG placeholder con la scena descritta ──────────────
+        log.warn("Tutti i motori immagine falliti per prompt: {}", engPrompt);
         return "ERRORE_IMMAGINE: Servizio immagini temporaneamente non disponibile. " +
-               "Prompt usato: [" + engPrompt.substring(0, Math.min(80, engPrompt.length())) + "]";
+               "Prompt EN usato: [" + engPrompt.substring(0, Math.min(80, engPrompt.length())) + "]";
     }
     private String thinkingMode(String userMsg, String context, String baseUrl, String apiKey, String model) throws Exception {
         // Step 1: Ragionamento interno
@@ -5089,7 +4470,7 @@ public class ChatController {
                        "arts,music,books,movies,fashion,food_tech,writer,creative,designer,architect,innovator," +
                        "planner,startup,hr,product,ux,seo,coach,education,negotiator,strategist,consultant," +
                        "growth,brand,pr,social,ads,analytics,supply_chain,pm," +
-                       "translator,legal,legal2,contract_review,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
+                       "translator,legal,legal2,summarizer,cooking,travel,sports,gaming,monitor,classifier,extractor," +
                        "debate,interview,language,mindmap,prompt_eng,video_gen,audio_gen,image_gen,spaces. " +
                        "Scegli 1-2 agenti. SOLO JSON valido.";
             case "spaces": return "Sei SPACES, assistente vocale personale di SPACE AI. Data:" + d + ". Rispondi in max 3 frasi concise per la voce. Usa sempre tono professionale e amichevole. Inizia con 'SPACES:'.";
@@ -5215,29 +4596,6 @@ public class ChatController {
             case "translator": return "Sei TRANSLATOR di SPACE AI. Multilingua: IT,EN,FR,ES,DE,PT,ZH,JA,AR.";
             case "legal": return "Sei LEGAL di SPACE AI. Data:" + d + ". Info generali, non consulenza. Rispondi in italiano.";
             case "legal2": return "Sei LEGAL2 di SPACE AI. Data:" + d + ". AI regulation,IP,privacy law. Info generali. Rispondi in italiano.";
-            case "contract_review": return
-                "Sei CONTRACT REVIEW di SPACE AI — specialista nell'analisi di contratti e documenti legali. Data:" + d + ".\n" +
-                "IMPORTANTE: fornisci informazioni generali a scopo informativo, NON consulenza legale professionale.\n\n" +
-                "Quando ricevi un contratto o clausola da analizzare, DEVI sempre rispondere con questa struttura ESATTA:\n\n" +
-                "## 📋 RIEPILOGO CONTRATTO\n" +
-                "- Tipo di contratto, parti coinvolte, durata, valore economico (se presente)\n\n" +
-                "## ✅ CLAUSOLE STANDARD (OK)\n" +
-                "- Lista delle clausole nella norma, con breve spiegazione\n\n" +
-                "## ⚠️ CLAUSOLE DA VERIFICARE\n" +
-                "- Lista clausole ambigue o inusuali con spiegazione del rischio\n\n" +
-                "## 🔴 CLAUSOLE CRITICHE / RED FLAG\n" +
-                "- Clausole potenzialmente svantaggiose, vessatorie o pericolose\n" +
-                "- Per ognuna: [CLAUSOLA] → [RISCHIO] → [SUGGERIMENTO]\n\n" +
-                "## 📊 SCORE CONTRATTO\n" +
-                "- Bilanciamento: X/10 (10=perfettamente bilanciato, 1=totalmente a favore dell'altra parte)\n" +
-                "- Rischio complessivo: BASSO / MEDIO / ALTO / CRITICO\n\n" +
-                "## 💡 RACCOMANDAZIONI\n" +
-                "- Punti da negoziare prima di firmare\n" +
-                "- Clausole da aggiungere per tutela\n\n" +
-                "## ⚖️ DISCLAIMER\n" +
-                "Questa analisi è a scopo informativo. Consulta un avvocato per decisioni legali vincolanti.\n\n" +
-                "Analizza con precisione, identifica ogni rischio, usa linguaggio chiaro e accessibile.";
-
             case "summarizer": return "Sei SUMMARIZER di SPACE AI. Bullet points chiari e concisi. Rispondi in italiano.";
             case "cooking": return "Sei COOKING di SPACE AI. Data:" + d + ". Ricette con dosi precise. Rispondi in italiano.";
             case "travel": return "Sei TRAVEL di SPACE AI. Data:" + d + ". Destinazioni,itinerari,budget. Rispondi in italiano.";
@@ -5465,40 +4823,23 @@ public class ChatController {
                "Unifica in UNA risposta finale perfetta. Elimina ridondanze. Markdown. Italiano.";
     }
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Map<String, Object>> chat(
-            @RequestBody Map<String, String> body,
-            jakarta.servlet.http.HttpServletRequest httpRequest) {
+    public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
         String userMessage  = ((String) body.getOrDefault("message", "")).trim();
         String sessionId    = body.getOrDefault("sessionId", "default");
         String fileContent  = body.getOrDefault("fileContent", "");
         String thinkingFlag = body.getOrDefault("thinking", "false");
-        // ── Data/ora locale dell'utente (inviata dal browser come ISO 8601) ──
-        setClientDate(body.getOrDefault("clientDate", ""));
-        // ────────────────────────────────────────────────────────────────────
-        if (userMessage.isEmpty()) { clearClientDate(); return ResponseEntity.badRequest().body(Map.of("error", "Messaggio vuoto")); }
+        if (userMessage.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error", "Messaggio vuoto"));
         String baseUrl     = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey      = env("AI_API_KEY", "");
         String model       = env("AI_MODEL", "llama-3.3-70b-versatile");
         String supabaseUrl = env("SUPABASE_URL", "");
         String supabaseKey = env("SUPABASE_KEY", "");
-
-        // ── Creator account: nessun rate limit ───────────────────────────────
-        String userEmail   = body.getOrDefault("userEmail", "");
-        boolean isCreator  = CREATOR_EMAIL.equalsIgnoreCase(userEmail);
-        // ────────────────────────────────────────────────────────────────────
-
-        // Rate limiting per sessionId (skip per creator)
-        if (!isCreator && isRateLimited(sessionId)) {
-            return ResponseEntity.status(429).body(Map.of(
-                "error", "Troppe richieste. Attendi un minuto.",
-                "status", "rate_limited"));
-        }
-        // Rate limiting per IP (skip per creator)
-        if (!isCreator && isIpRateLimited(httpRequest)) {
-            return ResponseEntity.status(429).body(Map.of(
-                "error", "Troppe richieste da questo indirizzo. Attendi un minuto.",
-                "status", "rate_limited_ip"));
-        }
+        // Rate limiting
+            if (isRateLimited(sessionId)) {
+                return ResponseEntity.status(429).body(Map.of(
+                    "error", "Troppe richieste. Attendi un minuto.",
+                    "status", "rate_limited"));
+            }
             // Circuit breaker
             if (isCircuitOpen()) {
                 return ResponseEntity.status(503).body(Map.of(
@@ -5668,16 +5009,9 @@ public class ChatController {
                 } catch (Exception ge) { log.warn("Goal delegation fallback: {}", ge.getMessage()); }
             }
 
-            // ── LEGGI MODE DAL FRONTEND — se c'è una mode specifica, NON usare Agent Loop ──
-            String frontendMode = body.getOrDefault("mode", "").toLowerCase().trim();
-            // Modalità che hanno pipeline dedicata: bypass totale dell'Agent Loop
-            boolean hasSpecificMode = !frontendMode.isEmpty() &&
-                !frontendMode.equals("auto") && !frontendMode.equals("agent_loop");
-
             // ── AGENT LOOP Manus-style: per query complesse multi-step ─────────
-            // SKIP se il frontend ha già scelto un agente specifico
             String agentLoopResult = null;
-            if (!hasSpecificMode && needsAgentLoop(userMessage)) {
+            if (needsAgentLoop(userMessage)) {
                 try {
                     log.info("Avvio Agent Loop: {}", userMessage.substring(0, Math.min(60, userMessage.length())));
                     agentLoopResult = agentLoop(userMessage, sessionId, baseUrl, apiKey, model);
@@ -5698,34 +5032,24 @@ public class ChatController {
                 }
             }
             // ── GOOGLE SEARCH LIVE: per query che richiedono dati aggiornati ─
+            // Pipeline: Tavily → SerpAPI/Google CSE → DuckDuckGo
             String webData = needsSearch(userMessage) ? searchWebEnhanced(userMessage, sessionId) : null;
             if (webData == null && userMessage.matches(".*\b(202[4-9]|chi e|cosa e successo|quando|dove ora)\b.*")) {
                 webData = searchWebEnhanced(userMessage, sessionId);
             }
-            // ── CITAZIONI IN-LINE: fonti strutturate per [1][2][3] ──────────
-            List<Map<String,String>> webSources = new ArrayList<>();
-            if (needsSearch(userMessage)) webSources = searchWebWithSources(userMessage);
             String enriched = userMessage;
             if (webData != null && !webData.isBlank()) {
-                ragIndexDocument(sessionId + "/web_" + System.currentTimeMillis(), webData);
-                String citationCtx = webSources.isEmpty() ? "" : "\n\n" + buildCitationContext(webSources);
+                // AUTO-INDEX risultati web nel RAG per sessione
+                String webDocId = sessionId + "/web_" + System.currentTimeMillis();
+                ragIndexDocument(webDocId, webData);
                 enriched = userMessage + "\n\n[DATI WEB AGGIORNATI - " + today() + "]:\n" +
                            "NOTA: Questi dati sono piu recenti della tua conoscenza base. Usali come fonte primaria.\n" +
-                           webData + citationCtx;
+                           webData;
             }
             // Analisi immagine base64 se presente (multimodale)
             String imageBase64 = body.getOrDefault("imageBase64","");
             if (!imageBase64.isEmpty()) {
                 try {
-                    // ── AUTO-INDEX immagine nel Multimodal RAG ───────────────
-                    String imgDocId = sessionId + "/img_" + System.currentTimeMillis();
-                    // Indicizza in background per non rallentare la risposta
-                    final String _imgDocId = imgDocId;
-                    final String _imgB64 = imageBase64;
-                    final String _baseUrl = baseUrl, _apiKey = apiKey, _model = model;
-                    executor.submit(() -> ragIndexImage(_imgDocId, _imgB64, "image/jpeg",
-                        userMessage, _baseUrl, _apiKey, _model));
-                    // ── Analisi visione ──────────────────────────────────────
                     String vision = analyzeImageBase64(imageBase64, userMessage, baseUrl, apiKey, model);
                     saveMessages(sessionId, userMessage, vision, supabaseUrl, supabaseKey);
                     Map<String,Object> vResp = new HashMap<>();
@@ -5759,7 +5083,7 @@ public class ChatController {
             }
             // Gestione immagini
             String q = userMessage.toLowerCase();
-            String curMode = frontendMode; // usa frontendMode già letta sopra
+            String curMode = body.getOrDefault("mode", "");
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
@@ -5960,15 +5284,12 @@ public class ChatController {
             resp.put("model",           model);
             resp.put("agents",          agents.toString());
             resp.put("webSearch",       webData != null ? "true" : "false");
-            if (!webSources.isEmpty()) resp.put("webSources", webSources); // citazioni per frontend
             resp.put("sessionId",       sessionId);
             resp.put("totalRequests",   totalRequests.get());
             resp.put("emotion",         emotionState.getOrDefault(sessionId,"neutral"));
             resp.put("historySize",     neuralMemory.getOrDefault(sessionId,new ArrayList<>()).size());
-            clearClientDate();
             return ResponseEntity.ok(resp);
         } catch (Exception e) {
-            clearClientDate();
             log.error("Errore: {}", e.getMessage());
             recordFailure();
             try {
@@ -6009,11 +5330,6 @@ public class ChatController {
         if (q.contains("calcola") || q.contains("matematica")) return List.of("math");
         if (q.contains("bug") || q.contains("errore nel codice")) return List.of("debug");
         if (q.contains("legge") || q.contains("contratto")) return List.of("legal");
-        if (q.contains("analizza contratto") || q.contains("review contratto") ||
-            q.contains("clausola") || q.contains("nda") || q.contains("accordo commerciale") ||
-            q.contains("termini e condizioni") || q.contains("contratto di lavoro") ||
-            q.contains("contratto di vendita") || q.contains("privacy policy") ||
-            q.contains("red flag") || q.contains("firmare questo")) return List.of("contract_review");
         if (q.contains("ricetta")) return List.of("cooking");
         if (q.contains("viaggio") || q.contains("vacanza")) return List.of("travel");
         if (q.contains("allenamento")) return List.of("fitness");
@@ -6046,9 +5362,9 @@ public class ChatController {
         String goal      = (String) body.getOrDefault("goal","");
         String startUrl  = (String) body.getOrDefault("url","");
         String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model2    = (String) body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
         int    maxSteps  = Integer.parseInt((String)body.getOrDefault("maxSteps","8"));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Goal obbligatorio"));
@@ -6331,176 +5647,13 @@ public class ChatController {
         return defaultModel;
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // STRUCTURED OUTPUT GARANTITO — JSON auto-repair
-    // ════════════════════════════════════════════════════════════════════════
-
-    // Estrae il primo blocco JSON valido da una stringa (ignora testo intorno)
-    private String extractJsonBlock(String text) {
-        if (text == null || text.isBlank()) return null;
-        // Prova parsing diretto
-        String t = text.trim();
-        if ((t.startsWith("{") || t.startsWith("[")) ) {
-            try { MAPPER.readTree(t); return t; } catch (Exception ignored) {}
-        }
-        // Cerca blocco ```json ... ```
-        java.util.regex.Matcher m = java.util.regex.Pattern
-            .compile("```(?:json)?\\s*([\\s\\S]*?)```", java.util.regex.Pattern.DOTALL)
-            .matcher(text);
-        if (m.find()) {
-            String candidate = m.group(1).trim();
-            try { MAPPER.readTree(candidate); return candidate; } catch (Exception ignored) {}
-        }
-        // Cerca prima { o [ e ultima } o ]
-        int start = -1, end = -1;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '{' || text.charAt(i) == '[') { start = i; break; }
-        }
-        for (int i = text.length()-1; i >= 0; i--) {
-            if (text.charAt(i) == '}' || text.charAt(i) == ']') { end = i; break; }
-        }
-        if (start >= 0 && end > start) {
-            String candidate = text.substring(start, end+1);
-            try { MAPPER.readTree(candidate); return candidate; } catch (Exception ignored) {}
-        }
-        return null; // non recuperabile
-    }
-
-    // Chiama LLM con garanzia di output JSON valido — riprova se malformato
-    private String callLLMJson(String system, String userMsg,
-            List<Map<String,String>> history,
-            String baseUrl, String apiKey, String model,
-            int maxTokens) throws Exception {
-        String systemJson = system + "\n\nIMPORTANTE: Rispondi SOLO con JSON valido. " +
-            "Nessun testo prima o dopo. Nessun markdown. Nessun commento.";
-        // Primo tentativo
-        String resp = callLLMWithTemp(systemJson, userMsg, history,
-            baseUrl, apiKey, model, maxTokens, 0.1); // temp bassa = più deterministico
-        String extracted = extractJsonBlock(resp);
-        if (extracted != null) return extracted;
-
-        // Secondo tentativo: chiedi esplicitamente di correggere
-        log.warn("JSON malformato al primo tentativo, richiedo correzione...");
-        String fixPrompt = "Il tuo output precedente non era JSON valido.\n" +
-            "Output ricevuto:\n" + resp.substring(0, Math.min(500, resp.length())) + "\n\n" +
-            "Riscrivi SOLO il JSON valido richiesto, senza nessun testo aggiuntivo.";
-        String resp2 = callLLMWithTemp(systemJson, fixPrompt, history,
-            baseUrl, apiKey, model, maxTokens, 0.05); // temp ancora più bassa
-        String extracted2 = extractJsonBlock(resp2);
-        if (extracted2 != null) {
-            log.info("JSON recuperato al secondo tentativo");
-            return extracted2;
-        }
-        // Fallback: restituisce stringa grezza per debug
-        log.error("JSON non recuperabile dopo 2 tentativi");
-        return resp;
-    }
-    // ════════════════════════════════════════════════════════════════════════
-
     private String callLLM(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens) throws Exception {
         return callLLMWithTemp(system, userMsg, history, baseUrl, apiKey, model, maxTokens, 0.8);
     }
     // ════════════════════════════════════════════════════════════════════════
-    // GROQ MODEL POOL — rotazione automatica su 429/rate limit
-    // Tutti gratuiti, ordinati per capacità decrescente
+    // PROVIDER CHAIN: Groq → Gemini 2.0 → DeepSeek → Autonomous fallback
     // ════════════════════════════════════════════════════════════════════════
-    private static final String[][] GROQ_MODEL_POOL = {
-        // {modelId, maxTokens, note}
-        // ── Alta priorità (più permissivi / migliori) ──────────────────────
-        {"qwen/qwen3-32b",                              "8000", "60rpm — il più permissivo"},
-        {"moonshotai/kimi-k2-instruct",                 "8000", "ottimo ragionamento"},
-        {"meta-llama/llama-4-scout-17b-16e-instruct",   "8000", "llama4 scout — 14.4K TPM"},
-        {"llama-3.1-8b-instant",                        "8000", "velocissimo — 14.4K TPM"},
-        // ── Media priorità ────────────────────────────────────────────────
-        {"llama-3.3-70b-versatile",                     "8000", "principale"},
-        {"openai/gpt-oss-120b",                         "8000", "potente — 1K TPM"},
-        {"openai/gpt-oss-20b",                          "8000", "veloce — 1K TPM"},
-        {"moonshotai/kimi-k2-instruct-0905",            "8000", "kimi aggiornato"},
-        // ── Bassa priorità (TPM limitato) ─────────────────────────────────
-        {"groq/compound",                               "200",  "compound — solo 250 TPM"},
-        {"groq/compound-mini",                          "200",  "compound leggero — 250 TPM"},
-    };
-    // Modelli con TPM basso: limitiamo i token per non esaurire la quota
-    private static final java.util.Set<String> LOW_TPM_MODELS = new java.util.HashSet<>(
-        java.util.Arrays.asList("groq/compound", "groq/compound-mini",
-            "openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile")
-    );
-    private static final int LOW_TPM_MAX_TOKENS = 800; // cap per modelli con 1K TPM
-    // indice corrente nel pool (thread-safe)
-    private final AtomicInteger groqPoolIndex = new AtomicInteger(0);
-    // timestamp fino a cui ogni modello del pool è in cooldown (429)
-    private final Map<String, Long> groqModelCooldown = new ConcurrentHashMap<>();
-    private static final long GROQ_COOLDOWN_MS = 60_000; // 1 minuto di cooldown dopo 429
-
-    // Restituisce il prossimo modello disponibile nel pool
-    private String[] nextAvailableGroqModel() {
-        long now = System.currentTimeMillis();
-        // Prova tutti i modelli in ordine ciclico
-        for (int attempt = 0; attempt < GROQ_MODEL_POOL.length; attempt++) {
-            int idx = groqPoolIndex.get() % GROQ_MODEL_POOL.length;
-            String[] entry = GROQ_MODEL_POOL[idx];
-            String modelId = entry[0];
-            Long cooldownUntil = groqModelCooldown.get(modelId);
-            if (cooldownUntil == null || now > cooldownUntil) {
-                return entry; // modello disponibile
-            }
-            // questo modello è in cooldown, prova il prossimo
-            groqPoolIndex.incrementAndGet();
-        }
-        // tutti in cooldown — usa il principale come fallback forzato
-        log.warn("Groq pool: tutti i modelli in cooldown, forzo llama-3.3-70b-versatile");
-        return GROQ_MODEL_POOL[3]; // llama-3.3-70b-versatile
-    }
-
-    // Segna un modello come in cooldown dopo un 429
-    private void markGroqModelCooldown(String modelId) {
-        groqModelCooldown.put(modelId, System.currentTimeMillis() + GROQ_COOLDOWN_MS);
-        groqPoolIndex.incrementAndGet(); // passa al prossimo
-        log.warn("Groq model {} in cooldown per {}s — passo al prossimo",
-            modelId, GROQ_COOLDOWN_MS / 1000);
-    }
-    // ════════════════════════════════════════════════════════════════════════
-
-    // ── Helper: esegue una chiamata HTTP con retry + backoff esponenziale ───
-    private ResponseEntity<String> callWithRetry(String providerName,
-            java.util.function.Supplier<ResponseEntity<String>> call) throws Exception {
-        // circuit breaker per provider: se è aperto, salta subito
-        if (isProviderCircuitOpen(providerName)) {
-            throw new Exception(providerName + " circuit breaker APERTO — provider temporaneamente escluso");
-        }
-        Exception lastEx = null;
-        for (int attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
-            try {
-                if (attempt > 0) {
-                    long wait = LLM_BACKOFF_BASE_MS * (1L << (attempt - 1)); // 1.5s, 3s
-                    log.warn("{} retry {}/{} dopo {}ms", providerName, attempt, LLM_MAX_RETRIES, wait);
-                    Thread.sleep(wait);
-                }
-                ResponseEntity<String> resp = call.get();
-                providerSuccess.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
-                recordProviderSuccess(providerName);
-                return resp;
-            } catch (org.springframework.web.client.ResourceAccessException rae) {
-                lastEx = rae;
-                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
-                recordProviderFailure(providerName);
-                log.warn("{} timeout attempt {}: {}", providerName, attempt, rae.getMessage());
-            } catch (org.springframework.web.client.HttpServerErrorException hse) {
-                lastEx = hse;
-                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
-                recordProviderFailure(providerName);
-                log.warn("{} 5xx attempt {}: {}", providerName, attempt, hse.getStatusCode());
-            } catch (org.springframework.web.client.HttpClientErrorException hce) {
-                // 4xx (429, 401) — NON riprovare, ma conta come fallimento
-                providerFailure.computeIfAbsent(providerName, k -> new AtomicInteger(0)).incrementAndGet();
-                recordProviderFailure(providerName);
-                throw hce;
-            }
-        }
-        throw new Exception(providerName + " fallito dopo " + (LLM_MAX_RETRIES + 1) + " tentativi", lastEx);
-    }
-    // ────────────────────────────────────────────────────────────────────────
 
     private String callGemini(String system, String userMsg, List<Map<String,String>> history,
                                int maxTokens, double temperature) throws Exception {
@@ -6546,16 +5699,11 @@ public class ChatController {
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         String url = "https://generativelanguage.googleapis.com/v1beta/models/" +
             model + ":generateContent?key=" + geminiKey;
-        final String body = MAPPER.writeValueAsString(req);
-        final HttpEntity<String> entity = new HttpEntity<>(body, h);
-        // chiamata con retry + timeout
-        ResponseEntity<String> resp = callWithRetry("gemini",
-            () -> llmRestTemplate.postForEntity(url, entity, String.class));
+        ResponseEntity<String> resp = restTemplate.postForEntity(
+            url, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
         JsonNode result = MAPPER.readTree(resp.getBody());
         String text = result.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText();
         log.info("Gemini {} response: {} chars", model, text.length());
-        // salva in cache
-        knnCachePut("[gemini]" + userMsg, text);
         return text;
     }
 
@@ -6563,7 +5711,7 @@ public class ChatController {
                                  int maxTokens, double temperature) throws Exception {
         String dsKey = env("DEEPSEEK_API_KEY","");
         if (dsKey.isEmpty()) throw new IllegalStateException("DEEPSEEK_API_KEY non configurata");
-        String model = env("DEEPSEEK_MODEL","deepseek-chat");
+        String model = env("DEEPSEEK_MODEL","deepseek-chat"); // deepseek-chat o deepseek-reasoner (R1)
         // DeepSeek usa il formato OpenAI compatibile
         ObjectNode req = MAPPER.createObjectNode();
         req.put("model", model); req.put("max_tokens", maxTokens); req.put("temperature", temperature);
@@ -6584,12 +5732,9 @@ public class ChatController {
         req.set("messages", messages);
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         h.setBearerAuth(dsKey);
-        final String body = MAPPER.writeValueAsString(req);
-        final HttpEntity<String> entity = new HttpEntity<>(body, h);
-        // chiamata con retry + timeout
-        ResponseEntity<String> resp = callWithRetry("deepseek",
-            () -> llmRestTemplate.postForEntity(
-                "https://api.deepseek.com/v1/chat/completions", entity, String.class));
+        ResponseEntity<String> resp = restTemplate.postForEntity(
+            "https://api.deepseek.com/v1/chat/completions",
+            new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
         JsonNode result = MAPPER.readTree(resp.getBody());
         String text = result.path("choices").get(0).path("message").path("content").asText();
         // DeepSeek R1 include <think> tag — estraiamo solo la risposta finale
@@ -6598,43 +5743,42 @@ public class ChatController {
             text = text.substring(endThink + 8).trim();
         }
         log.info("DeepSeek {} response: {} chars", model, text.length());
-        // salva in cache
-        knnCachePut("[deepseek]" + userMsg, text);
         return text;
     }
 
     private String callLLMWithTemp(String system, String userMsg, List<Map<String,String>> history,
                             String baseUrl, String apiKey, String model, int maxTokens, double temperature) throws Exception {
 
-        // ── Reset contatore giornaliero Groq ────────────────────────────────
+        // ── Rate limit check: se Groq è bloccato, prova altri provider ──
         long now = System.currentTimeMillis();
+        if (rateLimitUntil > now) {
+            log.warn("Groq rate limited, provo provider alternativi...");
+            // Prova Gemini
+            if (!env("GEMINI_API_KEY","").isEmpty()) {
+                try { return callGemini(system, userMsg, history, maxTokens, temperature); }
+                catch (Exception ge) { log.warn("Gemini fallback: {}", ge.getMessage()); }
+            }
+            // Prova DeepSeek
+            if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
+                try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
+                catch (Exception de) { log.warn("DeepSeek fallback: {}", de.getMessage()); }
+            }
+            localFallbacks.incrementAndGet();
+            return autonomousFallback(system, userMsg, history);
+        }
+
+        // Fix 5: Reset groqCallsToday basato su giorno UTC (non su 24h dall avvio)
         java.time.LocalDate today2 = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
         java.time.LocalDate dayStart = java.time.Instant.ofEpochMilli(groqDayStart)
             .atZone(java.time.ZoneOffset.UTC).toLocalDate();
         if (!today2.equals(dayStart)) {
             groqCallsToday.set(0);
             groqDayStart = now;
-            groqModelCooldown.clear(); // reset tutti i cooldown a mezzanotte
-            log.info("Groq daily counter e pool cooldown reset (nuovo giorno UTC)");
+            log.info("Groq daily counter reset (nuovo giorno UTC)");
         }
-
-        // ── GROQ MODEL POOL: usa il modello disponibile, ruota su 429 ────────
-        String[] poolEntry = nextAvailableGroqModel();
-        String activeModel = poolEntry[0];
-        // Se il chiamante passa un modello specifico diverso da quello del pool, usalo
-        // ma solo se non è in cooldown
-        if (model != null && !model.isEmpty() && !model.equals(env("AI_MODEL","llama-3.3-70b-versatile"))) {
-            Long cd = groqModelCooldown.get(model);
-            if (cd == null || System.currentTimeMillis() > cd) activeModel = model;
-        }
-
-        // ── Cap token per modelli con TPM basso ──────────────────────────────
-        int actualMaxTokens = LOW_TPM_MODELS.contains(activeModel)
-            ? Math.min(maxTokens, LOW_TPM_MAX_TOKENS)
-            : maxTokens;
 
         ObjectNode req = MAPPER.createObjectNode();
-        req.put("model", activeModel); req.put("max_tokens", actualMaxTokens);
+        req.put("model", model); req.put("max_tokens", maxTokens);
         req.put("temperature", temperature); req.put("top_p", 0.95);
         req.put("frequency_penalty", 0.3); req.put("presence_penalty", 0.3);
         ArrayNode messages = MAPPER.createArrayNode();
@@ -6650,57 +5794,49 @@ public class ChatController {
         req.set("messages", messages);
         HttpHeaders h = new HttpHeaders(); h.setContentType(MediaType.APPLICATION_JSON);
         if (!apiKey.isEmpty()) h.setBearerAuth(apiKey);
-        h.set("HTTP-Referer","https://space-ai-new.onrender.com");
+        h.set("HTTP-Referer","https://space-ai-940e.onrender.com");
         h.set("X-Title","SPACE AI"); h.set("User-Agent","SPACE-AI/4.0");
         String endpoint = baseUrl.endsWith("/") ? baseUrl+"chat/completions" : baseUrl+"/chat/completions";
 
         try {
             groqCallsToday.incrementAndGet();
-            log.debug("Groq pool usando modello: {}", activeModel);
-            ResponseEntity<String> response = llmRestTemplate.postForEntity(
+            ResponseEntity<String> response = restTemplate.postForEntity(
                 endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
-            // successo — reset cooldown per questo modello
-            groqModelCooldown.remove(activeModel);
             return MAPPER.readTree(response.getBody()).path("choices").get(0)
                 .path("message").path("content").asText();
 
         } catch (org.springframework.web.client.HttpClientErrorException e) {
-            String respBody = e.getResponseBodyAsString();
+            String body = e.getResponseBodyAsString();
 
-            // ── 429: metti in cooldown questo modello e riprova con il prossimo ──
+            // ── 429 Rate Limit: calcola quando Groq si resetta ─────────────
             if (e.getStatusCode().value() == 429) {
-                markGroqModelCooldown(activeModel);
-                log.warn("429 su {} — riprovo con prossimo modello del pool", activeModel);
-                // Riprova ricorsivamente con il prossimo modello disponibile
-                String[] next = nextAvailableGroqModel();
-                if (!next[0].equals(activeModel)) {
-                    // c'è un altro modello disponibile nel pool
-                    try {
-                        req.put("model", next[0]);
-                        ResponseEntity<String> retry = llmRestTemplate.postForEntity(
-                            endpoint, new HttpEntity<>(MAPPER.writeValueAsString(req), h), String.class);
-                        log.info("Pool fallback OK: {} → {}", activeModel, next[0]);
-                        groqModelCooldown.remove(next[0]);
-                        return MAPPER.readTree(retry.getBody()).path("choices").get(0)
-                            .path("message").path("content").asText();
-                    } catch (Exception retryEx) {
-                        log.warn("Anche {} fallito: {}", next[0], retryEx.getMessage());
+                long retryMs = 2_100_000L; // default 35 minuti
+                // Estrai "Please try again in Xm Ys" dal messaggio
+                try {
+                    java.util.regex.Matcher m429 = java.util.regex.Pattern
+                        .compile("try again in (\\d+)m(\\d+\\.?\\d*)s").matcher(body);
+                    if (m429.find()) {
+                        long mins = Long.parseLong(m429.group(1));
+                        double secs = Double.parseDouble(m429.group(2));
+                        retryMs = (long)(mins * 60_000 + secs * 1000) + 5000; // +5s buffer
                     }
-                }
-                // Pool esaurito → provider chain esterna
-                log.warn("Groq pool esaurito — provo Gemini/DeepSeek");
-                rateLimitUntil = System.currentTimeMillis() + 60_000;
+                } catch (Exception ignored) {}
+                rateLimitUntil = System.currentTimeMillis() + retryMs;
+                log.error("Groq 429 — rate limit per {}ms. Provo provider alternativi.", retryMs);
+                // Provider chain: Gemini → DeepSeek → autonomo
                 if (!env("GEMINI_API_KEY","").isEmpty()) {
                     try { return callGemini(system, userMsg, history, maxTokens, temperature); }
-                    catch (Exception ge) { log.warn("Gemini fallback: {}", ge.getMessage()); }
+                    catch (Exception ge) { log.warn("Gemini dopo 429: {}", ge.getMessage()); }
                 }
                 if (!env("DEEPSEEK_API_KEY","").isEmpty()) {
                     try { return callDeepSeek(system, userMsg, history, maxTokens, temperature); }
-                    catch (Exception de) { log.warn("DeepSeek fallback: {}", de.getMessage()); }
+                    catch (Exception de) { log.warn("DeepSeek dopo 429: {}", de.getMessage()); }
                 }
                 localFallbacks.incrementAndGet();
                 return autonomousFallback(system, userMsg, history);
             }
+
+            // ── 503 / 502: circuit breaker ─────────────────────────────────
             if (e.getStatusCode().value() >= 500) {
                 circuitOpenTime = System.currentTimeMillis();
                 log.error("Groq {}. Circuit breaker aperto.", e.getStatusCode().value());
@@ -6708,6 +5844,7 @@ public class ChatController {
             }
             throw e;
         } catch (Exception e) {
+            // Qualsiasi altro errore di rete — fallback autonomo
             log.error("Groq unreachable: {}. Uso fallback autonomo.", e.getMessage());
             return autonomousFallback(system, userMsg, history);
         }
@@ -6838,42 +5975,20 @@ public class ChatController {
         return messages;
     }
     private String cleanTextForTTS(String md) {
-        if (md == null || md.isBlank()) return "";
+        if (md == null) return "";
         String t = md;
-        // Rimuovi blocchi codice completamente (non leggerli)
-        t = t.replaceAll("(?s)```[\\w]*\\n.*?```", "Codice generato.");
-        t = t.replaceAll("(?s)```.*?```", "");
-        // Rimuovi inline code
-        t = t.replaceAll("`[^`]+`", "");
-        // Rimuovi markdown formattazione
-        t = t.replaceAll("\\*\\*([^*]+)\\*\\*", "$1");
-        t = t.replaceAll("__([^_]+)__", "$1");
-        t = t.replaceAll("\\*([^*\n]+)\\*", "$1");
-        t = t.replaceAll("_([^_\n]+)_", "$1");
-        // Rimuovi link ma mantieni il testo
-        t = t.replaceAll("\\[([^\\]]+)\\]\\([^)]+\\)", "$1");
-        // Rimuovi titoli (##, ###) ma mantieni il testo
-        t = t.replaceAll("(?m)^#{1,6}\\s+", "");
-        // Converti liste puntate in testo fluente
-        t = t.replaceAll("(?m)^[-*•]\\s+", "");
-        t = t.replaceAll("(?m)^\\d+\\.\\s+", "");
-        // Rimuovi tabelle markdown
-        t = t.replaceAll("(?m)^[|].*[|]\\s*$", "");
-        t = t.replaceAll("(?m)^[-|: ]+$", "");
-        // Rimuovi HTML
+        t = t.replaceAll("\\*\\*(.*?)\\*\\*", "$1");
+        t = t.replaceAll("__(.*?)__", "$1");
+        t = t.replaceAll("\\*(.*?)\\*", "$1");
+        t = t.replaceAll("_(.*?)_", "$1");
+        t = t.replaceAll("\\[(.*?)\\]\\(.*?\\)", "$1");
+        t = t.replaceAll("(?s)```.*?```", "codice omesso.");
+        t = t.replaceAll("`(.*?)`", "$1");
+        t = t.replaceAll("#{1,6}\\s+", "");
+        t = t.replaceAll("(?m)^[-*]\\s+", "");
+        t = t.replaceAll("(?s)<details>.*?</details>", "");
         t = t.replaceAll("<[^>]+>", "");
-        // Rimuovi citazioni [1][2] da web search
-        t = t.replaceAll("\\[\\d+\\]", "");
-        // Normalizza spazi e newline
-        t = t.replaceAll("(?m)^\\s*$", "");
         t = t.replaceAll("\\n{3,}", "\n\n");
-        t = t.replaceAll("  +", " ");
-        // Aggiungi pause naturali per TTS
-        t = t.replace("\n\n", ". ");
-        t = t.replace("\n", ", ");
-        t = t.replaceAll("\\. \\.", ".");
-        t = t.replaceAll(", ,", ",");
-        t = t.replaceAll("\\.{2,}", ".");
         return t.trim();
     }
     private String analyzeImageBase64(String base64Image, String userMsg,
@@ -7273,29 +6388,6 @@ public class ChatController {
         m.put("failureCount",    failureCount.get());
         m.put("agentUsage",      agentUsage);
         m.put("date",            today());
-        // metriche provider LLM
-        Map<String,Object> providers = new java.util.LinkedHashMap<>();
-        for (String p : new String[]{"groq","gemini","deepseek"}) {
-            Map<String,Integer> pm = new java.util.LinkedHashMap<>();
-            pm.put("success", providerSuccess.getOrDefault(p, new AtomicInteger(0)).get());
-            pm.put("failure", providerFailure.getOrDefault(p, new AtomicInteger(0)).get());
-            int tot = pm.get("success") + pm.get("failure");
-            pm.put("successRate", tot > 0 ? (pm.get("success") * 100 / tot) : 100);
-            providers.put(p, pm);
-        }
-        // stato pool modelli Groq
-        long nowPool = System.currentTimeMillis();
-        Map<String,String> poolStatus = new java.util.LinkedHashMap<>();
-        for (String[] entry : GROQ_MODEL_POOL) {
-            Long cd = groqModelCooldown.get(entry[0]);
-            poolStatus.put(entry[0], (cd == null || nowPool > cd) ? "✅ disponibile" :
-                "⏳ cooldown " + ((cd - nowPool)/1000) + "s");
-        }
-        providers.put("groqPool", poolStatus);
-        m.put("providerStats", providers);
-        // metriche prompt cache
-        m.put("promptCacheSize",    promptStaticCache.size());
-        m.put("promptCacheMaxSize", PROMPT_CACHE_MAX);
         return ResponseEntity.ok(m);
     }
     // ── ENDPOINT MEMORIA DIFFERENZIALE ──────────────────────────────────────────────
@@ -7348,34 +6440,6 @@ public class ChatController {
      * Body: { "docId": "nome_doc", "text": "contenuto...", "sessionId": "..." }
      * Supporta testo puro, contenuto di PDF già estratto, pagine web, ecc.
      */
-    // ── Endpoint per indicizzare immagini nel Multimodal RAG ─────────────────
-    @PostMapping("/rag/image")
-    public ResponseEntity<Object> ragIndexImageEndpoint(@RequestBody Map<String,String> body) {
-        String docId      = body.getOrDefault("docId", "img_" + System.currentTimeMillis());
-        String imageB64   = body.getOrDefault("imageBase64", "");
-        String imageType  = body.getOrDefault("imageType", "image/jpeg");
-        String contextHint= body.getOrDefault("context", "");
-        String baseUrl    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey     = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
-        if (imageB64.isBlank())
-            return ResponseEntity.badRequest().body(Map.of("error","imageBase64 mancante"));
-        try {
-            ragIndexImage(docId, imageB64, imageType, contextHint, baseUrl, apiKey, model);
-            long imgChunks = ragStore.values().stream()
-                .flatMap(List::stream).filter(RagChunk::isImage).count();
-            return ResponseEntity.ok(Map.of(
-                "status", "indexed",
-                "docId", docId,
-                "totalImageChunks", imgChunks
-            ));
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError()
-                .body(Map.of("error", e.getMessage()));
-        }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     @PostMapping("/rag/index")
     public ResponseEntity<Object> ragIndex(@RequestBody Map<String, String> body) {
         String docId     = body.getOrDefault("docId", "doc_" + System.currentTimeMillis());
@@ -7508,90 +6572,13 @@ public class ChatController {
     // PUNTO 14: MITRE Security Agent — CVE monitor + security audit
     // ══════════════════════════════════════════════════════════════════
 
-    // ── CONTRACT REVIEW AGENT ─────────────────────────────────────────────────
-    @PostMapping("/contract/review")
-    public ResponseEntity<Object> contractReview(@RequestBody Map<String,String> body) {
-        String contractText = ((String) body.getOrDefault("contract", "")).trim();
-        String contractType = body.getOrDefault("type", "generico"); // NDA, lavoro, vendita, ecc.
-        String sessionId    = body.getOrDefault("sessionId", "contract_" + System.currentTimeMillis());
-        String baseUrl      = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey       = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model        = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
-
-        if (contractText.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Testo del contratto mancante"));
-        }
-        if (contractText.length() > 50000) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Contratto troppo lungo (max 50.000 caratteri)"));
-        }
-
-        try {
-            // Indicizza il contratto nel RAG per retrieval semantico
-            String docId = "contract_" + sessionId;
-            ragIndexDocument(docId, contractText);
-
-            // System prompt specializzato
-            String systemPrompt = agentPrompt("contract_review");
-
-            // Costruisci il messaggio con contesto tipo contratto
-            String userMsg = "TIPO CONTRATTO: " + contractType + "\n\n" +
-                "TESTO DEL CONTRATTO:\n" + contractText + "\n\n" +
-                "Analizza questo contratto in modo completo seguendo la struttura richiesta.";
-
-            // Stima complessità per token: contratti lunghi richiedono più token
-            int maxTokens = Math.min(4000, 1500 + contractText.length() / 10);
-
-            String analysis = callLLMWithTemp(systemPrompt, userMsg,
-                new ArrayList<>(), baseUrl, apiKey, model, maxTokens, 0.2); // temp bassa = più preciso
-
-            // Estrai score dal testo per risposta strutturata
-            int riskScore = extractContractRiskScore(analysis);
-
-            // Salva l'analisi in memoria per follow-up
-            consolidateToLTM(sessionId, "Contratto " + contractType + " analizzato. Rischio: " +
-                (riskScore >= 7 ? "BASSO" : riskScore >= 4 ? "MEDIO" : "ALTO"));
-
-            Map<String, Object> result = new java.util.LinkedHashMap<>();
-            result.put("analysis",     analysis);
-            result.put("contractType", contractType);
-            result.put("charCount",    contractText.length());
-            result.put("riskScore",    riskScore);
-            result.put("riskLevel",    riskScore >= 7 ? "BASSO" : riskScore >= 4 ? "MEDIO" :
-                                       riskScore >= 2 ? "ALTO"  : "CRITICO");
-            result.put("sessionId",    sessionId);
-            result.put("disclaimer",   "Analisi a scopo informativo. Non sostituisce consulenza legale professionale.");
-            return ResponseEntity.ok(result);
-
-        } catch (Exception e) {
-            log.error("Contract review error: {}", e.getMessage());
-            return ResponseEntity.internalServerError()
-                .body(Map.of("error", "Errore analisi contratto: " + e.getMessage()));
-        }
-    }
-
-    // Estrae lo score numerico dal testo dell'analisi (cerca pattern "X/10")
-    private int extractContractRiskScore(String analysis) {
-        try {
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "(?i)bilanciamento[:\\s]+?(\\d+)\\s*/\\s*10");
-            java.util.regex.Matcher m = p.matcher(analysis);
-            if (m.find()) return Integer.parseInt(m.group(1));
-            // fallback: cerca qualsiasi X/10
-            p = java.util.regex.Pattern.compile("(\\d+)\\s*/\\s*10");
-            m = p.matcher(analysis);
-            if (m.find()) return Integer.parseInt(m.group(1));
-        } catch (Exception ignored) {}
-        return 5; // default medio
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     @PostMapping("/security/audit")
     public ResponseEntity<Object> securityAudit(@RequestBody Map<String,String> body) {
         String target    = ((String) body.getOrDefault("target", "")).trim();
         String auditType = body.getOrDefault("type", "general"); // general, code, network, deps
-        String baseUrl   = body.getOrDefault("baseUrl", env("AI_BASE_URL", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
-        String apiKey    = body.getOrDefault("apiKey",  env("AI_API_KEY", env("GROQ_API_KEY","")));
-        String model     = body.getOrDefault("model",   env("AI_MODEL", env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model     = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
 
         if (target.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Target obbligatorio"));
 
@@ -7703,4 +6690,3 @@ public class ChatController {
         return ResponseEntity.ok(r);
     }
 }
-
