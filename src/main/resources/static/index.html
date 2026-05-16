@@ -107,8 +107,11 @@ textarea::placeholder{color:var(--muted)}
 .mlbl{margin-left:auto;font-size:.69rem;color:var(--accent);opacity:.75}
 .hint{text-align:center;font-size:.61rem;color:var(--muted);margin:5px auto 0;opacity:.45}
 </style>
-  <!-- ABCJS: renderizza e riproduce notazione ABC (versione completa con synth audio) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-min.js"></script>
+  <!-- ABCJS: renderizza e riproduce notazione ABC (musica) -->
+  <!-- ABCJS: renderizza notazione ABC (partitura visiva) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/abcjs/6.2.2/abcjs-basic-min.js"></script>
+  <!-- Tone.js: sintesi audio avanzata per strumenti reali -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 </head>
 <body>
 <div class="sb-ov" id="sbOv" onclick="closeSB()"></div>
@@ -135,15 +138,12 @@ textarea::placeholder{color:var(--muted)}
     <div class="sbi" onclick="setMode('dream');closeSB()">&#129704; Dream Synthesis</div>
     <div class="sbi" onclick="setMode('socratic');closeSB()">&#129302; Socratic Mode</div>
     <div class="sbi" onclick="setMode('counterfactual');closeSB()">&#10067; Counterfactual</div>
-    <div class="sbi" onclick="showContractPanel();closeSB()">&#9878;&#65039; Contract Review</div>
     <div class="sec" style="margin-top:6px">Recenti</div>
-    <div class="sbi on" onclick="newChat()">
+    <div class="sbi on">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       Nuova chat
     </div>
-    <div id="recentChatList" style="overflow-y:auto;max-height:280px"></div>
     <div class="sec" style="margin-top:6px">Account</div>
-    <div id="accountBadge" style="display:none;padding:6px 14px;font-size:.75rem;border-radius:8px;margin:4px 8px;background:rgba(0,200,150,.12);border:1px solid var(--accent);color:var(--accent)"></div>
     <button class="login-sb-btn" onclick="loginGoogle()">
       <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
       Accedi con Google
@@ -181,9 +181,31 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <div id="agentHint" style="display:flex;align-items:center;gap:10px;margin-top:16px;padding:10px 16px;border-radius:12px;background:var(--surface);border:1px solid var(--border);font-size:.8rem;color:var(--muted);min-height:40px;transition:all .3s">
-          <span id="agentHintIcon" style="font-size:1.2rem">🤖</span>
-          <span id="agentHintTxt">Scrivi qualcosa per attivare automaticamente l'agente giusto…</span>
+        <div class="chips">
+          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
+          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
+          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
+          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
+          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
+          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
+          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
+          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
+          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
+          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
+          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
+          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
+          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
+          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
+          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
+          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
+          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
+          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
+          <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
+          <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
+          <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
+          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
+          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
+          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
         </div>
       </div>
     </div>
@@ -208,18 +230,10 @@ textarea::placeholder{color:var(--muted)}
           <button class="tbtn" id="micBtn" onclick="toggleRec()" title="Voce">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
           </button>
-          <!-- Pulsante SPACES con stato visivo -->
-          <button class="tbtn" id="spacesQuickBtn"
-            onclick="spacesOn ? SPACES.startListening() : startSpaces()"
-            title="Parla con SPACES (o attiva con &quot;Hey Space&quot;)"
-            style="position:relative">
-            🛸
-            <span id="spacesStateDot" style="position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:#666;display:inline-block"></span>
-          </button>
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare · Shift+Invio per a capo · 🛸 <strong>Hey Space</strong> per AI vocale</div>
+      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; &#127756; SPACES per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -270,40 +284,11 @@ var btnEl=document.getElementById("sendBtn");
 var attachedFiles=[];
 var isRec=false,recog=null,curSpeech=null;
 var curMode="auto";
-var _lockedMode=null; // agente attivo fino a cambio di topic (null = nessuno)
 var spacesOn=false;
 var spacesWaiting=false;
 
 // ── CHAT PERSISTENCE — salva/carica conversazioni da localStorage ─────────
-var MAX_STORED_CHATS=50;
-
-// ── Account creatore — nessun limite di servizio ────────────────────────────
-var CREATOR_EMAIL="elettronicmarket01@gmail.com";
-function isCreator(){ return (window._loggedEmail||"")===CREATOR_EMAIL; }
-// ────────────────────────────────────────────────────────────────────────────
-
-// ── Render lista chat recenti nella sidebar ─────────────────────────────────
-function renderRecentChats(){
-  var el=document.getElementById("recentChatList");
-  if(!el)return;
-  try{
-    var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    if(chats.length===0){
-      el.innerHTML="<div style='padding:6px 14px;font-size:.75rem;color:var(--muted)'>Nessuna chat salvata</div>";
-      return;
-    }
-    el.innerHTML=chats.slice(0,30).map(function(c){
-      var title=(c.title||"Chat").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-      var date=c.ts?new Date(c.ts).toLocaleDateString("it-IT",{day:"2-digit",month:"short"}):"";
-      var active=c.id===SID?"background:var(--surface);border-radius:8px;":"";
-      return "<div class='sbi' style='"+active+"justify-content:space-between;gap:4px' onclick='loadChatFromStorage(\""+c.id+"\");closeSB()'>"+
-        "<span style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:.8rem'>💬 "+title+"</span>"+
-        "<span style='font-size:.68rem;color:var(--muted);flex-shrink:0'>"+date+"</span>"+
-        "</div>";
-    }).join("");
-  }catch(e){console.warn("renderRecentChats:",e);}
-}
-// ────────────────────────────────────────────────────────────────────────────
+var MAX_STORED_CHATS=20;
 function saveChatToStorage(){
   try{
     var msgs=[];
@@ -316,13 +301,12 @@ function saveChatToStorage(){
     });
     if(msgs.length===0)return;
     var chats=JSON.parse(localStorage.getItem("spaceai_chats")||"[]");
-    var existing=chats.findIndex(function(c){return c.id===SID;}); // fix: era "cache"
+    var existing=cache.findIndex(function(c){return c.id===SID;});
     var entry={id:SID,userId:USER_ID,ts:Date.now(),title:msgs[0]?msgs[0].text.replace(/<[^>]*>/g,"").slice(0,40):"Chat",msgs:msgs};
     if(existing>=0)chats[existing]=entry;
     else chats.unshift(entry);
     if(chats.length>MAX_STORED_CHATS)chats=chats.slice(0,MAX_STORED_CHATS);
     localStorage.setItem("spaceai_chats",JSON.stringify(chats));
-    renderRecentChats(); // aggiorna lista sidebar
   }catch(e){console.warn("saveChatToStorage:",e);}
 }
 function loadChatFromStorage(chatId){
@@ -470,183 +454,16 @@ var SID=USER_ID+"_s"+Math.random().toString(36).slice(2,8)+Date.now().toString(3
 var lastAgent="reasoner";
 var lastQuery="";
 var SUPABASE_URL="";
-// ══════════════════════════════════════════════════════════════════════════
-// VIDEO ANALYSIS — estrazione frame + analisi AI vision
-// ══════════════════════════════════════════════════════════════════════════
-
-// Estrae N frame distribuiti uniformemente dal video usando HTML5 Canvas
-function extractVideoFrames(file, numFrames){
-  return new Promise(function(resolve, reject){
-    var video = document.createElement("video");
-    var url   = URL.createObjectURL(file);
-    video.src = url;
-    video.muted = true;
-    video.playsInline = true;
-    video.crossOrigin = "anonymous";
-
-    var frames  = [];
-    var canvas  = document.createElement("canvas");
-    var ctx     = canvas.getContext("2d");
-    var seeking = false;
-
-    video.addEventListener("loadedmetadata", function(){
-      var duration = video.duration;
-      if(!duration || duration === Infinity){
-        URL.revokeObjectURL(url);
-        resolve([]); return;
-      }
-      // Ridimensiona canvas per bilanciare qualità/peso
-      canvas.width  = Math.min(video.videoWidth,  960);
-      canvas.height = Math.min(video.videoHeight, 540);
-
-      // Calcola i timestamp da campionare
-      var times = [];
-      for(var i=0; i<numFrames; i++){
-        // Distribuiti tra 5% e 95% della durata (evita inizio/fine neri)
-        times.push(duration * (0.05 + (i / Math.max(numFrames-1, 1)) * 0.90));
-      }
-      var idx = 0;
-
-      function seekNext(){
-        if(idx >= times.length){
-          URL.revokeObjectURL(url);
-          resolve(frames); return;
-        }
-        if(seeking) return;
-        seeking = true;
-        video.currentTime = times[idx];
-      }
-
-      video.addEventListener("seeked", function(){
-        try{
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          // JPEG 0.75 — buon bilanciamento qualità/dimensione per vision API
-          var frameB64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
-          frames.push({
-            b64:       frameB64,
-            timestamp: Math.round(video.currentTime),
-            index:     idx
-          });
-        } catch(e){ console.warn("Frame capture error:", e); }
-        idx++;
-        seeking = false;
-        seekNext();
-      });
-
-      video.addEventListener("error", function(e){
-        URL.revokeObjectURL(url);
-        reject(e);
-      });
-
-      seekNext();
-    });
-
-    video.addEventListener("error", function(e){
-      URL.revokeObjectURL(url); reject(e);
-    });
-
-    video.load();
-  });
-}
-
-// Invia i frame al backend e riceve l'analisi completa
-async function analyzeVideoFrames(frames, userTask, fileName){
-  try {
-    var res = await fetch("/api/video/analyze-frames", {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({
-        frames:    frames.map(function(f){ return {frameBase64: f.b64, timestamp: f.timestamp}; }),
-        task:      userTask,
-        fileName:  fileName,
-        sessionId: SID,
-        numFrames: frames.length
-      })
-    });
-    var data = await res.json();
-    if(data.error) return "❌ Errore analisi video: " + data.error;
-    return data.analysis || "Analisi completata.";
-  } catch(e){
-    return "❌ Errore connessione: " + e.message;
-  }
-}
-// ══════════════════════════════════════════════════════════════════════════
-
-function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");renderRecentChats();}
+function openSB(){document.getElementById("sidebar").classList.add("open");document.getElementById("sbOv").classList.add("on");}
 function closeSB(){document.getElementById("sidebar").classList.remove("open");document.getElementById("sbOv").classList.remove("on");}
-function renderCitations(text, sources){
-  if(!sources||sources.length===0) return text;
-  return text.replace(/\[(\d+)\]/g, function(match, n){
-    var src = sources.find(function(s){return s.index===n;});
-    if(src && src.url)
-      return '<a href="'+src.url+'" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-weight:600">['+n+']</a>';
-    return match;
-  });
-}
-// ── Rendering immagini da code_exec (matplotlib plots) ───────────────────────
-function renderCodeImages(images){
-  if(!images||images.length===0) return "";
-  return images.map(function(b64){
-    return "<div style='margin-top:10px'><img src='"+b64+"' style='max-width:100%;border-radius:8px;cursor:zoom-in' onclick='(function(s){"+
-      "var ov=document.createElement(\"div\");ov.style.cssText=\"position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.88);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out\";"+
-      "var ig=document.createElement(\"img\");ig.src=s;ig.style.cssText=\"max-width:95vw;max-height:95vh;border-radius:10px\";"+
-      "ov.appendChild(ig);ov.onclick=function(){document.body.removeChild(ov);};document.body.appendChild(ov);"+
-    "})(this.src)'/></div>";
-  }).join("");
-}
 function loginGoogle(){
-  if(SUPABASE_URL){
-    window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);
-  } else {
-    // Fallback senza Supabase: chiedi email manualmente
-    var email=prompt("Inserisci la tua email Google:");
-    if(email&&email.trim()){
-      window._loggedEmail=email.trim();
-      localStorage.setItem("spaceai_user_email",email.trim());
-      _applyCreatorPrivileges();
-      alert("Accesso effettuato come: "+email.trim()+(isCreator()?" 👑 (Creatore — nessun limite)":""));
-    }
-  }
+  if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=google&redirect_to="+encodeURIComponent(window.location.origin);}
+  else{alert("Configura SUPABASE_URL su Render per il login.");}
 }
 function loginGithub(){
-  if(SUPABASE_URL){
-    window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);
-  } else {
-    var email=prompt("Inserisci la tua email GitHub:");
-    if(email&&email.trim()){
-      window._loggedEmail=email.trim();
-      localStorage.setItem("spaceai_user_email",email.trim());
-      _applyCreatorPrivileges();
-      alert("Accesso effettuato come: "+email.trim()+(isCreator()?" 👑 (Creatore — nessun limite)":""));
-    }
-  }
+  if(SUPABASE_URL){window.location.href=SUPABASE_URL+"/auth/v1/authorize?provider=github&redirect_to="+encodeURIComponent(window.location.origin);}
+  else{alert("Configura SUPABASE_URL su Render per il login.");}
 }
-function _applyCreatorPrivileges(){
-  // Mostra badge account per tutti gli utenti loggati
-  var badge=document.getElementById("accountBadge");
-  if(badge&&window._loggedEmail){
-    badge.style.display="block";
-    if(isCreator()){
-      badge.innerHTML="👑 <strong>Creatore</strong> — "+window._loggedEmail+"<br><span style='font-size:.7rem;opacity:.8'>Nessun limite attivo</span>";
-      badge.style.background="rgba(255,200,0,.12)";
-      badge.style.borderColor="#f59e0b";
-      badge.style.color="#f59e0b";
-    } else {
-      badge.innerHTML="✅ "+window._loggedEmail;
-    }
-  }
-  if(!isCreator())return;
-  // Rimuove tutti i rate limit lato frontend
-  window._creatorMode=true;
-  MAX_STORED_CHATS=9999;
-  console.log("👑 Creator mode attivata — nessun limite");
-}
-// Ripristina login al reload
-(function(){
-  var saved=localStorage.getItem("spaceai_user_email");
-  if(saved){window._loggedEmail=saved;_applyCreatorPrivileges();}
-  renderRecentChats();
-})();
 async function loadHealth(){
   try{
     var r=await fetch("/api/health");
@@ -676,17 +493,13 @@ window.addEventListener("load",function(){
 });
 function setMode(m){
   curMode=m;
-  // se l'utente sceglie manualmente dalla sidebar → locked su quell'agente
-  // se sceglie "auto" → sblocca
-  _lockedMode = (m==="auto") ? null : m;
   if(m!=="spaces")spacesOn=false;
   var L={
     auto:"&#129302; Auto",code:"&#128187; Codice",finance:"&#128200; Finanza",
     search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES",
     security:"&#128737; AEGIS",neural:"&#129504; Neural",
     temporal:"&#8987; Temporal",dream:"&#129704; Dream",
-    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario",
-    contract_review:"&#9878;&#65039; Contract Review"
+    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario"
   };
   document.getElementById("modeLbl").innerHTML=L[m]||"&#129302; Auto";
   var ph={
@@ -696,341 +509,51 @@ function setMode(m){
     temporal:"Di cosa vuoi analizzare passato/presente/futuro?",
     dream:"Problema o sfida per cui generare soluzioni creative...",
     socratic:"Cosa vuoi imparare? Ti guido alla scoperta...",
-    counterfactual:"Scenario da analizzare nei suoi sviluppi alternativi...",
-    contract_review:"Scrivi 'contratto' o 'clausola' per aprire il pannello di analisi..."
+    counterfactual:"Scenario da analizzare nei suoi sviluppi alternativi..."
   };
   inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
-
-// ── AUTO-ROUTING: sceglie l'agente giusto in base al testo ──────────────
-var _routeRules=[
-  // [regex, mode, icon, label]
-  [/\b(genera|crea|disegna|dipingi|immagine|foto|illustra|render|ritratto|paesaggio|sfondo)\b/i,          "image",          "🎨","Genera Immagine"],
-  [/\b(svg|vettoriale|grafico vettoriale|visual creative|disegno geometrico)\b/i,                          "visual_creative", "🖼️","Creativo Visivo"],
-  [/\b(video|animazione|clip|film|crea.{0,10}video|genera.{0,10}video)\b/i,                               "video",           "🎬","Video AI"],
-  [/\b(canzone|musica|melodia|brano|accordi|spartito|testo musicale|crea.{0,10}canzone)\b/i,              "music",           "🎵","Crea Canzone"],
-  [/\b(audio|voce|tts|pronuncia|leggi ad alta voce|genera audio|sintesi vocale)\b/i,                      "audio",           "🎙️","Audio TTS"],
-  [/\b(codice|programma|funzione|script|bug|debug|python|java|javascript|html|css|api|git|classe|metodo|algoritmo|compila)\b/i, "code","💻","Codice"],
-  [/\b(trading|borsa|azioni|stock|bitcoin|ethereum|crypto|mercato|finanza|investimento|macd|rsi|nasdaq|indice|portafoglio|dividendo)\b/i, "finance","📈","Finanza"],
-  [/\b(notizie|news|oggi|ultime ore|aggiornamenti|cerca.{0,10}web|google|ricerca|attualit[àa]|breaking)\b/i, "search",       "🔍","Ricerca Web"],
-  [/\b(sicurezza|vulnerability|exploit|hacking|penetration|firewall|malware|virus|cybersecurity|aegis|scan)\b/i, "security",  "🛡️","AEGIS Security"],
-  [/\b(futuro|passato|storia|evoluzione|timeline|previsione|tendenza|temporal|analisi storica)\b/i,        "temporal",       "⏳","Temporal Reasoning"],
-  [/\b(contratto|clausola|nda|riservatezza|accordo commerciale|termini e condizioni|contratto di lavoro|contratto di vendita|contratto di affitto|privacy policy|red flag contratto|firmare questo|analizza contratto|review contratto|licenza software)\b/i, "contract_review","⚖️","Contract Review"],
-  [/\b(spiega|come funziona|insegnam|imparo|capisci|socratico|ragiona con me|guida|tutorial|passo passo)\b/i,"socratic",      "🤖","Socratic Mode"],
-  [/\b(cosa sarebbe successo|scenario alternativo|ipotesi|e se|counterfactual|e se invece|immagina che)\b/i,"counterfactual","❓","Counterfactual"],
-  [/\b(neural|ragiona autonomamente|analisi profonda|riflessione|meditazione logica)\b/i,                  "neural",          "🧠","Neural Core"],
-  [/\b(parla|ascolta|voce|conversazione vocale|spaces)\b/i,                                               "spaces",          "🛸","SPACES Vocale"],
-  [/\b(github|repository|repo|commit|pull request|branch|open source)\b/i,                               "github",          "🐱","GitHub Agent"],
-  [/\b(obiettivo|goal|delega|pianifica|task autonomo|manus|agente autonomo|esegui per me)\b/i,             "manus",           "🎯","Goal Delegation"],
-];
-
-function autoRoute(text){
-  if(!text||text.trim().length<3)return null;
-  var t=text.trim();
-  for(var i=0;i<_routeRules.length;i++){
-    if(_routeRules[i][0].test(t))return{mode:_routeRules[i][1],icon:_routeRules[i][2],label:_routeRules[i][3]};
-  }
-  return null;
-}
-
-function updateAgentHint(text){
-  var hint=document.getElementById("agentHint");
-  var icon=document.getElementById("agentHintIcon");
-  var lbl=document.getElementById("agentHintTxt");
-  if(!hint||!icon||!lbl)return;
-  var r=autoRoute(text);
-  if(r){
-    icon.textContent=r.icon;
-    lbl.innerHTML="Agente rilevato: <strong style='color:var(--accent)'>"+r.label+"</strong>";
-    hint.style.borderColor="var(--accent)";
-    hint.style.background="rgba(0,200,150,.07)";
-  } else if(text&&text.trim().length>0){
-    icon.textContent="🤖";
-    lbl.textContent="Rispondo io direttamente…";
-    hint.style.borderColor="var(--border)";
-    hint.style.background="var(--surface)";
-  } else {
-    icon.textContent="🤖";
-    lbl.textContent="Scrivi qualcosa per attivare automaticamente l'agente giusto…";
-    hint.style.borderColor="var(--border)";
-    hint.style.background="var(--surface)";
-  }
-}
-// ────────────────────────────────────────────────────────────────────────
-
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
-// ══════════════════════════════════════════════════════════════════════════════
-// SPACES — Assistente vocale stile Siri/Hey Google
-// Architettura a macchina a stati: IDLE → WAKE → LISTENING → PROCESSING → SPEAKING
-// Wake word: "Hey Space" o "Ehi Space" o "Space ascolta"
-// ══════════════════════════════════════════════════════════════════════════════
-
-var SPACES = {
-  // ── Stato interno ────────────────────────────────────────────────────────
-  state:       "OFF",    // OFF | WAKE_WATCH | LISTENING | PROCESSING | SPEAKING
-  recognition: null,     // istanza SpeechRecognition attiva
-  synthesis:   null,     // istanza SpeechSynthesisUtterance attiva
-  wakeRecog:   null,     // istanza dedicata al wake word (sempre attiva)
-  silenceTimer:null,     // timer per rilevare silenzio prolungato
-  retryCount:  0,        // contatore errori consecutivi
-
-  // ── Costanti ─────────────────────────────────────────────────────────────
-  WAKE_WORDS:  ["hey space","ehi space","space ascolta","ok space","ciao space"],
-  SILENCE_MS:  8000,     // 8s di silenzio → torna in ascolto wake word
-  MAX_RETRIES: 3,        // dopo 3 errori consecutivi, pausa di 5s
-
-  // ── UI elements ──────────────────────────────────────────────────────────
-  ui: {
-    bar:  function(){ return document.getElementById("recBar"); },
-    txt:  function(){ return document.getElementById("recTxt"); },
-    btn:  function(){ return document.getElementById("spacesBtn"); }
-  },
-
-  // ── Aggiorna UI in base allo stato ───────────────────────────────────────
-  updateUI: function(){
-    var bar = this.ui.bar(), txt = this.ui.txt();
-    var dot = document.getElementById("spacesStateDot");
-    if(!bar||!txt) return;
-    var states = {
-      "OFF":        { on:false, text:"🛸 SPACES disattivato",               color:"#666" },
-      "WAKE_WATCH": { on:false, text:"👂 In ascolto... dì \"Hey Space\"",    color:"#f59e0b" },
-      "LISTENING":  { on:true,  text:"🎙️ Sto ascoltando... parla!",          color:"#00c896" },
-      "PROCESSING": { on:false, text:"⏳ Elaborazione...",                    color:"#8b5cf6" },
-      "SPEAKING":   { on:false, text:"🔊 Risposta in corso...",               color:"#3b82f6" }
-    };
-    var s = states[this.state] || states["OFF"];
-    if(s.on) bar.classList.add("on"); else bar.classList.remove("on");
-    bar.style.borderColor = s.color;
-    txt.textContent = s.text;
-    if(dot) dot.style.background = s.color;
-  },
-
-  // ── Avvia SPACES ─────────────────────────────────────────────────────────
-  start: function(){
-    if(this.state !== "OFF") return;
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if(!SR){ addRow("❌ Browser non supporta il riconoscimento vocale. Usa Chrome.","err"); return; }
-    curMode="spaces"; spacesOn=true;
-    this.retryCount = 0;
-    addRow("🛸 **SPACES attivato!**\n\nDì **\"Hey Space\"** per iniziare, oppure tocca il microfono.\n\nSono in ascolto continuo.", "ai");
-    speak("SPACES attivato. Dimmi Hey Space quando sei pronto.", null);
-    this.startWakeWatch();
-  },
-
-  // ── Ferma tutto ──────────────────────────────────────────────────────────
-  stop: function(){
-    this.state = "OFF";
-    spacesOn = false; spacesWaiting = false;
-    this.stopAll();
-    window.speechSynthesis.cancel();
-    this.updateUI();
-    addRow("🛸 SPACES disattivato.","ai");
-  },
-
-  // ── Ferma riconoscimento attivo ───────────────────────────────────────────
-  stopAll: function(){
-    if(this.recognition){ try{ this.recognition.abort(); }catch(e){} this.recognition=null; }
-    if(this.wakeRecog){   try{ this.wakeRecog.abort(); }catch(e){} this.wakeRecog=null; }
-    if(this.silenceTimer){ clearTimeout(this.silenceTimer); this.silenceTimer=null; }
-  },
-
-  // ── FASE 1: Ascolto wake word in background ───────────────────────────────
-  startWakeWatch: function(){
-    var self = this;
-    if(this.state === "LISTENING" || this.state === "PROCESSING" || this.state === "SPEAKING") return;
-    this.state = "WAKE_WATCH";
-    this.updateUI();
-    if(this.wakeRecog){ try{ this.wakeRecog.abort(); }catch(e){} }
-
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    var wr = new SR();
-    wr.lang = "it-IT";
-    wr.continuous = true;      // sempre attivo
-    wr.interimResults = true;  // risultati intermedi per wake word più reattivo
-    wr.maxAlternatives = 3;
-    this.wakeRecog = wr;
-
-    wr.onresult = function(e){
-      if(self.state !== "WAKE_WATCH") return;
-      // Controlla tutti i risultati per il wake word
-      for(var i=e.resultIndex; i<e.results.length; i++){
-        for(var j=0; j<e.results[i].length; j++){
-          var heard = e.results[i][j].transcript.toLowerCase().trim();
-          var isWake = self.WAKE_WORDS.some(function(w){ return heard.includes(w); });
-          if(isWake){
-            wr.abort();
-            self.wakeRecog = null;
-            // Feedback immediato
-            if(window.speechSynthesis) window.speechSynthesis.cancel();
-            self.playBeep("wake");
-            setTimeout(function(){ self.startListening(); }, 300);
-            return;
-          }
-        }
-      }
-    };
-
-    wr.onend = function(){
-      // Riavvia wake watch se SPACES è ancora attivo
-      if(self.state === "WAKE_WATCH" && spacesOn){
-        setTimeout(function(){ if(spacesOn&&self.state==="WAKE_WATCH") self.startWakeWatch(); }, 500);
-      }
-    };
-
-    wr.onerror = function(ev){
-      if(ev.error === "aborted") return;
-      if(spacesOn && self.state === "WAKE_WATCH"){
-        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 1500);
-      }
-    };
-
-    try{ wr.start(); } catch(e){
-      setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 2000);
-    }
-  },
-
-  // ── FASE 2: Ascolto comando utente ───────────────────────────────────────
-  startListening: function(){
-    var self = this;
-    if(!spacesOn) return;
-    this.state = "LISTENING";
-    spacesWaiting = false;
-    this.updateUI();
-    if(this.recognition){ try{ this.recognition.abort(); }catch(e){} }
-
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    var r = new SR();
-    r.lang = "it-IT";
-    r.continuous = false;
-    r.interimResults = true;
-    r.maxAlternatives = 1;
-    this.recognition = r;
-
-    // Timer silenzio — se l'utente non parla per 8s torna in wake watch
-    this.silenceTimer = setTimeout(function(){
-      if(self.state === "LISTENING"){
-        r.abort();
-        speak("Non ho sentito nulla. Dimmi Hey Space quando sei pronto.", null);
-        setTimeout(function(){ self.startWakeWatch(); }, 2500);
-      }
-    }, this.SILENCE_MS);
-
-    // Mostra testo in tempo reale
-    r.onresult = function(e){
-      var interim = "";
-      var final_t = "";
-      for(var i=0; i<e.results.length; i++){
-        if(e.results[i].isFinal) final_t += e.results[i][0].transcript;
-        else interim += e.results[i][0].transcript;
-      }
-      if(interim) document.getElementById("recTxt").textContent = "🎙️ " + interim + "...";
-      if(final_t.trim().length > 1){
-        clearTimeout(self.silenceTimer);
-        self.silenceTimer = null;
-        self.recognition = null;
-        self.retryCount = 0;
-        self.processCommand(final_t.trim());
-      }
-    };
-
-    r.onend = function(){
-      clearTimeout(self.silenceTimer);
-      if(self.state === "LISTENING"){
-        // Nessun risultato finale — torna in wake watch
-        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 500);
-      }
-    };
-
-    r.onerror = function(ev){
-      clearTimeout(self.silenceTimer);
-      if(ev.error === "aborted") return;
-      self.retryCount++;
-      if(self.retryCount >= self.MAX_RETRIES){
-        self.retryCount = 0;
-        speak("Problemi con il microfono. Riprovo tra poco.", null);
-        setTimeout(function(){ if(spacesOn) self.startWakeWatch(); }, 4000);
-      } else {
-        setTimeout(function(){ if(spacesOn) self.startListening(); }, 1200);
-      }
-    };
-
-    try{ r.start(); } catch(e){
-      setTimeout(function(){ if(spacesOn) self.startListening(); }, 1500);
-    }
-  },
-
-  // ── FASE 3: Processa il comando ───────────────────────────────────────────
-  processCommand: function(text){
-    var self = this;
-    if(!spacesOn) return;
-
-    // Comandi di controllo vocale
-    var low = text.toLowerCase();
-    if(low.match(/\b(stop|basta|fermati|disattiva|spegni)\s*(spaces|voice|voce)?\b/)){
-      this.stop(); return;
-    }
-    if(low.match(/\b(silenzio|smetti di parlare|taci)\b/)){
-      window.speechSynthesis.cancel();
-      this.startWakeWatch(); return;
-    }
-
-    this.state = "PROCESSING";
-    spacesWaiting = true;
-    this.updateUI();
-
-    // Mostra in chat cosa ha detto l'utente
-    addRow("🎙️ " + text, "user-voice");
-    inpEl.value = text;
-
-    // Invia come messaggio normale
-    sendMsg();
-  },
-
-  // ── FASE 4: Chiamato da speak() quando finisce la sintesi vocale ──────────
-  onSpeakEnd: function(){
-    if(!spacesOn) return;
-    this.state = "WAKE_WATCH";
-    spacesWaiting = false;
-    this.updateUI();
-    // Breve pausa naturale poi torna in ascolto wake word
-    setTimeout(function(){ if(spacesOn) SPACES.startWakeWatch(); }, 600);
-  },
-
-  // ── Beep di feedback ─────────────────────────────────────────────────────
-  playBeep: function(type){
-    try{
-      var ctx = new (window.AudioContext||window.webkitAudioContext)();
-      var osc = ctx.createOscillator();
-      var gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = type==="wake" ? 880 : 440;
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime+0.15);
-    }catch(e){}
-  }
-};
-
-// ── Funzioni globali per compatibilità con codice esistente ─────────────────
 function startSpaces(){
-  SPACES.start();
+  curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
+  addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
+  speak("SPACES attivato. Sono pronto.",null);
 }
-function stopSpaces(){
-  SPACES.stop();
-}
-
-// Override di listenLoop per compatibilità (ora usa SPACES.startWakeWatch)
 function listenLoop(){
-  if(spacesOn && SPACES.state==="WAKE_WATCH") SPACES.startWakeWatch();
-  else if(spacesOn && SPACES.state==="OFF")   SPACES.startListening();
+  if(!spacesOn||spacesWaiting)return; // NON riascoltare se in attesa risposta
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){addRow("Browser non supportato. Usa Chrome.","err");return;}
+  var r=new SR();
+  r.lang="it-IT";r.continuous=false;r.interimResults=false;
+  r.maxAlternatives=1;
+  r.onstart=function(){
+    document.getElementById("recBar").classList.add("on");
+    document.getElementById("recTxt").textContent="&#127756; SPACES in ascolto...";
+  };
+  r.onresult=function(e){
+    var t=e.results[0][0].transcript.trim();
+    if(t&&t.length>1){
+      spacesWaiting=true; // blocca il riascolto finché non risponde
+      document.getElementById("recBar").classList.remove("on");
+      document.getElementById("recTxt").textContent="&#8987; Elaborazione...";
+      inpEl.value=t;
+      sendMsg(); // sendMsg richiama listenLoop alla fine via speak.onend
+    }
+  };
+  r.onend=function(){
+    document.getElementById("recBar").classList.remove("on");
+    // Riavvia SOLO se non stiamo aspettando risposta
+    if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1000);
+  };
+  r.onerror=function(ev){
+    document.getElementById("recBar").classList.remove("on");
+    // no-speech = normale, non è un errore
+    if(ev.error==="no-speech"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,800);
+    else if(ev.error!=="aborted"&&spacesOn&&!spacesWaiting)setTimeout(listenLoop,2500);
+  };
+  try{r.start();}catch(e){if(spacesOn&&!spacesWaiting)setTimeout(listenLoop,1500);}
 }
-// ══════════════════════════════════════════════════════════════════════════════
-
-inpEl.addEventListener("input",function(){
-  inpEl.style.height="auto";
-  inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";
-  updateAgentHint(inpEl.value);
-});
+inpEl.addEventListener("input",function(){inpEl.style.height="auto";inpEl.style.height=Math.min(inpEl.scrollHeight,140)+"px";});
 // ── Avvio: carica sessioni e offri di riprendere l'ultima chat ───────────
 renderChatHistory();
 (function(){
@@ -1099,28 +622,18 @@ function stopRec(){if(recog)recog.stop();isRec=false;document.getElementById("mi
 function speak(text,btn){
   if(curSpeech){window.speechSynthesis.cancel();curSpeech=null;document.querySelectorAll(".abtn.on").forEach(function(b){b.classList.remove("on");});return;}
   var clean=text.replace(/<[^>]*>/g,"").replace(/[#*`>]/g,"").replace(/\n+/g," ").trim().slice(0,2000);
-  if(!clean) return;
-  var u=new SpeechSynthesisUtterance(clean);
-  u.lang="it-IT"; u.rate=1.05; u.pitch=1.05;
-  // Seleziona la voce migliore italiana disponibile
+  var u=new SpeechSynthesisUtterance(clean);u.lang="it-IT";u.rate=1.0;u.pitch=1.1;
   var vs=window.speechSynthesis.getVoices();
-  var pref=["Alice","Federica","Google italiano","Microsoft Elsa","Paola"];
-  for(var p of pref){
-    var iv=vs.find(function(v){return v.name.includes(p)&&v.lang.startsWith("it");});
-    if(iv){u.voice=iv;break;}
-  }
+  var pref=["Alice","Federica","Google italiano","Microsoft Elsa"];
+  for(var p of pref){var iv=vs.find(function(v){return v.name.includes(p)&&v.lang.startsWith("it");});if(iv){u.voice=iv;break;}}
   if(!u.voice){var it=vs.filter(function(v){return v.lang.startsWith("it");});if(it.length)u.voice=it[0];}
-  u.onstart=function(){
-    curSpeech=u;
-    if(btn)btn.classList.add("on");
-    if(spacesOn){ SPACES.state="SPEAKING"; SPACES.updateUI(); }
-  };
+  u.onstart=function(){curSpeech=u;if(btn)btn.classList.add("on");};
   u.onend=u.onerror=function(){
     curSpeech=null;
     if(btn)btn.classList.remove("on");
     if(spacesOn){
-      // Notifica SPACES — riprende il ciclo wake word
-      SPACES.onSpeakEnd();
+      spacesWaiting=false; // risposta finita, si può riascoltare
+      setTimeout(listenLoop,600); // pausa naturale prima di riascoltare
     }
   };
   window.speechSynthesis.speak(u);
@@ -1142,7 +655,7 @@ function renderMD(text){
   return t;
 }
 function cpCode(btn){var c=btn.previousElementSibling.textContent;navigator.clipboard.writeText(c).then(function(){btn.textContent="OK";setTimeout(function(){btn.textContent="Copia";},1500);});}
-function newChat(){saveChatToStorage();SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;spacesWaiting=false;curMode="auto";_lockedMode=null;document.getElementById("modeLbl").innerHTML="\u{1F916} Auto";msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
+function newChat(){saveChatToStorage();SID="s"+Math.random().toString(36).slice(2,10)+Date.now();spacesOn=false;spacesWaiting=false;msgsEl.innerHTML="";attachedFiles=[];renderFiles();var w=document.createElement("div");w.id="welcome";w.innerHTML='<img class="wlogo" src="'+LOGO+'"/><div class="whi">Ciao, sono <em>SPACE AI</em></div><p class="wsub">Nuova conversazione.</p>';msgsEl.appendChild(w);closeSB();}
 function removeWelcome(){var w=document.getElementById("welcome");if(w)w.remove();}
 function qs(t){inpEl.value=t;sendMsg();}
 function addRow(text,type){
@@ -1326,25 +839,8 @@ async function sendMsg(){
           var du=await readFile(f);
           imgBase64=du.split(",")[1]||du;
           text=text||"Analizza questa immagine in dettaglio.";
-        } else if(f.type.startsWith("video/")||fn.match(/\.(mp4|avi|mov|mkv|wmv|webm)$/)){
-          // ── ANALISI VIDEO REALE: estrai frame + invia al backend ──────────
-          addRow("🎬 Video rilevato: **"+f.name+"** — estrazione frame in corso...","ai");
-          try {
-            var frames = await extractVideoFrames(f, 6); // estrai 6 frame distribuiti
-            if(frames.length > 0){
-              var taskMsg = text || "Analizza questo video e descrivi dettagliatamente cosa vedi.";
-              addRow("⏳ Analisi "+frames.length+" frame con AI vision...","ai");
-              var analysisResult = await analyzeVideoFrames(frames, taskMsg, f.name);
-              addRow(analysisResult, "ai");
-              // Salva in memoria per follow-up
-              text = ""; // già risposto
-            } else {
-              text += "\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB) — impossibile estrarre frame, descrivi il tipo di contenuto]";
-            }
-          } catch(ve){
-            console.warn("Video analysis error:", ve);
-            text += "\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB)]";
-          }
+        } else if(f.type.startsWith("video/")||fn.match(/\.(mp4|avi|mov|mkv|wmv)$/)){
+          text+="\n[VIDEO: "+f.name+" ("+Math.round(f.size/1024)+"KB) - descrivi cosa potrebbe contenere]";
         } else if(f.type.startsWith("audio/")||fn.match(/\.(mp3|wav|ogg|flac)$/)){
           text+="\n[AUDIO: "+f.name+" ("+Math.round(f.size/1024)+"KB)]";
         } else if(fn.match(/\.(zip|rar|7z|tar|gz)$/)){
@@ -1364,45 +860,12 @@ async function sendMsg(){
     attachedFiles=[];renderFiles();
   }
   if(!text||btnEl.disabled)return;
-
-  // ── AUTO-ROUTING con sticky agent ────────────────────────────────────
-  // lockedMode = agente attivo finché il tema non cambia
-  if(curMode==="auto"||curMode===_lockedMode){
-    var _ar=autoRoute(text);
-    if(_ar){
-      // agenti con panel dedicato → apri panel e fermati
-      if(_ar.mode==="music"){showMusicPanel();return;}
-      if(_ar.mode==="github"){showGithubPanel();return;}
-      if(_ar.mode==="manus"){showManusPanel();return;}
-      if(_ar.mode==="contract_review"){showContractPanel();return;}
-
-      if(_ar.mode!==_lockedMode){
-        // nuovo agente rilevato → switcha e blocca
-        _lockedMode=_ar.mode;
-        curMode=_ar.mode;
-        document.getElementById("modeLbl").innerHTML=_ar.icon+" "+_ar.label;
-      } else {
-        // stesso agente → rimane locked, non fare nulla
-        curMode=_lockedMode;
-      }
-    } else {
-      // nessun agente rilevato nel messaggio
-      if(_lockedMode!==null){
-        // messaggio generico mentre c'è un agente locked → rimane locked
-        curMode=_lockedMode;
-      } else {
-        curMode="auto"; // nessun agente attivo → risposta diretta
-      }
-    }
-  }
-  // ── fine auto-routing ──────────────────────────────────────────────────
-
   var msg=text;
   if(curMode==="code")msg="[MODALITA CODICE] "+text;
   else if(curMode==="finance")msg="[MODALITA FINANZA] "+text;
   else if(curMode==="search")msg="[RICERCA WEB 2026] "+text;
   else if(curMode==="image")msg="Genera immagine di: "+text;
-  else if(curMode==="spaces")msg="[SPACES_VOICE_MODE] "+text;
+  else if(curMode==="spaces")msg="[SPACES MODE - rispondi conciso per voce] "+text;
   else if(curMode==="security")msg="[AEGIS SECURITY SCAN - analisi difensiva] "+text;
   else if(curMode==="neural")msg="[NEURAL CORE - ragionamento autonomo profondo] "+text;
   else if(curMode==="visual_creative")msg="[VISUAL CREATIVE - genera SVG per: ] "+text;
@@ -1410,7 +873,6 @@ async function sendMsg(){
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
-  // NON resettare curMode — l'agente rimane locked finché cambia topic
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   addRow(text,"user");
@@ -1419,7 +881,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:_lockedMode||curMode||"auto",userEmail:window._loggedEmail||"",clientDate:new Date().toISOString()})
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||""})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
@@ -1429,14 +891,153 @@ async function sendMsg(){
       else{
         if(data.agents)lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
         lastQuery=text;
-        // ── Music Gen ─────────────────────────────────────────────────
+        // ── Music Gen v2 — Tone.js + Web Speech canto sincronizzato ──────
         if(data.mode==="music_gen"&&data.musicData){
           var md=data.musicData;
+          // Messaggio intro
           addRow("🎵 **"+(md.title||"Canzone generata")+"**\n\n"+
-            "🎸 Genere: "+md.genre+" | Mood: "+md.mood+" | Tempo: "+md.tempo+" BPM\n\n"+
+            "🎸 Genere: "+md.genre+" | 😊 Mood: "+md.mood+" | ⏱ "+md.tempo+" BPM\n"+
+            "🎹 Strumenti: "+(md.instruments||"pianoforte, basso, batteria")+"\n\n"+
             (md.description||""),"ai");
-          // Riusa showAbcPlayer per coerenza (Play/Stop/Download già inclusi)
-          showAbcPlayer(md);
+
+          // Container player
+          var mRow=document.createElement("div");mRow.className="row ai";
+          var mAv=document.createElement("div");mAv.className="av";
+          var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
+          var mBub=document.createElement("div");mBub.className="bubble";
+          mBub.style.cssText="padding:14px;max-width:98%;width:700px";
+
+          // ── ABC Score (partitura visiva) ──
+          var abcDiv=document.createElement("div");
+          abcDiv.id="abc_"+Date.now();
+          abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;max-height:200px;overflow-y:auto";
+          mBub.appendChild(abcDiv);
+
+          // ── Progress bar ──
+          var progWrap=document.createElement("div");
+          progWrap.style.cssText="background:#1a2744;border-radius:4px;height:4px;margin:8px 0;overflow:hidden";
+          var progBar=document.createElement("div");
+          progBar.style.cssText="width:0%;height:100%;background:var(--accent);transition:width 0.5s linear";
+          progWrap.appendChild(progBar);mBub.appendChild(progWrap);
+
+          // ── Testo karaoke ──
+          var lyrKar=document.createElement("div");
+          lyrKar.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);"+
+            "padding:10px 14px;border-radius:0 8px 8px 0;font-size:.9rem;min-height:60px;"+
+            "margin-bottom:8px;white-space:pre-line;line-height:1.8";
+          lyrKar.innerHTML="🎤 <em>Premi Riproduci per ascoltare la canzone cantata...</em>";
+          mBub.appendChild(lyrKar);
+
+          // ── Testo completo ──
+          if(md.lyrics){
+            var lyrFull=document.createElement("details");
+            lyrFull.style.cssText="margin-bottom:8px;cursor:pointer";
+            var lyrSum=document.createElement("summary");
+            lyrSum.style.cssText="font-size:.8rem;color:var(--accent);padding:4px 0";
+            lyrSum.textContent="📃 Testo completo";
+            var lyrPre=document.createElement("pre");
+            lyrPre.style.cssText="font-size:.8rem;white-space:pre-wrap;padding:8px;"+
+              "background:rgba(0,0,0,0.3);border-radius:6px;margin-top:6px;color:#c8d8f0";
+            lyrPre.textContent=md.lyrics||"";
+            lyrFull.appendChild(lyrSum);lyrFull.appendChild(lyrPre);
+            mBub.appendChild(lyrFull);
+          }
+
+          // ── Controls ──
+          var ctrlDiv=document.createElement("div");
+          ctrlDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center";
+
+          var playBtn=document.createElement("button");
+          playBtn.className="abtn";
+          playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;min-width:110px";
+          playBtn.innerHTML="▶ Riproduci";
+
+          var stopBtn=document.createElement("button");
+          stopBtn.className="abtn";stopBtn.innerHTML="⏹ Stop";
+
+          var dlBtn=document.createElement("a");
+          dlBtn.className="abtn";dlBtn.style.textDecoration="none";dlBtn.innerHTML="⬇ ABC";
+
+          // Volume
+          var volLabel=document.createElement("span");
+          volLabel.style.cssText="font-size:.75rem;color:#4a6080;margin-left:4px";
+          volLabel.textContent="🔊";
+          var volSlider=document.createElement("input");
+          volSlider.type="range";volSlider.min="0";volSlider.max="1";
+          volSlider.step="0.05";volSlider.value="0.7";
+          volSlider.style.cssText="width:70px;accent-color:var(--accent)";
+
+          ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);
+          ctrlDiv.appendChild(dlBtn);ctrlDiv.appendChild(volLabel);ctrlDiv.appendChild(volSlider);
+          mBub.appendChild(ctrlDiv);
+          mRow.appendChild(mAv);mRow.appendChild(mBub);
+          msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
+
+          // ── Render partitura ABC ──
+          var abcText=md.abcNotation||"";
+          var abcId=abcDiv.id;
+          setTimeout(function(){
+            if(typeof ABCJS!=="undefined"&&abcText){
+              ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true,staffwidth:620});
+            } else {
+              abcDiv.innerHTML="<pre style='font-size:.7rem;color:#333'>"+abcText+"</pre>";
+            }
+            var blob=new Blob([abcText],{type:"text/plain"});
+            dlBtn.href=URL.createObjectURL(blob);
+            dlBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+          },400);
+
+          // ── MOTORE AUDIO COMPLETO ──
+          var songCtx=null, songStopped=false, songInterval=null;
+
+          playBtn.onclick=function(){
+            if(songCtx){try{songCtx.close();}catch(e){}}
+            songStopped=false;
+            playBtn.innerHTML="⏳ Suonando...";
+            playBtn.disabled=true;
+            progBar.style.width="0%";
+
+            try{
+              songCtx=new (window.AudioContext||window.webkitAudioContext)();
+            }catch(e){
+              lyrKar.innerHTML="❌ Web Audio non disponibile in questo browser";
+              playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;return;
+            }
+
+            var vol=parseFloat(volSlider.value)||0.7;
+            var bpm=parseInt(md.tempo)||120;
+            var abcSrc=abcText;
+
+            // ── Estrai frequenze dalla notazione ABC ──
+            var notes=parseABCtoFreqs(abcSrc,bpm);
+            var totalDur=notes.reduce(function(s,n){return s+n.dur;},0)||30;
+
+            // ── Suona melodia con Tone.js o Web Audio puro ──
+            if(typeof Tone!=="undefined"){
+              playWithTone(notes,bpm,vol,songCtx,md,lyrKar,progBar,totalDur,
+                function(){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;});
+            } else {
+              playWithWebAudio(notes,vol,songCtx,md,lyrKar,progBar,totalDur,
+                function(){playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;});
+            }
+
+            // ── Canta il testo con Web Speech API ──
+            if(md.lyrics&&typeof SpeechSynthesisUtterance!=="undefined"){
+              setTimeout(function(){
+                if(!songStopped) singLyrics(md,lyrKar,bpm);
+              },800);
+            }
+          };
+
+          stopBtn.onclick=function(){
+            songStopped=true;
+            if(songCtx){try{songCtx.close();}catch(e){}}
+            if(window.speechSynthesis)window.speechSynthesis.cancel();
+            if(songInterval)clearInterval(songInterval);
+            playBtn.innerHTML="▶ Riproduci";playBtn.disabled=false;
+            progBar.style.width="0%";
+            lyrKar.innerHTML="🎤 <em>Riproduzione fermata.</em>";
+          };
         }
         // ── Audio Gen ─────────────────────────────────────────────────
         if(data.mode==="audio_gen"||data.audioBase64||data.webSpeech){
@@ -1544,12 +1145,8 @@ async function sendMsg(){
             pollGoalTask(data.taskData.taskId, 0);
           }
         } else if(data.agentLoop && data.response){
-          addRow("🤖 **Agent Loop**\n\n"+data.response,"ai");
-          if(spacesOn){
-            var vt=data.responseForVoice||data.response||"";
-            if(vt.length>400){var ci=vt.indexOf(".",300);vt=ci>0&&ci<450?vt.substring(0,ci+1):vt.substring(0,380)+"...";}
-            setTimeout(function(){speak(vt,null);},400);
-          }
+          addRow("\uD83E\uDD16 **Agent Loop**\n\n"+data.response,"ai");
+          if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
         // ── SVG standalone ─────────────────────────────────────────────
         } else if(data.svgImage){
           addSVGRow(data.svgImage, data.response||"Immagine SVG generata!", data.svgCode||"");
@@ -1559,27 +1156,8 @@ async function sendMsg(){
             addRow("⚠️ Generazione immagine non riuscita. Riprova tra qualche secondo.","err");
           } else {
             var prefix=data.webSearch==="true"?"🌐 **Live** · ":"";
-            var finalResp = data.webSources
-              ? renderCitations(data.response, data.webSources)
-              : data.response;
-            addRow(prefix+finalResp,"ai");
-            if(data.images && data.images.length>0){
-              var imgHtml=renderCodeImages(data.images);
-              var lastBubble=msgsEl.querySelector(".row.ai:last-child .bubble");
-              if(lastBubble)lastBubble.insertAdjacentHTML("beforeend",imgHtml);
-            }
-            // SPACES: legge responseForVoice (testo pulito) non la risposta markdown
-            if(spacesOn){
-              var voiceText = data.responseForVoice || data.response || "";
-              // Tronca a 400 caratteri per risposte vocali — come Alexa
-              if(voiceText.length > 400){
-                // Taglia al punto più vicino dopo 300 caratteri
-                var cutIdx = voiceText.indexOf(".", 300);
-                if(cutIdx > 0 && cutIdx < 450) voiceText = voiceText.substring(0, cutIdx+1);
-                else voiceText = voiceText.substring(0, 380) + "...";
-              }
-              setTimeout(function(){ speak(voiceText, null); }, 400);
-            }
+            addRow(prefix+data.response,"ai");
+            if(spacesOn)setTimeout(function(){speak(data.response,null);},400);
           }
         }
         // Aggiorna emotion indicator
@@ -1601,15 +1179,6 @@ async function sendMsg(){
   }finally{
     btnEl.disabled=false;
     inpEl.focus();
-    if(curMode==="auto"||curMode===null){
-      document.getElementById("modeLbl").innerHTML="🤖 Auto";
-    }
-    updateAgentHint("");
-    // Se SPACES è attivo e non c'è sintesi vocale in corso, torna in ascolto
-    if(spacesOn && SPACES.state==="PROCESSING" && !curSpeech){
-      spacesWaiting=false;
-      setTimeout(function(){ if(spacesOn) SPACES.startWakeWatch(); }, 800);
-    }
   }
 }
   // ── Manus Agent ───────────────────────────────────────────────────────────
@@ -1866,37 +1435,20 @@ async function sendMsg(){
     var genre=document.getElementById("musicGenre").value;
     var mood=document.getElementById("musicMood").value;
     var tempo=document.getElementById("musicTempo").value;
-    var key=document.getElementById("musicKey").value;
-    var duration=document.getElementById("musicDuration")?document.getElementById("musicDuration").value:"120";
-    var durationSec=parseInt(duration);
-    var durationLabel=durationSec>=120?(durationSec/60)+" minuti":(durationSec==60?"1 minuto":durationSec+" secondi");
     var sid=typeof SID!=="undefined"?SID:"global";
     closeMusicPanel();
-    addRow("🎵 Composizione in corso: **"+desc+"**\n⏱ Durata: "+durationLabel+" | 🎸 "+genre+" | 💫 "+mood,"ai");
-    // Mostra indicatore progresso
-    var progRow=document.createElement("div");progRow.className="row ai";progRow.id="musicProg";
-    var progAv=document.createElement("div");progAv.className="av";
-    var progIm=document.createElement("img");progIm.src=LOGO;progAv.appendChild(progIm);
-    var progBub=document.createElement("div");progBub.className="bubble";
-    progBub.style.cssText="padding:12px;font-size:.85rem";
-    progBub.innerHTML="<div style='display:flex;align-items:center;gap:10px'><div class='typing-dots'><span></span><span></span><span></span></div>Sto componendo "+durationLabel+" di musica con voce...</div>";
-    progRow.appendChild(progAv);progRow.appendChild(progBub);
-    msgsEl.appendChild(progRow);msgsEl.scrollTop=msgsEl.scrollHeight;
-
+    addRow("\uD83C\uDFB5 Composizione in corso: "+desc,"ai");
     fetch("/api/music/generate",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({description:desc,genre:genre,mood:mood,tempo:tempo,key:key,duration:duration,sessionId:sid})})
+      body:JSON.stringify({description:desc,genre:genre,mood:mood,tempo:tempo,sessionId:sid})})
       .then(function(r){return r.json();})
       .then(function(d){
-        // Rimuovi indicatore progresso
-        var pg=document.getElementById("musicProg");if(pg)pg.remove();
-        if(d.error){addRow("❌ Errore: "+d.error,"err");return;}
-        var voiceInfo=d.hasRealVoice?" 🎤 con voce ElevenLabs":" (spartito strumentale)";
-        addRow("🎵 **"+d.title+"**"+voiceInfo+"\n\n"+d.description,"ai");
+        if(d.error){addRow("\u274C Errore: "+d.error,"err");return;}
+        // Simula risposta music_gen
+        var fakeData={mode:"music_gen",musicData:d};
+        // Trigger the music handler manually
+        addRow("\uD83C\uDFB5 **"+d.title+"** generata!\n\n"+d.description,"ai");
         showAbcPlayer(d);
-      }).catch(function(e){
-        var pg=document.getElementById("musicProg");if(pg)pg.remove();
-        addRow("❌ Errore musica: "+e,"err");
-      });
+      }).catch(function(e){addRow("\u274C Errore musica: "+e,"err");});
   }
   function showAbcPlayer(md){
     var mRow=document.createElement("div");mRow.className="row ai";
@@ -1904,253 +1456,259 @@ async function sendMsg(){
     var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
     var mBub=document.createElement("div");mBub.className="bubble";
     mBub.style.cssText="padding:12px;max-width:96%;width:680px";
-
-    // ── Info canzone ────────────────────────────────────────────────────
-    var infoDiv=document.createElement("div");
-    infoDiv.style.cssText="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:.78rem;color:var(--muted)";
-    var tags=[
-      md.genre?"🎸 "+md.genre:"",
-      md.mood?"💫 "+md.mood:"",
-      md.tempo?"⚡ "+md.tempo+" BPM":"",
-      md.durationLabel?"⏱ "+md.durationLabel:""
-    ].filter(Boolean);
-    tags.forEach(function(t){
-      var s=document.createElement("span");
-      s.style.cssText="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2px 8px";
-      s.textContent=t;infoDiv.appendChild(s);
-    });
-    if(md.hasRealVoice){
-      var vb=document.createElement("span");
-      vb.style.cssText="background:rgba(0,200,150,.15);border:1px solid var(--accent);border-radius:12px;padding:2px 8px;color:var(--accent)";
-      vb.textContent="🎤 Voce ElevenLabs";infoDiv.appendChild(vb);
-    }
-    mBub.appendChild(infoDiv);
-
-    // ── Player audio reale (ElevenLabs) ─────────────────────────────────
-    if(md.audioB64){
-      var audioSec=document.createElement("div");
-      audioSec.style.cssText="background:var(--surface);border-radius:10px;padding:12px;margin-bottom:10px;border:1px solid var(--border)";
-
-      var audioEl=document.createElement("audio");
-      audioEl.controls=true;
-      audioEl.style.cssText="width:100%;margin-bottom:8px";
-      audioEl.src="data:audio/mpeg;base64,"+md.audioB64;
-      audioSec.appendChild(audioEl);
-
-      // Bottoni download
-      var dlRow=document.createElement("div");dlRow.style.cssText="display:flex;gap:8px;flex-wrap:wrap";
-
-      var dlMp3=document.createElement("a");dlMp3.className="abtn";
-      dlMp3.style.cssText="text-decoration:none;padding:7px 14px;border-radius:8px;background:var(--accent);color:#000;font-weight:700;font-size:.82rem";
-      dlMp3.innerHTML="⬇ Scarica MP3";
-      var mp3Blob=new Blob([_base64ToArrayBuffer(md.audioB64)],{type:"audio/mpeg"});
-      dlMp3.href=URL.createObjectURL(mp3Blob);
-      dlMp3.download=(md.title||"canzone").replace(/\s/g,"_")+".mp3";
-      dlRow.appendChild(dlMp3);
-
-      var dlAbcBtn=document.createElement("a");dlAbcBtn.className="abtn";
-      dlAbcBtn.style.cssText="text-decoration:none;padding:7px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.82rem;background:var(--surface)";
-      dlAbcBtn.innerHTML="⬇ Scarica .ABC";
-      var abcBlob=new Blob([md.abcNotation||""],{type:"text/plain"});
-      dlAbcBtn.href=URL.createObjectURL(abcBlob);
-      dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-      dlRow.appendChild(dlAbcBtn);
-
-      audioSec.appendChild(dlRow);
-      mBub.appendChild(audioSec);
-
-    } else {
-      // ── Fallback: ABCJS player (solo strumentale) ─────────────────────
-      var noteDiv=document.createElement("div");
-      noteDiv.style.cssText="background:rgba(245,158,11,.08);border:1px solid #f59e0b;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:.78rem;color:#f59e0b";
-      noteDiv.textContent="⚠️ "+(md.audioNote||"Voce non disponibile — riproduco solo spartito strumentale");
-      mBub.appendChild(noteDiv);
-
-      // Spartito ABCJS
-      var abcId="abc"+Date.now();
-      var abcDiv=document.createElement("div");abcDiv.id=abcId;
-      abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;min-height:80px";
-      mBub.appendChild(abcDiv);
-
-      var ctrlDiv=document.createElement("div");ctrlDiv.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center";
-      var playBtn=document.createElement("button");playBtn.className="abtn";
-      playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:.85rem";
-      playBtn.innerHTML="▶ Riproduci spartito";
-      var stopBtn=document.createElement("button");stopBtn.className="abtn";
-      stopBtn.style.cssText="background:var(--surface);color:var(--fg);padding:8px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:.85rem";
-      stopBtn.innerHTML="⏹ Stop";
-      var dlAbcBtn2=document.createElement("a");dlAbcBtn2.className="abtn";
-      dlAbcBtn2.style.cssText="text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.85rem;background:var(--surface)";
-      dlAbcBtn2.innerHTML="⬇ Scarica .ABC";
-      var abcBlob2=new Blob([md.abcNotation||""],{type:"text/plain"});
-      dlAbcBtn2.href=URL.createObjectURL(abcBlob2);
-      dlAbcBtn2.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-      ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);ctrlDiv.appendChild(dlAbcBtn2);
-      mBub.appendChild(ctrlDiv);
-
-      setTimeout(function(){
-        var abcText=md.abcNotation||"";
-        if(typeof ABCJS!=="undefined"&&abcText){
-          var visualObj=ABCJS.renderAbc(abcId,abcText,{responsive:"resize",add_classes:true,staffwidth:600});
-          var synth=null;var isPlaying=false;
-          playBtn.onclick=function(){
-            if(isPlaying)return;isPlaying=true;playBtn.innerHTML="⏳ Carico...";playBtn.disabled=true;
-            if(ABCJS.synth&&ABCJS.synth.supportsAudio()){
-              var audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-              synth=new ABCJS.synth.CreateSynth();
-              synth.init({audioContext:audioCtx,visualObj:visualObj[0],
-                options:{soundFontUrl:"https://paulrosen.github.io/midi-js-soundfonts/abcjs/"}})
-                .then(function(){return synth.prime();})
-                .then(function(){synth.start();playBtn.innerHTML="🎵 Suonando...";playBtn.disabled=false;})
-                .catch(function(e){playSimpleTones(abcText,audioCtx);playBtn.innerHTML="🎵 Suonando";playBtn.disabled=false;});
-            } else {playSimpleTones(abcText,new (window.AudioContext||window.webkitAudioContext)());playBtn.innerHTML="🎵 Suonando";playBtn.disabled=false;}
-          };
-          stopBtn.onclick=function(){if(synth){try{synth.stop();}catch(e){}}isPlaying=false;playBtn.innerHTML="▶ Riproduci spartito";playBtn.disabled=false;};
-        } else {
-          document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem;color:#333'>"+(md.abcNotation||"")+"</pre>";
-        }
-      },400);
-
-    // ── Testo/lyrics ─────────────────────────────────────────────────────
-    if(md.lyrics){
-      var lDiv=document.createElement("div");
-      lDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:10px 14px;border-radius:0 8px 8px 0;font-size:.82rem;white-space:pre-line;margin-top:8px;max-height:300px;overflow-y:auto";
-      lDiv.innerHTML="🎤 <b>Testo completo:</b>\n\n"+(md.lyrics||"");
-      mBub.appendChild(lDiv);
-    }
-
-    mRow.appendChild(mAv);mRow.appendChild(mBub);
-    msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
-  }
-
-// Helper: converte base64 in ArrayBuffer per download blob
-function _base64ToArrayBuffer(b64){
-  var bin=atob(b64);var buf=new ArrayBuffer(bin.length);var view=new Uint8Array(buf);
-  for(var i=0;i<bin.length;i++)view[i]=bin.charCodeAt(i);return buf;
-}
-    var mAv=document.createElement("div");mAv.className="av";
-    var mIm=document.createElement("img");mIm.src=LOGO;mAv.appendChild(mIm);
-    var mBub=document.createElement("div");mBub.className="bubble";
-    mBub.style.cssText="padding:12px;max-width:96%;width:680px";
-
-    // Spartito
     var abcId="abc"+Date.now();
     var abcDiv=document.createElement("div");abcDiv.id=abcId;
-    abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto;min-height:80px";
+    abcDiv.style.cssText="background:#fff;border-radius:8px;padding:8px;margin-bottom:10px;overflow-x:auto";
     mBub.appendChild(abcDiv);
-
-    // ── Controlli audio ────────────────────────────────────────────────
-    var ctrlDiv=document.createElement("div");
-    ctrlDiv.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center";
-
-    var playBtn=document.createElement("button");
-    playBtn.className="abtn";
-    playBtn.style.cssText="background:var(--accent);color:#000;font-weight:700;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:.85rem";
-    playBtn.innerHTML="▶ Riproduci";
-
-    var stopBtn=document.createElement("button");
-    stopBtn.className="abtn";
-    stopBtn.style.cssText="background:var(--surface);color:var(--fg);padding:8px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;font-size:.85rem";
-    stopBtn.innerHTML="⏹ Stop";
-
-    var dlAbcBtn=document.createElement("a");dlAbcBtn.className="abtn";
-    dlAbcBtn.style.cssText="text-decoration:none;padding:8px 14px;border-radius:8px;border:1px solid var(--border);color:var(--fg);font-size:.85rem;background:var(--surface)";
-    dlAbcBtn.innerHTML="⬇ Scarica .ABC";
-    var abcBlob=new Blob([md.abcNotation||""],{type:"text/plain"});
-    dlAbcBtn.href=URL.createObjectURL(abcBlob);
-    dlAbcBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
-
-    ctrlDiv.appendChild(playBtn);ctrlDiv.appendChild(stopBtn);ctrlDiv.appendChild(dlAbcBtn);
-    mBub.appendChild(ctrlDiv);
-    // ──────────────────────────────────────────────────────────────────
-
-    // Testo/lyrics
+    var dlBtn=document.createElement("a");dlBtn.className="abtn";dlBtn.style.textDecoration="none";
+    dlBtn.innerHTML="\u2B07 Scarica .ABC";
+    var blob=new Blob([md.abcNotation||""],{type:"text/plain"});
+    dlBtn.href=URL.createObjectURL(blob);
+    dlBtn.download=(md.title||"canzone").replace(/\s/g,"_")+".abc";
+    mBub.appendChild(dlBtn);
     if(md.lyrics){
       var lDiv=document.createElement("div");
       lDiv.style.cssText="background:rgba(0,200,255,0.05);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:.85rem;white-space:pre-line;margin-top:8px";
-      lDiv.innerHTML="🎤 <b>Testo:</b>\n"+(md.lyrics||"");
+      lDiv.innerHTML="\uD83C\uDFA4 <b>Testo:</b>\n"+(md.lyrics||"");
       mBub.appendChild(lDiv);
     }
-
     mRow.appendChild(mAv);mRow.appendChild(mBub);
     msgsEl.appendChild(mRow);msgsEl.scrollTop=msgsEl.scrollHeight;
-
-    // ── ABCJS render + synth ──────────────────────────────────────────
     setTimeout(function(){
-      var abcText=md.abcNotation||"";
-      if(typeof ABCJS==="undefined"||!abcText){
-        document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem;color:#333'>"+abcText+"</pre>";
-        playBtn.onclick=function(){playSimpleTones(abcText,new AudioContext());};
-        return;
+      if(typeof ABCJS!=="undefined"&&md.abcNotation){
+        ABCJS.renderAbc(abcId,md.abcNotation,{responsive:"resize",add_classes:true,staffwidth:600});
+      } else {
+        document.getElementById(abcId).innerHTML="<pre style='font-size:.75rem'>"+(md.abcNotation||"")+"</pre>";
       }
-      // Render spartito
-      var visualObj=ABCJS.renderAbc(abcId,abcText,{
-        responsive:"resize",add_classes:true,staffwidth:600,
-        selectionColor:"#00c896"
-      });
-
-      var synth=null;
-      var isPlaying=false;
-
-      playBtn.onclick=function(){
-        if(isPlaying){return;}
-        isPlaying=true;
-        playBtn.innerHTML="⏳ Carico...";
-        playBtn.disabled=true;
-
-        if(ABCJS.synth&&ABCJS.synth.supportsAudio()){
-          var audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-          synth=new ABCJS.synth.CreateSynth();
-          synth.init({
-            audioContext:audioCtx,
-            visualObj:visualObj[0],
-            options:{soundFontUrl:"https://paulrosen.github.io/midi-js-soundfonts/abcjs/"}
-          }).then(function(){
-            return synth.prime();
-          }).then(function(){
-            synth.start();
-            playBtn.innerHTML="🎵 Suonando...";
-            playBtn.disabled=false;
-          }).catch(function(e){
-            console.warn("ABCJS synth fallback:",e);
-            playSimpleTones(abcText,audioCtx);
-            playBtn.innerHTML="🎵 Suonando (basic)";
-            playBtn.disabled=false;
-          });
-        } else {
-          playSimpleTones(abcText,new (window.AudioContext||window.webkitAudioContext)());
-          playBtn.innerHTML="🎵 Suonando (basic)";
-          playBtn.disabled=false;
-        }
-      };
-
-      stopBtn.onclick=function(){
-        if(synth){try{synth.stop();}catch(e){}}
-        isPlaying=false;
-        playBtn.innerHTML="▶ Riproduci";
-        playBtn.disabled=false;
-      };
-
-      // Evento fine riproduzione
-      if(ABCJS.synth){
-        ABCJS.synth.CreateSynth.prototype.finished=function(){
-          isPlaying=false;
-          playBtn.innerHTML="▶ Riproduci";
-          playBtn.disabled=false;
-        };
-      }
-    },400);
+    },300);
   }
-  function playSimpleTones(abcText,ctx){
-    // Fallback Web Audio: suona toni semplici per 3 secondi
-    var freqs=[261,329,392,523,493,392,329,261,349,440,523,698,659,523,440,349];
-    freqs.forEach(function(f,i){
-      var osc=ctx.createOscillator();var g=ctx.createGain();
-      osc.connect(g);g.connect(ctx.destination);
-      osc.frequency.value=f;g.gain.setValueAtTime(0.3,ctx.currentTime+i*0.4);
-      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+i*0.4+0.35);
-      osc.start(ctx.currentTime+i*0.4);osc.stop(ctx.currentTime+i*0.4+0.4);
+  // ═══════════════════════════════════════════════════════════════════
+  // SPACE AI — Music Engine v2
+  // parseABCtoFreqs: converte ABC notation in array di {freq, dur}
+  // playWithWebAudio: suona con oscillatori multipli (melodia + basso + pad)
+  // singLyrics: canta il testo sincronizzato con Web Speech API
+  // ═══════════════════════════════════════════════════════════════════
+
+  var ABC_NOTE_MAP = {
+    "C":261.63,"D":293.66,"E":329.63,"F":349.23,"G":392.00,"A":440.00,"B":493.88,
+    "c":523.25,"d":587.33,"e":659.25,"f":698.46,"g":783.99,"a":880.00,"b":987.77,
+    "C,":130.81,"D,":146.83,"E,":164.81,"F,":174.61,"G,":196.00,"A,":220.00,"B,":246.94,
+    "C'":1046.50,"D'":1174.66,"E'":1318.51,"F'":1396.91,"G'":1567.98,"A'":1760.00
+  };
+  var ABC_DUR_MAP = {"8":0.25,"4":0.5,"2":1,"1":2,"3":0.333,"6":0.167,"":0.5};
+
+  function parseABCtoFreqs(abcText, bpm) {
+    if(!abcText) return [];
+    var beat = 60/Math.max(60,bpm);
+    var notes = [];
+    // Rimuovi header ABC (righe che iniziano con lettera maiuscola seguita da :)
+    var lines = abcText.split("\n").filter(function(l){
+      return l.trim() && !l.match(/^[A-Za-z]:/) && !l.startsWith("%");
     });
+    var body = lines.join(" ").replace(/\|:/g,"").replace(/:\|/g,"").replace(/\|/g," ");
+    // Parsa nota per nota con regex
+    var noteRe = /([_^]?)([A-Ga-g][,']*)(\d*)/g;
+    var m;
+    while((m=noteRe.exec(body))!==null){
+      var acc=m[1], noteName=m[2], durStr=m[3];
+      // Accidentali
+      var baseFreq = ABC_NOTE_MAP[noteName] || 440;
+      if(acc==="^") baseFreq *= 1.0595;  // semitono su
+      if(acc==="_") baseFreq *= 0.9439;  // semitono giù
+      var dur = (ABC_DUR_MAP[durStr] || 0.5) * beat * 2;
+      notes.push({freq:baseFreq, dur:Math.max(0.1,dur)});
+    }
+    return notes.length > 4 ? notes : generateDefaultNotes(bpm);
+  }
+
+  function generateDefaultNotes(bpm){
+    var beat=60/Math.max(60,bpm);
+    var freqs=[261.63,329.63,392.00,523.25,493.88,392.00,329.63,261.63,
+               349.23,440.00,523.25,698.46,659.25,523.25,440.00,349.23];
+    return freqs.map(function(f){return {freq:f,dur:beat*2};});
+  }
+
+  function playWithWebAudio(notes, vol, ctx, md, lyrKar, progBar, totalDur, onEnd){
+    if(!notes||notes.length===0){if(onEnd)onEnd();return;}
+    var now=ctx.currentTime;
+    var t=now+0.1;
+    var bpm=parseInt(md&&md.tempo)||120;
+    var beat=60/bpm;
+
+    // Master gain
+    var masterGain=ctx.createGain();
+    masterGain.gain.setValueAtTime(vol*0.8,now);
+    masterGain.connect(ctx.destination);
+
+    // Reverb semplice (convolution approssimato)
+    var convolver=ctx.createConvolver();
+    try{
+      var bufLen=ctx.sampleRate*1.5;
+      var revBuf=ctx.createBuffer(2,bufLen,ctx.sampleRate);
+      for(var ch=0;ch<2;ch++){
+        var d=revBuf.getChannelData(ch);
+        for(var i=0;i<bufLen;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/bufLen,2)*0.3;
+      }
+      convolver.buffer=revBuf;
+      var dryGain=ctx.createGain();dryGain.gain.value=0.7;
+      var wetGain=ctx.createGain();wetGain.gain.value=0.3;
+      convolver.connect(wetGain);wetGain.connect(masterGain);
+      dryGain.connect(masterGain);
+      var dest=dryGain;
+    }catch(e){var dest=masterGain;}
+
+    // ── Melodia principale (sine + triangle blend) ──
+    notes.forEach(function(n,i){
+      var dur=Math.min(n.dur,beat*4);
+
+      // Oscillatore principale
+      var osc=ctx.createOscillator();
+      var g=ctx.createGain();
+      osc.type="triangle";
+      osc.frequency.setValueAtTime(n.freq,t);
+      osc.frequency.setTargetAtTime(n.freq*1.001,t,0.05); // lieve vibrato
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(0.4,t+0.02);
+      g.gain.setValueAtTime(0.35,t+dur*0.7);
+      g.gain.linearRampToValueAtTime(0,t+dur);
+      osc.connect(g);g.connect(dest||masterGain);
+      osc.start(t);osc.stop(t+dur+0.05);
+
+      // Armonico (ottava sopra, piano)
+      var osc2=ctx.createOscillator();
+      var g2=ctx.createGain();
+      osc2.type="sine";
+      osc2.frequency.value=n.freq*2;
+      g2.gain.setValueAtTime(0,t);
+      g2.gain.linearRampToValueAtTime(0.1,t+0.02);
+      g2.gain.linearRampToValueAtTime(0,t+dur);
+      osc2.connect(g2);g2.connect(dest||masterGain);
+      osc2.start(t);osc2.stop(t+dur+0.05);
+
+      t+=dur;
+    });
+
+    // ── Linea basso (root note ogni 2 beat) ──
+    var bassT=now+0.1;
+    var bassFreqs=notes.filter(function(_,i){return i%4===0;}).slice(0,16);
+    bassFreqs.forEach(function(n){
+      var osc=ctx.createOscillator();var g=ctx.createGain();
+      osc.type="sawtooth";
+      osc.frequency.value=n.freq/2;
+      g.gain.setValueAtTime(0,bassT);
+      g.gain.linearRampToValueAtTime(0.2,bassT+0.03);
+      g.gain.linearRampToValueAtTime(0,bassT+beat*2-0.05);
+      osc.connect(g);g.connect(masterGain);
+      osc.start(bassT);osc.stop(bassT+beat*2);
+      bassT+=beat*2;
+    });
+
+    // ── Pad accordale (chord ogni 4 beat) ──
+    var padT=now+0.15;
+    var chordRoots=notes.filter(function(_,i){return i%8===0;}).slice(0,8);
+    chordRoots.forEach(function(n){
+      [1,1.25,1.5].forEach(function(ratio){
+        var osc=ctx.createOscillator();var g=ctx.createGain();
+        osc.type="sine";
+        osc.frequency.value=n.freq*ratio;
+        g.gain.setValueAtTime(0,padT);
+        g.gain.linearRampToValueAtTime(0.08,padT+0.2);
+        g.gain.linearRampToValueAtTime(0,padT+beat*4);
+        osc.connect(g);g.connect(masterGain);
+        osc.start(padT);osc.stop(padT+beat*4+0.1);
+      });
+      padT+=beat*4;
+    });
+
+    // Progress bar
+    var elapsed=0;var progInterval=setInterval(function(){
+      elapsed+=0.5;
+      var pct=Math.min(100,(elapsed/Math.max(1,totalDur))*100);
+      progBar.style.width=pct+"%";
+      if(pct>=100){clearInterval(progInterval);if(onEnd)setTimeout(onEnd,400);}
+    },500);
+  }
+
+  function playWithTone(notes,bpm,vol,ctx,md,lyrKar,progBar,totalDur,onEnd){
+    // Fallback a WebAudio se Tone non disponibile correttamente
+    playWithWebAudio(notes,vol,ctx,md,lyrKar,progBar,totalDur,onEnd);
+  }
+
+  function singLyrics(md,lyrKar,bpm){
+    if(!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    var bpmVal=parseInt(bpm)||120;
+    var beatMs=60000/bpmVal;
+
+    // Costruisci lista frase→sezione
+    var phrases=[];
+    var struct=md.lyricsStructured||{};
+    var order=["VERSE1","CHORUS","VERSE2","CHORUS","BRIDGE","CHORUS"];
+    var sectionNames={VERSE1:"🎵 Strofa 1",CHORUS:"🎤 Ritornello",VERSE2:"🎵 Strofa 2",BRIDGE:"🌉 Bridge"};
+    order.forEach(function(sec){
+      if(!struct[sec]) return;
+      phrases.push({text:"— "+( sectionNames[sec]||sec)+" —",isHeader:true});
+      struct[sec].forEach(function(line){phrases.push({text:line,isHeader:false});});
+    });
+
+    // Fallback: split del testo piatto per righe
+    if(phrases.length<=2&&md.lyrics){
+      md.lyrics.split("\n").forEach(function(l){
+        if(l.trim()) phrases.push({text:l.trim(),isHeader:l.includes(":")&&l.length<30});
+      });
+    }
+
+    var idx=0;
+    var msPerPhrase=Math.max(1800, beatMs*4);
+
+    function singNext(){
+      if(idx>=phrases.length||!window.speechSynthesis){
+        lyrKar.innerHTML="🎵 <em>Canzone terminata</em>";return;
+      }
+      var ph=phrases[idx];idx++;
+
+      // Evidenzia nel karaoke
+      var html="";
+      phrases.forEach(function(p,i){
+        var cur=i===idx-1;
+        var past=i<idx-1;
+        if(p.isHeader){
+          html+="<span style='font-size:.75rem;color:#4a6080;display:block;margin-top:6px'>"+p.text+"</span>";
+        } else {
+          html+="<span style='"+(cur?"color:#00e5ff;font-weight:700;font-size:1rem;text-shadow:0 0 8px #00e5ff88"
+            :past?"color:#4a6080":"color:#7a9aaa")+";display:block;padding:1px 0'>"+p.text+"</span>";
+        }
+      });
+      lyrKar.innerHTML=html;
+      // Scroll alla riga corrente
+      var spans=lyrKar.querySelectorAll("span");
+      if(spans[idx-1]) spans[idx-1].scrollIntoView({block:"nearest",behavior:"smooth"});
+
+      if(!ph.isHeader){
+        var utt=new SpeechSynthesisUtterance(ph.text);
+        utt.lang="it-IT";utt.rate=0.82;utt.pitch=1.1;utt.volume=0.9;
+        // Seleziona voce italiana se disponibile
+        var voices=window.speechSynthesis.getVoices();
+        var itVoice=voices.find(function(v){return v.lang.startsWith("it")&&v.name.toLowerCase().includes("female");})
+          ||voices.find(function(v){return v.lang.startsWith("it");});
+        if(itVoice) utt.voice=itVoice;
+        utt.onend=function(){setTimeout(singNext,beatMs*0.5);};
+        utt.onerror=function(){setTimeout(singNext,msPerPhrase);};
+        window.speechSynthesis.speak(utt);
+      } else {
+        setTimeout(singNext,400);
+      }
+    }
+    // Aspetta che le voci siano caricate
+    if(window.speechSynthesis.getVoices().length===0){
+      window.speechSynthesis.onvoiceschanged=function(){singNext();};
+    } else { singNext(); }
+  }
+
+  // Mantieni playSimpleTones per compatibilità con altri usi
+  function playSimpleTones(abcText,ctx){
+    playWithWebAudio(parseABCtoFreqs(abcText,120),0.5,ctx,null,
+      document.createElement("div"),document.createElement("div"),15,null);
   }
 
   function showGithubPanel(){document.getElementById("githubPanel").style.display="flex";}
@@ -2230,16 +1788,6 @@ function _base64ToArrayBuffer(b64){
           <option value="C">Do (C)</option><option value="G">Sol (G)</option>
           <option value="D">Re (D)</option><option value="A">La (A)</option>
           <option value="F">Fa (F)</option><option value="Am">La minore</option>
-        </select>
-      </div>
-      <div>
-        <label style="font-size:.8rem;opacity:.7;display:block;margin-bottom:4px">⏱ Durata canzone</label>
-        <select id="musicDuration" style="width:100%;padding:8px;border-radius:8px;border:1px solid #444;background:var(--bg);color:var(--text);box-sizing:border-box">
-          <option value="30">30 secondi</option>
-          <option value="60">1 minuto</option>
-          <option value="120" selected>2 minuti</option>
-          <option value="180">3 minuti</option>
-          <option value="240">4 minuti</option>
         </select>
       </div>
     </div>
@@ -2369,115 +1917,5 @@ function _base64ToArrayBuffer(b64){
     </div>
   </div>
 </div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- CONTRACT REVIEW PANEL                                               -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<div id="contractPanel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:1005;align-items:center;justify-content:center;padding:16px">
-  <div style="background:var(--bg2,#1a1a2e);border-radius:16px;padding:24px;max-width:720px;width:100%;max-height:90vh;overflow-y:auto;border:1px solid var(--border,#333)">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-      <h2 style="margin:0;color:var(--accent,#00c896);font-size:1.1rem">⚖️ Contract Review Agent</h2>
-      <button onclick="closeContractPanel()" style="background:none;border:none;color:var(--muted,#888);font-size:1.4rem;cursor:pointer">✕</button>
-    </div>
-
-    <!-- Tipo contratto -->
-    <div style="margin-bottom:12px">
-      <label style="font-size:.8rem;color:var(--muted,#888);display:block;margin-bottom:6px">Tipo di contratto</label>
-      <select id="contractType" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--surface,#111);color:var(--fg,#eee);font-size:.85rem">
-        <option value="generico">📄 Generico</option>
-        <option value="NDA">🤐 NDA / Accordo riservatezza</option>
-        <option value="lavoro">👔 Contratto di lavoro</option>
-        <option value="vendita">🛒 Contratto di vendita</option>
-        <option value="affitto">🏠 Contratto di affitto</option>
-        <option value="servizi">🔧 Contratto di servizi / Freelance</option>
-        <option value="partnership">🤝 Partnership / Joint venture</option>
-        <option value="licenza">📜 Licenza software / IP</option>
-        <option value="privacy">🔒 Privacy policy / GDPR</option>
-        <option value="termini">📋 Termini e condizioni</option>
-        <option value="investimento">💰 Accordo di investimento</option>
-      </select>
-    </div>
-
-    <!-- Testo contratto -->
-    <div style="margin-bottom:12px">
-      <label style="font-size:.8rem;color:var(--muted,#888);display:block;margin-bottom:6px">
-        Incolla il testo del contratto o la clausola da analizzare
-        <span id="contractCharCount" style="margin-left:8px;color:var(--accent,#00c896)">0 / 50.000 caratteri</span>
-      </label>
-      <textarea id="contractText"
-        placeholder="Incolla qui il testo del contratto, clausola specifica o documento legale da analizzare..."
-        oninput="document.getElementById('contractCharCount').textContent=this.value.length+' / 50.000 caratteri'"
-        style="width:100%;height:200px;padding:12px;border-radius:8px;border:1px solid var(--border,#333);background:var(--surface,#111);color:var(--fg,#eee);font-size:.82rem;resize:vertical;box-sizing:border-box;font-family:inherit"></textarea>
-    </div>
-
-    <!-- Bottone analisi -->
-    <button id="contractAnalyzeBtn" onclick="analyzeContract()"
-      style="width:100%;padding:13px;border-radius:10px;border:none;background:var(--accent,#00c896);color:#000;font-weight:700;font-size:.95rem;cursor:pointer;margin-bottom:16px">
-      ⚖️ Analizza Contratto
-    </button>
-
-    <!-- Risultato -->
-    <div id="contractResult" style="display:none">
-      <!-- Badge rischio -->
-      <div id="contractRiskBadge" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-weight:700"></div>
-      <!-- Analisi testuale -->
-      <div id="contractAnalysis" style="background:var(--surface,#111);border-radius:10px;padding:16px;font-size:.83rem;line-height:1.7;white-space:pre-wrap;border:1px solid var(--border,#333)"></div>
-      <!-- Disclaimer -->
-      <p style="font-size:.72rem;color:var(--muted,#666);margin-top:12px;text-align:center">
-        ⚖️ Analisi a scopo informativo — Non sostituisce la consulenza di un avvocato professionista
-      </p>
-    </div>
-  </div>
-</div>
-
-<script>
-function showContractPanel(){document.getElementById("contractPanel").style.display="flex";}
-function closeContractPanel(){
-  document.getElementById("contractPanel").style.display="none";
-  document.getElementById("contractResult").style.display="none";
-  document.getElementById("contractText").value="";
-  document.getElementById("contractCharCount").textContent="0 / 50.000 caratteri";
-  document.getElementById("contractAnalyzeBtn").disabled=false;
-  document.getElementById("contractAnalyzeBtn").textContent="⚖️ Analizza Contratto";
-}
-async function analyzeContract(){
-  var text=document.getElementById("contractText").value.trim();
-  var type=document.getElementById("contractType").value;
-  if(!text){alert("Incolla il testo del contratto prima di procedere.");return;}
-  if(text.length>50000){alert("Testo troppo lungo. Massimo 50.000 caratteri.");return;}
-  var btn=document.getElementById("contractAnalyzeBtn");
-  btn.disabled=true; btn.textContent="⏳ Analisi in corso...";
-  document.getElementById("contractResult").style.display="none";
-  try{
-    var res=await fetch("/api/contract/review",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({contract:text,type:type,sessionId:SID})
-    });
-    var data=await res.json();
-    if(data.error){alert("Errore: "+data.error);return;}
-    // Badge rischio colorato
-    var badge=document.getElementById("contractRiskBadge");
-    var colors={BASSO:"#00c896",MEDIO:"#f59e0b",ALTO:"#ef4444",CRITICO:"#7c3aed"};
-    var icons={BASSO:"✅",MEDIO:"⚠️",ALTO:"🔴",CRITICO:"☠️"};
-    var lvl=data.riskLevel||"MEDIO";
-    badge.style.background=colors[lvl]+"22";
-    badge.style.border="1px solid "+colors[lvl];
-    badge.style.color=colors[lvl];
-    badge.innerHTML=icons[lvl]+" Rischio "+lvl+
-      " &nbsp;|&nbsp; Score bilanciamento: <strong>"+data.riskScore+"/10</strong>"+
-      " &nbsp;|&nbsp; "+data.charCount+" caratteri analizzati";
-    // Analisi renderizzata
-    document.getElementById("contractAnalysis").innerHTML=renderMD(data.analysis||"");
-    document.getElementById("contractResult").style.display="block";
-    // Aggiunge anche in chat come conferma
-    addRow("⚖️ Contratto **"+type+"** analizzato — Rischio: **"+lvl+"** (score "+data.riskScore+"/10)","ai");
-  }catch(e){
-    alert("Errore di rete: "+e.message);
-  }finally{
-    btn.disabled=false; btn.textContent="⚖️ Analizza Contratto";
-  }
-}
-</script>
 </body>
 </html>
