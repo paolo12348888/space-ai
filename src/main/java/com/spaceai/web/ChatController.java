@@ -1844,8 +1844,38 @@ public class ChatController {
     private int estimateTokens(String text) {
         return text == null ? 0 : text.split("\\s+").length * 4 / 3;
     }
+    // ── Data contestuale: usa quella inviata dal client (browser dell'utente)
+    //    per evitare sfasamenti dovuti al fuso UTC del server Render.
+    //    Se il client non la invia, fallback a LocalDateTime.now() server-side.
+    private static final ThreadLocal<String> CLIENT_DATE_OVERRIDE = new ThreadLocal<>();
+
+    /** Imposta la data del client per la durata della richiesta corrente. */
+    private void setClientDate(String isoDateFromBrowser) {
+        if (isoDateFromBrowser != null && !isoDateFromBrowser.isBlank()) {
+            try {
+                java.time.ZonedDateTime zdt = java.time.ZonedDateTime.parse(isoDateFromBrowser);
+                String formatted = zdt.format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
+                CLIENT_DATE_OVERRIDE.set(formatted);
+            } catch (Exception e) {
+                // formato non riconosciuto → ignora, userà server time
+                CLIENT_DATE_OVERRIDE.remove();
+            }
+        } else {
+            CLIENT_DATE_OVERRIDE.remove();
+        }
+    }
+
+    /** Pulisce il thread-local alla fine della richiesta. */
+    private void clearClientDate() {
+        CLIENT_DATE_OVERRIDE.remove();
+    }
+
     private String today() {
-        return LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
+        String override = CLIENT_DATE_OVERRIDE.get();
+        if (override != null) return override;
+        // Fallback: orario server con fuso Europe/Rome
+        return LocalDateTime.now(java.time.ZoneId.of("Europe/Rome"))
+            .format(DateTimeFormatter.ofPattern("EEEE dd MMMM yyyy HH:mm", Locale.ITALIAN));
     }
     private String env(String k, String d) { return System.getenv().getOrDefault(k, d); }
 
@@ -5442,7 +5472,10 @@ public class ChatController {
         String sessionId    = body.getOrDefault("sessionId", "default");
         String fileContent  = body.getOrDefault("fileContent", "");
         String thinkingFlag = body.getOrDefault("thinking", "false");
-        if (userMessage.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error", "Messaggio vuoto"));
+        // ── Data/ora locale dell'utente (inviata dal browser come ISO 8601) ──
+        setClientDate(body.getOrDefault("clientDate", ""));
+        // ────────────────────────────────────────────────────────────────────
+        if (userMessage.isEmpty()) { clearClientDate(); return ResponseEntity.badRequest().body(Map.of("error", "Messaggio vuoto")); }
         String baseUrl     = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey      = env("AI_API_KEY", "");
         String model       = env("AI_MODEL", "llama-3.3-70b-versatile");
@@ -5932,8 +5965,10 @@ public class ChatController {
             resp.put("totalRequests",   totalRequests.get());
             resp.put("emotion",         emotionState.getOrDefault(sessionId,"neutral"));
             resp.put("historySize",     neuralMemory.getOrDefault(sessionId,new ArrayList<>()).size());
+            clearClientDate();
             return ResponseEntity.ok(resp);
         } catch (Exception e) {
+            clearClientDate();
             log.error("Errore: {}", e.getMessage());
             recordFailure();
             try {
