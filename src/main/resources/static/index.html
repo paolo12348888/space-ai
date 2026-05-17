@@ -194,15 +194,18 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
-          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
-          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
-          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
-          <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
-          <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
-          <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
-          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
-          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
-          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
+        </div>
+        <!-- Live agent hint — aggiornato mentre si digita -->
+        <div id="liveAgentHint" style="
+          margin-top:14px;background:rgba(13,20,33,0.85);
+          border:1px solid rgba(0,200,255,0.15);border-radius:14px;
+          padding:12px 18px;display:flex;align-items:center;gap:12px;
+          max-width:420px;width:90%;transition:all .3s;display:none">
+          <span id="liveAgentIcon" style="font-size:1.3rem">🤖</span>
+          <div>
+            <div id="liveAgentName" style="color:var(--accent);font-weight:700;font-size:.9rem"></div>
+            <div style="color:#4a6080;font-size:.72rem;font-family:monospace">verrà attivato automaticamente</div>
+          </div>
         </div>
       </div>
     </div>
@@ -230,7 +233,7 @@ textarea::placeholder{color:var(--muted)}
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span id="heySpacesHint" style="color:var(--accent);cursor:pointer" onclick="startSpaces()">&#127756; <strong>Hey SPACES</strong></span> per AI vocale</div>
+      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span style="color:var(--accent);cursor:pointer;font-weight:600" onclick="startSpaces()" id="heySpacesHint">&#127756; Hey SPACES</span> per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -496,19 +499,7 @@ function setMode(m){
     search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES",
     security:"&#128737; AEGIS",neural:"&#129504; Neural",
     temporal:"&#8987; Temporal",dream:"&#129704; Dream",
-    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario",
-    financial_analyst:"&#128200; Finanza",coder:"&#128187; Codice",
-    image_generator:"&#127912; Immagine",music_generator:"&#127911; Musica",
-    news_analyst:"&#128240; Notizie",web_search:"&#127760; Web",
-    doctor:"&#129514; Medico",legal_advisor:"&#9878; Legale",
-    chef:"&#128104;&#8205;&#127859; Chef",psychologist:"&#129504; Psicologo",
-    scientist:"&#128300; Scienza",philosopher:"&#128173; Filosofo",
-    historian:"&#128218; Storia",mathematician:"&#128290; Matematica",
-    creative_writer:"&#9997; Scrittore",translator:"&#127757; Traduttore",
-    fitness_coach:"&#128170; Fitness",travel_advisor:"&#9992; Viaggi",
-    dream_synthesizer:"&#127769; Dream",temporal_reasoner:"&#8987; Temporal",
-    quantum_reasoner:"&#9889; Quantum",visual_creative:"&#127912; Creativo",
-    security_analyst:"&#128737; Security",reasoner:"&#129302; Ragionatore"
+    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario"
   };
   document.getElementById("modeLbl").innerHTML=L[m]||"&#129302; Auto";
   var ph={
@@ -597,86 +588,132 @@ renderChatHistory();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 
 // ══════════════════════════════════════════════════════════
-// HEY SPACES — Wakeword listener in background
-// Ascolta in background, si attiva con "Hey SPACES"
+// LIVE AGENT DETECTION — specchio esatto del backend fastRoute
+// Aggiorna l'hint mentre l'utente digita (debounce 150ms)
+// ══════════════════════════════════════════════════════════
+(function(){
+  var AGENTS = {
+    music_generator: {icon:"🎵", label:"Compositore Musicale",
+      re:/crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone.*su|\bcanzone\b|\bbrano\b|\bsong\b|musica.*per|ritornello|strofa|melodia/},
+    image_generator: {icon:"🎨", label:"Generatore Immagini",
+      re:/genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di/},
+    code:            {icon:"💻", label:"Programmatore",
+      re:/python|javascript|java|codice|programma|funzione che|script|\bdebug\b|\bbug\b|html|css|\bsql\b|\bapi\b|react/},
+    finance:         {icon:"📈", label:"Analista Finanziario",
+      re:/\bmacd\b|\brsi\b|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale|analisi tecnica/},
+    crypto:          {icon:"₿", label:"Esperto Crypto",
+      re:/bitcoin|ethereum|crypto|criptovalut|\bdefi\b|\bnft\b|solana|blockchain.*invest/},
+    research:        {icon:"📰", label:"Ricercatore / Notizie",
+      re:/notizie|\bnews\b|ultime notizie|cronaca|cosa.*successo|aggiornamenti|cerca.*web|cerca.*google/},
+    medical:         {icon:"🩺", label:"Consulente Medico",
+      re:/sintomi|sintomo|malattia|farmaco|medico|salute|cura|diagnosi|dolore|medicina/},
+    legal:           {icon:"⚖️", label:"Consulente Legale",
+      re:/\blegge\b|contratto|diritto|gdpr|normativa|avvocato|tribunale|reato/},
+    cooking:         {icon:"👨‍🍳", label:"Chef & Ricette",
+      re:/ricetta|ricette|come.*cucinare|ingredienti per|cosa.*cucino|cosa.*mangio/},
+    travel:          {icon:"✈️", label:"Esperto Viaggi",
+      re:/viaggio|vacanza|hotel|\bvolo\b|destinazione|dove.*andare|cosa.*visitare|turismo/},
+    fitness:         {icon:"💪", label:"Coach Fitness",
+      re:/allenamento|esercizio|palestra|\bdieta\b|fitness|perdere.*peso|muscoli|calorie/},
+    math:            {icon:"🔢", label:"Matematico",
+      re:/calcola|matematica|equazione|derivata|integrale|matrice|statistica|probabilita/},
+    psychology:      {icon:"🧠", label:"Psicologo",
+      re:/psicolog|ansia|depress|trauma|emozioni|relazione|sto male|mi sento|autostima/},
+    translator:      {icon:"🌍", label:"Traduttore",
+      re:/traduci|in inglese|in spagnolo|in francese|in tedesco|traduzione di|come si dice/},
+    creative:        {icon:"✍️", label:"Scrittore Creativo",
+      re:/scrivi.*storia|crea.*racconto|scrivi.*poesia|romanzo|favola|storia creativa/},
+    startup:         {icon:"🚀", label:"Business & Startup",
+      re:/startup|business plan|\bpitch\b|marketing|strategia.*business/},
+    philosophy:      {icon:"💭", label:"Filosofo",
+      re:/filosofia|filosofo|etica|morale|esistenzialismo|platone|nietzsche|senso della vita/},
+    security:        {icon:"🛡️", label:"Security Analyst",
+      re:/sicurezza.*sistema|vulnerabilit|hacking|pentest|firewall|malware|cyber|sql injection/},
+    quantum:         {icon:"⚡", label:"Quantum AI",
+      re:/quantum|quantistico|qubit|entanglement|sovrapposizione/},
+    reasoner:        {icon:"🤖", label:"Ragionatore Generale", re:null}
+  };
+
+  function detectLocal(text){
+    var q = text.toLowerCase()
+      .replace(/[àáâã]/g,"a").replace(/[èéêë]/g,"e")
+      .replace(/[ìíîï]/g,"i").replace(/[òóôõ]/g,"o")
+      .replace(/[ùúûü]/g,"u");
+    for(var id in AGENTS){
+      if(id==="reasoner") continue;
+      var re=AGENTS[id].re;
+      if(re && re.test(q)) return id;
+    }
+    return null;
+  }
+
+  var hint    = document.getElementById("liveAgentHint");
+  var hIcon   = document.getElementById("liveAgentIcon");
+  var hName   = document.getElementById("liveAgentName");
+  var modeLbl = document.getElementById("modeLbl");
+  var debT    = null;
+  var lastId  = null;
+
+  inpEl.addEventListener("input", function(){
+    clearTimeout(debT);
+    debT = setTimeout(function(){
+      var val = inpEl.value.trim();
+      if(!val){
+        if(hint) hint.style.display="none";
+        if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
+        lastId = null; return;
+      }
+      var id = detectLocal(val);
+      if(id === lastId) return;
+      lastId = id;
+      var info = id ? AGENTS[id] : null;
+      if(info && hint){
+        if(hIcon) hIcon.textContent = info.icon;
+        if(hName) hName.textContent = info.label;
+        hint.style.display = "flex";
+        // Aggiorna anche badge in basso
+        if(modeLbl) modeLbl.innerHTML = info.icon + " " + info.label;
+      } else if(hint){
+        hint.style.display = "none";
+        if(modeLbl) modeLbl.innerHTML = "&#129302; Auto";
+      }
+    }, 150);
+  });
+})();
+
+// ══════════════════════════════════════════════════════════
+// HEY SPACES wakeword listener in background
 // ══════════════════════════════════════════════════════════
 (function(){
   if(!window.SpeechRecognition&&!window.webkitSpeechRecognition) return;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  var wakeRec=null;
-  var wakeActive=false;
-  var WAKEWORDS=["hey spaces","hey space","ehi spaces","ehi space","hey spices"];
+  var wakeRec=null, wakeActive=false;
+  var WAKEWORDS=["hey spaces","hey space","ehi spaces","ehi space"];
 
-  function startWakeListener(){
-    if(spacesOn||wakeActive) return; // non ascoltare se SPACES è già attivo
+  function startWake(){
+    if(spacesOn||wakeActive) return;
     try{
       wakeRec=new SR();
-      wakeRec.lang="it-IT";
-      wakeRec.continuous=false;
-      wakeRec.interimResults=false;
-      wakeRec.maxAlternatives=3;
+      wakeRec.lang="it-IT"; wakeRec.continuous=false;
+      wakeRec.interimResults=false; wakeRec.maxAlternatives=3;
       wakeActive=true;
-
       wakeRec.onresult=function(e){
         wakeActive=false;
         var said="";
-        for(var i=0;i<e.results[0].length;i++){
-          said+=e.results[0][i].transcript.toLowerCase()+" ";
-        }
-        var triggered=WAKEWORDS.some(function(w){return said.includes(w);});
-        if(triggered){
-          // Feedback visivo
-          var hint=document.getElementById("heySpacesHint");
-          if(hint){
-            hint.style.color="#fff";hint.style.background="var(--accent)";
-            hint.style.padding="2px 8px";hint.style.borderRadius="6px";
-            setTimeout(function(){
-              hint.style.color="var(--accent)";hint.style.background="";
-              hint.style.padding="";
-            },1500);
-          }
-          // Avvia SPACES
+        for(var i=0;i<e.results[0].length;i++) said+=e.results[0][i].transcript.toLowerCase()+" ";
+        if(WAKEWORDS.some(function(w){return said.includes(w);})){
+          var h=document.getElementById("heySpacesHint");
+          if(h){h.style.background="var(--accent)";h.style.color="#000";h.style.padding="1px 8px";h.style.borderRadius="6px";
+            setTimeout(function(){h.style.background="";h.style.color="var(--accent)";h.style.padding="";},1500);}
           setTimeout(function(){startSpaces();},300);
-        } else {
-          // Riascolta
-          setTimeout(startWakeListener,1000);
-        }
+        } else { setTimeout(startWake,1000); }
       };
-
-      wakeRec.onerror=function(e){
-        wakeActive=false;
-        if(e.error!=="aborted"&&e.error!=="not-allowed"){
-          setTimeout(startWakeListener,3000);
-        }
-      };
-
-      wakeRec.onend=function(){
-        wakeActive=false;
-        if(!spacesOn) setTimeout(startWakeListener,1500);
-      };
-
+      wakeRec.onerror=function(e){ wakeActive=false; if(e.error!=="aborted"&&e.error!=="not-allowed") setTimeout(startWake,3000); };
+      wakeRec.onend=function(){ wakeActive=false; if(!spacesOn) setTimeout(startWake,1500); };
       wakeRec.start();
-    }catch(err){
-      wakeActive=false;
-    }
+    }catch(err){ wakeActive=false; }
   }
-
-  // Avvia il wakeword listener dopo 3 secondi dal caricamento
-  setTimeout(function(){
-    // Aggiorna hint per mostrare che è in ascolto
-    var hint=document.getElementById("heySpacesHint");
-    if(hint) hint.title="Wakeword attivo — di\' \'Hey SPACES\' per attivare la voce";
-    startWakeListener();
-  },3000);
-
-  // Quando SPACES viene chiuso, riprendi il wakeword listener
-  var origSetMode=window.setMode;
-  window.setMode=function(m){
-    if(origSetMode) origSetMode(m);
-    if(m!=="spaces"&&!wakeActive){
-      setTimeout(startWakeListener,2000);
-    }
-  };
+  setTimeout(startWake, 3000);
 })();
 function handleFiles(f){for(var i=0;i<f.length;i++){if(!attachedFiles.find(function(x){return x.name===f[i].name;}))attachedFiles.push(f[i]);}renderFiles();}
 function getFileIcon(f){
@@ -918,39 +955,6 @@ async function loadNeuralData(){
       kgn+" nodi connessi nel grafo della conoscenza":"In costruzione...";
   }catch(e){console.log("Neural panel error:",e);}
 }
-// ── Agente persistito: rimane attivo finché topic è attinente ──────
-var persistedAgent = null;
-
-function agentTopicMatch(agent, text){
-  var q = (text||"").toLowerCase();
-  var map = {
-    financial_analyst: /borsa|azione|trading|investimento|bitcoin|crypto|finanza|mercato|macd|stock|dividendo/,
-    coder:             /codice|python|javascript|java|funzione|script|programma|debug|sql|api|html|css|react|git|bug/,
-    image_generator:   /immagin|disegna|genera.*foto|illustra|dipingi|foto di/,
-    music_generator:   /canzone|musica|melodia|brano|song|ritornello|compositore|accordo/,
-    news_analyst:      /notizie|news|cronaca|ultime ore|aggiornamento|oggi.*accad/,
-    web_search:        /cerca|google|ricerca web|trova online|link/,
-    doctor:            /sintomo|malattia|cura|medico|salute|farmaco|dolore|diagnosi/,
-    legal_advisor:     /legge|contratto|avvocato|diritto|tribunale|causa|reato/,
-    chef:              /ricetta|cucinare|ingredienti|piatto|cibo|mangiare|cucina/,
-    psychologist:      /psicolog|ansia|depressione|emozione|sentimento|relazione/,
-    scientist:         /fisica|chimica|biologia|scienza|esperimento|teoria/,
-    philosopher:       /filosof|esistenz|etica|morale/,
-    historian:         /storia|storico|guerra|impero|rivoluzione|secolo/,
-    mathematician:     /matemat|calcolo|equazione|algebra|geometria|statistica/,
-    creative_writer:   /racconto|storia.*creativa|romanzo|poesia|scrivi.*storia/,
-    translator:        /traduci|traduzione|inglese|spagnolo|francese|tedesco/,
-    fitness_coach:     /allenamento|esercizio|palestra|dieta|fitness|sport|muscoli/,
-    travel_advisor:    /viaggio|vacanza|hotel|volo|città.*visit|destinazione/,
-    dream_synthesizer: /sogno|dream|visione.*futura|scenario.*futuro/,
-    temporal_reasoner: /futuro.*di|evoluzione.*di|tra.*anni|previsione|timeline/,
-    quantum_reasoner:  /quantum|quantistico|qubit/,
-    security_analyst:  /sicurezza|vulnerabilit|hacking|pentest|firewall|malware/
-  };
-  var re = map[agent];
-  return re ? re.test(q) : false;
-}
-
 async function sendMsg(){
   // Leggi testo PRIMA di tutto
   var text=inpEl.value.trim();
@@ -998,30 +1002,6 @@ async function sendMsg(){
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
-
-  // ── Persistenza agente: se topic è ancora attinente, forza lo stesso agente ──
-  if(persistedAgent && curMode==="auto"){
-    if(agentTopicMatch(persistedAgent, text)){
-      // Topic ancora attinente → hint visivo che l'agente persiste
-      var lh=document.getElementById("liveAgentHint");
-      var lt=document.getElementById("liveAgentText");
-      var li=document.getElementById("liveAgentIcon");
-      if(lh&&lt){
-        lh.classList.add("active");
-        // Non sovrascrivere il msg — il backend rileverà l'agente dal contesto
-      }
-    } else {
-      // Topic cambiato → reset agente
-      persistedAgent=null;
-      setMode("auto");
-      var lh2=document.getElementById("liveAgentHint");
-      var lt2=document.getElementById("liveAgentText");
-      var li2=document.getElementById("liveAgentIcon");
-      if(lh2){lh2.classList.remove("active");}
-      if(li2) li2.textContent="🤖";
-      if(lt2) lt2.innerHTML="Rilevato cambio argomento — nuovo agente in arrivo...";
-    }
-  }
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   addRow(text,"user");
@@ -1039,29 +1019,26 @@ async function sendMsg(){
       if(data.error){addRow("Errore: "+data.error,"err");}
       else{
         if(data.agents){
-          var rawAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          // Aggiorna solo se agente è cambiato — persistenza automatica
-          if(rawAgent!==lastAgent){
-            lastAgent=rawAgent;
-            persistedAgent=rawAgent; // persisti l'agente per le prossime domande
-            // Aggiorna badge in basso (modeLbl)
-            setMode(rawAgent);
-          }
-          // Badge header lampeggia brevemente
-          var agBadge=document.getElementById("agentBadge");
-          if(agBadge){
-            var ICONS={"financial_analyst":"📈","coder":"💻","image_generator":"🎨",
-              "music_generator":"🎵","news_analyst":"📰","web_search":"🌐","doctor":"🩺",
-              "legal_advisor":"⚖️","chef":"👨‍🍳","psychologist":"🧠","scientist":"🔬",
-              "philosopher":"💭","historian":"📚","mathematician":"🔢",
-              "creative_writer":"✍️","translator":"🌍","fitness_coach":"💪",
-              "travel_advisor":"✈️","dream_synthesizer":"🌙","temporal_reasoner":"⏳",
-              "quantum_reasoner":"⚡","socratic":"🤔","visual_creative":"🎭",
-              "security_analyst":"🛡️","reasoner":"🤖"};
-            var ic=ICONS[lastAgent]||"🤖";
-            agBadge.textContent=ic+" "+lastAgent.replace(/_/g," ");
-            agBadge.style.opacity="1";
-            setTimeout(function(){agBadge.style.opacity="0";},5000);
+          lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+          // Aggiorna badge in basso con agente usato
+          var AICONS={"music_generator":"🎵","image_generator":"🎨","code":"💻",
+            "finance":"📈","crypto":"₿","research":"📰","medical":"🩺","legal":"⚖️",
+            "cooking":"👨‍🍳","travel":"✈️","fitness":"💪","math":"🔢","psychology":"🧠",
+            "translator":"🌍","creative":"✍️","startup":"🚀","philosophy":"💭",
+            "security":"🛡️","quantum":"⚡","ai":"🤖","reasoner":"🤖",
+            "debug":"🔧","history":"📚","science":"🔬","quantum":"⚡"};
+          var ALABELS={"music_generator":"Musica","image_generator":"Immagini","code":"Codice",
+            "finance":"Finanza","crypto":"Crypto","research":"Notizie","medical":"Medico",
+            "legal":"Legale","cooking":"Chef","travel":"Viaggi","fitness":"Fitness",
+            "math":"Matematica","psychology":"Psicologia","translator":"Traduttore",
+            "creative":"Scrittore","startup":"Startup","philosophy":"Filosofia",
+            "security":"Security","quantum":"Quantum","ai":"AI","reasoner":"Auto",
+            "debug":"Debug","history":"Storia","science":"Scienza"};
+          var modLbl=document.getElementById("modeLbl");
+          if(modLbl){
+            var ic=AICONS[lastAgent]||"🤖";
+            var lb=ALABELS[lastAgent]||lastAgent.replace(/_/g," ");
+            modLbl.innerHTML=ic+" "+lb;
           }
         }
         lastQuery=text;
