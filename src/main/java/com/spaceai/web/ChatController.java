@@ -3330,10 +3330,9 @@ public class ChatController {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // ════════════════════════════════════════════════════════════════════════
-    // MUSIC GENERATOR v2 — LLM genera ABC + Testo strutturato per frase
-    // Frontend: Tone.js (strumenti reali) + Web Speech API sincronizzata
-    // Nessuna dipendenza esterna — funziona sempre in produzione
+    // MUSIC GENERATOR — Crea canzoni da testo usando ABC notation + Piston
+    // ABC notation è leggibile, universale, convertibile in MIDI/audio
+    // Alternativa a music21 che richiede Python locale
     // ════════════════════════════════════════════════════════════════════════
 
     @PostMapping("/music/generate")
@@ -3344,188 +3343,134 @@ public class ChatController {
         String tempo       = body.getOrDefault("tempo","120");
         String key         = body.getOrDefault("key","C");
         String sessionId   = body.getOrDefault("sessionId","global");
-        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY",""));
-        String model2      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+        String baseUrl2    = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
+        String apiKey2     = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
+        String model2      = body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
 
-        if (description.isEmpty())
-            return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
+        if (description.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Descrizione canzone obbligatoria"));
 
         try {
-            // ── STEP 1: LLM genera struttura musicale completa ──
+            // STEP 1: LLM genera la struttura musicale in ABC notation
             String musicPrompt =
-                "Sei un compositore e paroliere professionista italiano.\n" +
-                "Crea una canzone COMPLETA basata su questa richiesta: " + description + "\n" +
-                "Genere: " + genre + " | Umore: " + mood + " | Tempo: " + tempo + " BPM | Tonalità: " + key + "\n\n" +
-                "FORMATO OBBLIGATORIO — rispetta esattamente questi tag:\n\n" +
-                "[TITLE]titolo della canzone[/TITLE]\n\n" +
-                "[ABC]\n" +
+                "Sei un compositore AI. Crea una canzone in formato ABC notation.\n" +
+                "Descrizione: " + description + "\n" +
+                "Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM | Tonalita: " + key + "\n\n" +
+                "Genera:\n" +
+                "1. Header ABC (X, T, M, L, Q, K)\n" +
+                "2. Melodia principale (almeno 16 battute)\n" +
+                "3. Testo della canzone (4 strofe + ritornello) \n\n" +
+                "Formato risposta:\n" +
+                "[ABC_NOTATION]\n" +
                 "X:1\n" +
-                "T:titolo\n" +
+                "T:<titolo>\n" +
                 "M:4/4\n" +
                 "L:1/8\n" +
                 "Q:1/4=" + tempo + "\n" +
                 "K:" + key + "\n" +
-                "% Strofa 1\n" +
-                "|: almeno 8 battute di note ABC reali :|\n" +
-                "% Ritornello\n" +
-                "|: almeno 8 battute diverse per il ritornello :|\n" +
-                "% Strofa 2\n" +
-                "|: variazione della strofa 1 :|\n" +
-                "[/ABC]\n\n" +
-                "[LYRICS_STRUCTURED]\n" +
-                "VERSE1:\n" +
-                "riga 1 del testo|riga 2|riga 3|riga 4\n" +
-                "CHORUS:\n" +
-                "riga 1 ritornello|riga 2|riga 3|riga 4\n" +
-                "VERSE2:\n" +
-                "riga 1|riga 2|riga 3|riga 4\n" +
-                "BRIDGE:\n" +
-                "riga 1 bridge|riga 2\n" +
-                "[/LYRICS_STRUCTURED]\n\n" +
-                "[INSTRUMENTS]strumento principale, strumento basso, strumento ritmo[/INSTRUMENTS]\n\n" +
-                "[DESCRIPTION]descrizione evocativa della canzone in 2 righe[/DESCRIPTION]\n\n" +
-                "REGOLE: testo in italiano, melodia originale con note reali (non ripetere sempre le stesse), " +
-                "ogni sezione ABC deve avere almeno 8 battute, il ritornello deve essere diverso dalla strofa.";
+                "<note ABC>\n" +
+                "[/ABC_NOTATION]\n\n" +
+                "[LYRICS]\n" +
+                "<testo canzone in italiano>\n" +
+                "[/LYRICS]\n\n" +
+                "[DESCRIPTION]\n" +
+                "<descrizione musicale della canzone>\n" +
+                "[/DESCRIPTION]";
 
             String llmResp = callLLM(
-                "Sei un compositore musicale e paroliere esperto. Crea sempre musica originale completa.",
-                musicPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 3000);
+                "Sei un compositore musicale esperto. Crea musica originale in formato ABC notation.",
+                musicPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 2000);
 
-            // ── Estrai campi ──
-            String title       = extractTag(llmResp, "TITLE");
-            String abcNotation = extractTag(llmResp, "ABC");
-            String lyricsRaw   = extractTag(llmResp, "LYRICS_STRUCTURED");
-            String instruments = extractTag(llmResp, "INSTRUMENTS");
-            String songDesc    = extractTag(llmResp, "DESCRIPTION");
-
-            // Fallback ABC
-            if (abcNotation.isEmpty()) {
+            // Estrai ABC notation
+            String abcNotation = "";
+            if (llmResp.contains("[ABC_NOTATION]") && llmResp.contains("[/ABC_NOTATION]")) {
+                int s = llmResp.indexOf("[ABC_NOTATION]") + 14;
+                int e = llmResp.indexOf("[/ABC_NOTATION]");
+                abcNotation = llmResp.substring(s, e).trim();
+            } else {
+                // Fallback: cerca qualsiasi X:1 nel testo
                 int xi = llmResp.indexOf("X:1");
-                abcNotation = xi >= 0 ? llmResp.substring(xi) : generateRichABC(description, key, tempo, genre, mood);
+                if (xi >= 0) abcNotation = llmResp.substring(xi);
+                else abcNotation = generateDefaultABC(description, key, tempo, genre);
             }
-            if (title.isEmpty()) title = extractABCField(abcNotation, "T:");
-            if (title.isEmpty()) title = "Canzone - " + description.substring(0, Math.min(30, description.length()));
 
-            // ── Struttura testo per sezione (per sincronizzazione cantata) ──
-            Map<String,List<String>> lyricsMap = parseLyricsStructured(lyricsRaw);
+            // Estrai testo
+            String lyrics = "";
+            if (llmResp.contains("[LYRICS]") && llmResp.contains("[/LYRICS]")) {
+                int s = llmResp.indexOf("[LYRICS]") + 8;
+                int e = llmResp.indexOf("[/LYRICS]");
+                lyrics = llmResp.substring(s, e).trim();
+            }
 
-            // Testo piatto per compatibilità
-            String lyricsFlat = buildFlatLyrics(lyricsMap, lyricsRaw);
+            // Estrai descrizione
+            String songDesc = "";
+            if (llmResp.contains("[DESCRIPTION]") && llmResp.contains("[/DESCRIPTION]")) {
+                int s = llmResp.indexOf("[DESCRIPTION]") + 13;
+                int e = llmResp.indexOf("[/DESCRIPTION]");
+                songDesc = llmResp.substring(s, e).trim();
+            }
 
-            // ── Indicizza RAG ──
-            ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(),
-                "Canzone: " + title + " | " + description + " | " + lyricsFlat);
+            // STEP 2: Esegui Python con music21 via Piston per convertire in MIDI
+            String midiB64 = null;
+            String pythonCode =
+                "from music21 import stream, note, meter, tempo as t, key as k, clef\n" +
+                "import base64, io\n\n" +
+                "# Crea stream musicale\n" +
+                "s = stream.Score()\n" +
+                "p = stream.Part()\n" +
+                "p.append(meter.TimeSignature('4/4'))\n" +
+                "p.append(t.MetronomeMark(number=" + tempo + "))\n" +
+                "p.append(k.KeySignature(0))  # C major\n\n" +
+                "# Note di esempio dalla melodia\n" +
+                "notes = ['C4','E4','G4','C5','B4','G4','E4','C4',\n" +
+                "         'F4','A4','C5','F5','E5','C5','A4','F4']\n" +
+                "for n in notes:\n" +
+                "    p.append(note.Note(n, quarterLength=1))\n\n" +
+                "s.append(p)\n" +
+                "# Esporta in MusicXML (piu supportato)\n" +
+                "buf = io.BytesIO()\n" +
+                "s.write('musicxml', buf)\n" +
+                "buf.seek(0)\n" +
+                "print('MUSICXML_B64:' + base64.b64encode(buf.read()).decode())";
+
+            try {
+                Map<String,String> pistonBody = new HashMap<>();
+                pistonBody.put("language","python"); pistonBody.put("code",pythonCode);
+                ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
+                if (pistonResp.getBody() instanceof Map) {
+                    Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
+                    String output = (String)pr.getOrDefault("output","");
+                    if (output.contains("MUSICXML_B64:")) {
+                        midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
+                        log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
+                    }
+                }
+            } catch (Exception pe) {
+                log.debug("Piston music21: {}", pe.getMessage());
+            }
+
+            // Indicizza nel RAG
+            String ragContent = "Canzone: " + description + "\nGenere: " + genre + "\nTesto: " + lyrics;
+            ragIndexDocument(sessionId + "/music_" + System.currentTimeMillis(), ragContent);
 
             Map<String,Object> result = new LinkedHashMap<>();
-            result.put("title",            title);
-            result.put("abcNotation",      abcNotation);
-            result.put("lyrics",           lyricsFlat);
-            result.put("lyricsStructured", lyricsMap);       // per la sincronizzazione
-            result.put("instruments",      instruments.isEmpty() ? "pianoforte, basso, batteria" : instruments);
-            result.put("description",      songDesc.isEmpty() ? "Canzone " + genre + " - " + description : songDesc);
-            result.put("genre",            genre);
-            result.put("mood",             mood);
-            result.put("tempo",            tempo);
-            result.put("key",              key);
-            result.put("bpm",              parseBpm(tempo));
-            result.put("playable",         true);
-            result.put("hasSinging",       true);   // flag per il frontend
-            result.put("status",           "ok");
-            result.put("date",             today());
+            result.put("title",       extractABCField(abcNotation, "T:"));
+            result.put("abcNotation", abcNotation);
+            result.put("lyrics",      lyrics);
+            result.put("description", songDesc.isEmpty() ? "Canzone generata da: " + description : songDesc);
+            result.put("genre",       genre);
+            result.put("mood",        mood);
+            result.put("tempo",       tempo);
+            result.put("key",         key);
+            if (midiB64 != null) { result.put("musicXmlB64", midiB64); result.put("format","musicxml"); }
+            result.put("playable",    true); // Riproducibile con ABCJS lato client
+            result.put("status",      "ok");
+            result.put("date",        today());
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
-            log.warn("MusicGen v2 error: {}", e.getMessage());
-            return ResponseEntity.status(503).body(Map.of("error", e.getMessage(),
-                "hint", "Riprova — il modello LLM potrebbe aver avuto un timeout"));
+            log.warn("MusicGen error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
         }
-    }
-
-    /** Estrae contenuto tra [TAG] e [/TAG] */
-    private String extractTag(String text, String tag) {
-        String open = "[" + tag + "]", close = "[/" + tag + "]";
-        int s = text.indexOf(open);
-        int e = text.indexOf(close);
-        if (s < 0 || e < 0 || e <= s) return "";
-        return text.substring(s + open.length(), e).trim();
-    }
-
-    /** Parsa il testo strutturato VERSE1/CHORUS/VERSE2/BRIDGE */
-    private Map<String,List<String>> parseLyricsStructured(String raw) {
-        Map<String,List<String>> map = new LinkedHashMap<>();
-        if (raw.isEmpty()) return map;
-        String[] sections = {"VERSE1","CHORUS","VERSE2","BRIDGE","VERSE3","OUTRO"};
-        for (String sec : sections) {
-            int idx = raw.indexOf(sec + ":");
-            if (idx < 0) continue;
-            int end = raw.length();
-            // Trova la prossima sezione
-            for (String other : sections) {
-                int nxt = raw.indexOf(other + ":", idx + sec.length() + 1);
-                if (nxt > idx && nxt < end) end = nxt;
-            }
-            String block = raw.substring(idx + sec.length() + 1, end).trim();
-            List<String> lines = new ArrayList<>();
-            for (String line : block.split("\\|")) {
-                String l = line.trim();
-                if (!l.isEmpty()) lines.add(l);
-            }
-            if (!lines.isEmpty()) map.put(sec, lines);
-        }
-        return map;
-    }
-
-    private String buildFlatLyrics(Map<String,List<String>> map, String fallback) {
-        if (map.isEmpty()) return fallback;
-        StringBuilder sb = new StringBuilder();
-        String[] order = {"VERSE1","CHORUS","VERSE2","CHORUS","BRIDGE","CHORUS"};
-        for (String sec : order) {
-            if (!map.containsKey(sec)) continue;
-            String label = switch(sec) {
-                case "VERSE1","VERSE2","VERSE3" -> "🎵 Strofa";
-                case "CHORUS" -> "🎤 Ritornello";
-                case "BRIDGE" -> "🌉 Bridge";
-                default -> sec;
-            };
-            sb.append(label).append(":\n");
-            map.get(sec).forEach(l -> sb.append(l).append("\n"));
-            sb.append("\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private int parseBpm(String tempo) {
-        try { return Integer.parseInt(tempo.trim()); }
-        catch (Exception e) { return 120; }
-    }
-
-    private String generateRichABC(String desc, String key, String tempo, String genre, String mood) {
-        // Melodie pre-costruite per genere
-        String melody = switch(genre.toLowerCase()) {
-            case "jazz" ->
-                "|: E2 G2 B2 gf | e4 d2 B2 | G2 B2 d2 gf | e6 d2 |\n" +
-                "c2 e2 g2 ec | B4 A2 G2 | F2 A2 c2 AF | G8 :|\n" +
-                "|: b2 ag fe dc | B4 G4 | A2 cB AG FE | D6 E2 |\n" +
-                "F2 AF G2 EG | F4 D4 | E2 GF ED CB | C8 :|";
-            case "rock" ->
-                "|: G,2 G,2 G4 | D2 D2 D4 | G,2 B,2 D2 G2 | B4 A2 G2 |\n" +
-                "F2 A2 c2 AF | G4 E4 | D2 F2 A2 dA | G8 :|\n" +
-                "|: d4 d2 cB | A4 A2 G2 | F2 A2 c2 AF | G4 E4 |\n" +
-                "D2 B,2 G,2 B,2 | D4 B,4 | G,2 D2 G2 d2 | G8 :|";
-            case "classical" ->
-                "|: c2 de f2 ed | c4 A4 | G2 AB c2 BA | G6 E2 |\n" +
-                "F2 GA B2 AG | F4 D4 | E2 FG A2 GF | E8 :|\n" +
-                "|: e2 fg a2 gf | e4 c4 | d2 ef g2 fe | d6 B2 |\n" +
-                "c2 de f2 ed | c4 A4 | G2 AB c2 d2 | G8 :|";
-            default -> // pop
-                "|: G2 AB c2 BA | G4 E4 | F2 GA B2 AG | F6 D2 |\n" +
-                "c2 de f2 ed | c4 A4 | G2 AB c2 d2 | G8 :|\n" +
-                "|: e2 ef g2 fe | e4 c4 | d2 de f2 ed | d6 B2 |\n" +
-                "c2 cd e2 dc | B4 G4 | A2 Bc d2 e2 | G8 :|";
-        };
-        return "X:1\nT:" + desc.substring(0,Math.min(30,desc.length())) +
-            "\nM:4/4\nL:1/8\nQ:1/4=" + tempo + "\nK:" + key + "\n" + melody;
     }
 
     private String extractABCField(String abc, String field) {
@@ -3545,219 +3490,6 @@ public class ChatController {
             "c2cd e2dc | B4 G4 | A2Bc d2e2 | G8 :|";
     }
 
-
-    // ════════════════════════════════════════════════════════════════════════
-    // REPLICATE MUSIC PIPELINE
-    // Step 1: MusicGen (Meta) → musica strumentale MP3 da prompt
-    // Step 2: Bark (Suno)     → voce cantata realistica MP3
-    // Step 3: Frontend        → sovrappone i due audio con Web Audio API
-    // Env richiesta: REPLICATE_API_TOKEN (da replicate.com/account/api-tokens)
-    // ════════════════════════════════════════════════════════════════════════
-
-    /** Chiama Replicate e aspetta il risultato (polling fino a 120 sec) */
-    private String callReplicate(String model, Map<String,Object> input) throws Exception {
-        String token = env("REPLICATE_API_TOKEN", "");
-        if (token.isEmpty()) throw new IllegalStateException("REPLICATE_API_TOKEN non configurato");
-
-        String createUrl = "https://api.replicate.com/v1/predictions";
-        Map<String,Object> bodyMap = new LinkedHashMap<>();
-        bodyMap.put("version", model);
-        bodyMap.put("input", input);
-
-        // Headers con Bearer token
-        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
-        headers.set("Authorization", "Bearer " + token);
-        headers.set("Content-Type", "application/json");
-
-        org.springframework.http.HttpEntity<String> entity =
-            new org.springframework.http.HttpEntity<>(MAPPER.writeValueAsString(bodyMap), headers);
-
-        ResponseEntity<String> resp = restTemplate.postForEntity(createUrl, entity, String.class);
-        JsonNode node = MAPPER.readTree(resp.getBody());
-        String predId  = node.path("id").asText();
-        String status  = node.path("status").asText();
-
-        // Polling ogni 3 secondi, max 40 tentativi (120 sec)
-        org.springframework.http.HttpEntity<Void> pollEntity =
-            new org.springframework.http.HttpEntity<>(headers);
-
-        for (int i = 0; i < 40 && !status.equals("succeeded") && !status.equals("failed"); i++) {
-            Thread.sleep(3000);
-            String pollUrl = "https://api.replicate.com/v1/predictions/" + predId;
-            ResponseEntity<String> pollResp = restTemplate.exchange(
-                pollUrl, org.springframework.http.HttpMethod.GET, pollEntity, String.class);
-            JsonNode pNode = MAPPER.readTree(pollResp.getBody());
-            status = pNode.path("status").asText();
-            if (status.equals("succeeded")) {
-                JsonNode output = pNode.path("output");
-                if (output.isTextual()) return output.asText();
-                if (output.has("audio_out")) return output.path("audio_out").asText();
-                if (output.isArray() && output.size() > 0) return output.get(0).asText();
-                return output.toString();
-            }
-            if (status.equals("failed")) {
-                throw new RuntimeException("Replicate failed: " + pNode.path("error").asText());
-            }
-        }
-        throw new RuntimeException("Replicate timeout dopo 120 secondi");
-    }
-
-    /** Scarica un URL e ritorna i byte come base64 */
-    private String downloadAsBase64(String url) throws Exception {
-        byte[] bytes = restTemplate.getForObject(url, byte[].class);
-        return bytes != null ? java.util.Base64.getEncoder().encodeToString(bytes) : "";
-    }
-
-    /**
-     * PIPELINE COMPLETA: Genera canzone con voce cantata + musica reale via Replicate
-     * 1. LLM → testo canzone + descrizione musicale
-     * 2. MusicGen → audio strumentale MP3
-     * 3. Bark → voce cantata MP3
-     * Ritorna entrambi i base64 + testo per il frontend
-     */
-    @PostMapping("/music/generate/ai")
-    public ResponseEntity<Object> musicGenerateAI(@RequestBody Map<String,String> body) {
-        String description = body.getOrDefault("description","").trim();
-        String genre       = body.getOrDefault("genre","pop");
-        String mood        = body.getOrDefault("mood","happy");
-        String tempo       = body.getOrDefault("tempo","120");
-        String sessionId   = body.getOrDefault("sessionId","global");
-        String baseUrl2    = body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2     = body.getOrDefault("apiKey",  env("AI_API_KEY",""));
-        String model2      = body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
-
-        if (description.isEmpty())
-            return ResponseEntity.badRequest().body(Map.of("error","Descrizione obbligatoria"));
-
-        boolean hasReplicate = !env("REPLICATE_API_TOKEN","").isEmpty();
-        Map<String,Object> result = new LinkedHashMap<>();
-
-        try {
-            // ── STEP 1: LLM genera testo canzone + prompt musicale ──
-            String llmPrompt =
-                "Sei un compositore e paroliere italiano professionista.\n" +
-                "Crea una canzone su: " + description + "\n" +
-                "Genere: " + genre + " | Mood: " + mood + " | Tempo: " + tempo + " BPM\n\n" +
-                "Rispondi SOLO con questi tag:\n\n" +
-                "[TITLE]titolo breve e originale[/TITLE]\n\n" +
-                "[MUSIC_PROMPT]descrizione in inglese della musica per MusicGen, max 200 caratteri, " +
-                "specifica: strumenti, genere, BPM, atmosfera. Esempio: 'upbeat pop song with electric guitar, " +
-                "drums and bass, 120 BPM, energetic and catchy'[/MUSIC_PROMPT]\n\n" +
-                "[BARK_TEXT]testo da cantare, max 200 caratteri, scrivi [laughter] per risate, " +
-                "[clears throat] per effetti vocali. Solo il testo cantato principale.[/BARK_TEXT]\n\n" +
-                "[LYRICS]\n" +
-                "VERSE1:\nriga1|riga2|riga3|riga4\n" +
-                "CHORUS:\nriga1|riga2|riga3|riga4\n" +
-                "VERSE2:\nriga1|riga2|riga3|riga4\n" +
-                "[/LYRICS]\n\n" +
-                "[DESCRIPTION]descrizione poetica della canzone in italiano, 1-2 righe[/DESCRIPTION]";
-
-            String llmResp = callLLM(
-                "Sei un compositore musicale e paroliere. Rispondi sempre in formato strutturato.",
-                llmPrompt, new ArrayList<>(), baseUrl2, apiKey2, model2, 2000);
-
-            String title       = extractTag(llmResp, "TITLE");
-            String musicPrompt = extractTag(llmResp, "MUSIC_PROMPT");
-            String barkText    = extractTag(llmResp, "BARK_TEXT");
-            String lyricsRaw   = extractTag(llmResp, "LYRICS");
-            String songDesc    = extractTag(llmResp, "DESCRIPTION");
-
-            if (title.isEmpty())    title = "Canzone - " + description.substring(0, Math.min(25, description.length()));
-            if (musicPrompt.isEmpty()) musicPrompt = genre + " song, " + mood + ", " + tempo + " BPM, with instruments";
-            if (barkText.isEmpty()) barkText = "♪ " + description + " ♪";
-
-            Map<String,List<String>> lyricsMap = parseLyricsStructured(lyricsRaw);
-            String lyricsFlat  = buildFlatLyrics(lyricsMap, lyricsRaw);
-
-            result.put("title",            title);
-            result.put("description",      songDesc.isEmpty() ? "Canzone " + genre + " su: " + description : songDesc);
-            result.put("lyrics",           lyricsFlat);
-            result.put("lyricsStructured", lyricsMap);
-            result.put("musicPrompt",      musicPrompt);
-            result.put("genre",            genre);
-            result.put("mood",             mood);
-            result.put("tempo",            tempo);
-
-            if (!hasReplicate) {
-                // Nessun token Replicate → ritorna solo testo + fallback Web Audio
-                result.put("status",       "text_only");
-                result.put("mode",         "fallback");
-                result.put("replicateConfigured", false);
-                result.put("message",      "Configura REPLICATE_API_TOKEN per la generazione audio AI reale");
-                return ResponseEntity.ok(result);
-            }
-
-            // ── STEP 2: MusicGen → musica strumentale ──
-            String musicAudioUrl = null;
-            try {
-                Map<String,Object> musicInput = new LinkedHashMap<>();
-                musicInput.put("prompt",           musicPrompt);
-                musicInput.put("model_version",    "stereo-large");
-                musicInput.put("output_format",    "mp3");
-                musicInput.put("normalization_strategy", "peak");
-                musicInput.put("duration",         30); // 30 secondi
-                // MusicGen versione stereo-large di Meta
-                musicAudioUrl = callReplicate(
-                    "671ac645ce5e552cc0f9ed4c5804efab5c8928045c13f7ebe6ec06e1af0bc7d6",
-                    musicInput);
-                log.info("MusicGen OK: {}", musicAudioUrl);
-            } catch (Exception me) {
-                log.warn("MusicGen failed: {}", me.getMessage());
-            }
-
-            // ── STEP 3: Bark → voce cantata ──
-            String vocalAudioUrl = null;
-            try {
-                Map<String,Object> barkInput = new LinkedHashMap<>();
-                barkInput.put("prompt",      barkText);
-                barkInput.put("text_temp",   0.7);
-                barkInput.put("waveform_temp", 0.7);
-                // Bark di suno-ai su Replicate
-                vocalAudioUrl = callReplicate(
-                    "b76242b40d67c76ab6742e987628a2a9ac019e11d56ab96c4e91ce03b79b2787",
-                    barkInput);
-                log.info("Bark OK: {}", vocalAudioUrl);
-            } catch (Exception be) {
-                log.warn("Bark failed: {}", be.getMessage());
-            }
-
-            // ── Scarica e converti in base64 ──
-            if (musicAudioUrl != null && !musicAudioUrl.isEmpty()) {
-                try {
-                    result.put("musicBase64", downloadAsBase64(musicAudioUrl));
-                    result.put("musicUrl",    musicAudioUrl);
-                } catch (Exception de) { log.warn("Download music failed: {}", de.getMessage()); }
-            }
-            if (vocalAudioUrl != null && !vocalAudioUrl.isEmpty()) {
-                try {
-                    result.put("vocalBase64", downloadAsBase64(vocalAudioUrl));
-                    result.put("vocalUrl",    vocalAudioUrl);
-                } catch (Exception de) { log.warn("Download vocal failed: {}", de.getMessage()); }
-            }
-
-            result.put("status",              "ok");
-            result.put("mode",                result.containsKey("musicBase64") ? "full_ai" : "text_only");
-            result.put("replicateConfigured", true);
-            result.put("hasSinging",          result.containsKey("vocalBase64"));
-            result.put("hasMusic",            result.containsKey("musicBase64"));
-            result.put("date",                today());
-
-            // Indicizza RAG
-            ragIndexDocument(sessionId + "/music_ai_" + System.currentTimeMillis(),
-                "Canzone AI: " + title + " | " + description + " | " + lyricsFlat);
-
-            return ResponseEntity.ok(result);
-
-        } catch (Exception e) {
-            log.warn("MusicGenerateAI error: {}", e.getMessage());
-            return ResponseEntity.status(503).body(Map.of(
-                "error",   e.getMessage(),
-                "status",  "error",
-                "hint",    "Verifica REPLICATE_API_TOKEN su replicate.com/account/api-tokens"
-            ));
-        }
-    }
-
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
         String q = msg.toLowerCase();
@@ -3765,8 +3497,7 @@ public class ChatController {
                q.contains("scrivi una canzone") || q.contains("musica per") ||
                q.contains("genera musica") || q.contains("crea musica") ||
                q.contains("melodia") || q.contains("canzone su") ||
-               q.contains("canzone") || q.contains("music") || q.contains("song") ||
-               q.contains("canzone") || q.contains("brano") || q.contains("hit");
+               q.contains("music") || q.contains("song");
     }
 
     @PostMapping("/audio/generate")
@@ -5114,9 +4845,7 @@ public class ChatController {
                     musicBody.put("mood",   qlv.contains("triste")?"sad":qlv.contains("allegra")?"happy":
                         qlv.contains("romantica")?"romantic":qlv.contains("energica")?"energetic":"happy");
                     musicBody.put("tempo",  qlv.contains("lenta")?"70":qlv.contains("veloce")?"160":"120");
-                    // Usa pipeline AI (Replicate) se token configurato, altrimenti fallback ABC
-                    ResponseEntity<Object> mResp = !env("REPLICATE_API_TOKEN","").isEmpty()
-                        ? musicGenerateAI(musicBody) : musicGenerate(musicBody);
+                    ResponseEntity<Object> mResp = musicGenerate(musicBody);
                     Object mb = mResp.getBody();
                     Map<String,Object> mRespMap = new HashMap<>();
                     mRespMap.put("status","ok"); mRespMap.put("mode","music_gen");
@@ -5516,50 +5245,192 @@ public class ChatController {
             }
         }
     }
+    /**
+     * ROUTING AGENTI v2 — Classificatore deterministico a priorità
+     * Non usa più LLM per il routing (troppo lento/inaffidabile).
+     * Usa regex su parole chiave italiane+inglesi con scoring pesato.
+     * Fallback: neuralRoute() → reasoner
+     */
     private List<String> routeQuery(String query, String baseUrl, String apiKey, String model) {
+        // ── Classificazione deterministica veloce (sempre attiva) ──
+        List<String> fast = fastRoute(query);
+        if (!fast.isEmpty() && !fast.get(0).equals("reasoner")) {
+            for (String a : fast) backpropagate(a, query, 0.5);
+            log.debug("FastRoute → {}", fast);
+            return fast;
+        }
+        // ── Fallback: Neural Route ──
         try {
-            String resp = callLLM(agentPrompt("router"), "DOMANDA: " + query, new ArrayList<>(), baseUrl, apiKey, model, 80);
-            int s = resp.indexOf("{"), e = resp.lastIndexOf("}") + 1;
-            if (s >= 0 && e > s) {
-                JsonNode json = MAPPER.readTree(resp.substring(s, e));
-                List<String> agents = new ArrayList<>();
-                json.path("agents").forEach(n -> agents.add(n.asText()));
-                if (!agents.isEmpty() && agents.size() <= 3) {
-                    // Backpropagate reward per agenti selezionati
-                    for (String a : agents) backpropagate(a, query, 0.5);
-                    return agents;
-                }
+            List<String> neural = neuralRoute(query);
+            if (!neural.isEmpty() && !neural.get(0).equals("reasoner")) {
+                for (String a : neural) backpropagate(a, query, 0.4);
+                log.debug("NeuralRoute → {}", neural);
+                return neural;
             }
         } catch (Exception e) {
-            log.warn("Router LLM fallito, uso Neural+KG Route: {}", e.getMessage());
-            // Prova prima semantic KG route, poi neural route
-            List<String> kgRoute = semanticKGRoute(query);
-            if (!kgRoute.isEmpty()) return kgRoute;
-            return neuralRoute(query);
+            log.warn("NeuralRoute error: {}", e.getMessage());
         }
-        String q = query.toLowerCase();
-        if (q.contains("spaces") || q.contains("briefing")) return List.of("spaces");
-        if (q.contains("python") || q.contains("java") || q.contains("codice")) return List.of("code");
-        if (q.contains("bitcoin") || q.contains("crypto")) return List.of("crypto");
-        if (q.contains("trading") || q.contains("borsa") || q.contains("azioni")) return List.of("finance");
-        if (q.contains("traduci") || q.contains("in inglese")) return List.of("translator");
-        if (q.contains("calcola") || q.contains("matematica")) return List.of("math");
-        if (q.contains("bug") || q.contains("errore nel codice")) return List.of("debug");
-        if (q.contains("legge") || q.contains("contratto")) return List.of("legal");
-        if (q.contains("ricetta")) return List.of("cooking");
-        if (q.contains("viaggio") || q.contains("vacanza")) return List.of("travel");
-        if (q.contains("allenamento")) return List.of("fitness");
-        if (q.contains("notizie") || q.contains("news")) return List.of("research");
-        if (q.contains("startup") || q.contains("business")) return List.of("startup");
-        if (q.contains("social media") || q.contains("instagram")) return List.of("social");
-        if (q.contains("arduino") || q.contains("raspberry")) return List.of("iot");
-        if (q.contains("qubit") || q.contains("quantum")) return List.of("quantum");
-        if (q.contains("lora") || q.contains("fine-tun")) return List.of("llm_fine");
-        if (q.contains("langchain") || q.contains("crewai")) return List.of("agent_ai");
-        if (q.contains("shopify") || q.contains("ecommerce")) return List.of("ecommerce");
-        if (q.contains("analisi") || q.contains("analizza")) return List.of("analyst");
-        if (q.contains("strategia")) return List.of("strategist");
         return List.of("reasoner");
+    }
+
+    /**
+     * Classificatore deterministico a regex pesate.
+     * Ogni categoria ha una lista di pattern — il primo match vince.
+     * Aggiornabile senza toccare la logica LLM.
+     */
+    private List<String> fastRoute(String query) {
+        String q = query.toLowerCase()
+            .replaceAll("[àáâã]","a").replaceAll("[èéêë]","e")
+            .replaceAll("[ìíîï]","i").replaceAll("[òóôõ]","o")
+            .replaceAll("[ùúûü]","u");
+
+        // ── Musica (massima priorità — era il caso rotto) ──
+        if (matches(q, "crea.*canzone","scrivi.*canzone","genera.*canzone","componi.*canzone",
+                       "canzone.*su","canzone.*pop","canzone.*rock","canzone.*jazz",
+                       "canzone.*trap","canzone.*indie","canzone.*italiana",
+                       "crea.*brano","scrivi.*brano","genera.*brano","nuovo brano",
+                       "crea.*musica","genera.*musica","musica.*per",
+                       "ritornello","strofa","testo.*canzone","melodia",
+                       "\bcanzone\b","\bbrano\b","\bsong\b","componi","compositore"))
+            return List.of("music_generator");
+
+        // ── Immagini ──
+        if (matches(q, "genera.*immagin","crea.*immagin","disegna","dipingi","illustra",
+                       "foto di","immagine di","genera un'immagine","crea un'immagine",
+                       "visualizza","genera.*svg","disegno di"))
+            return List.of("image_generator");
+
+        // ── Codice ──
+        if (matches(q, "\bpython\b","\bjava\b","\bjavascript\b","\btypescript\b",
+                       "\breact\b","\bsql\b","\bhtml\b","\bcss\b","\bapi\b",
+                       "scrivi.*codice","codice per","funzione che","programma che",
+                       "script per","debug","errore nel codice","\bbug\b",
+                       "implementa","refactoring","unit test","\bgit\b",
+                       "\bnode\b","\bspring\b","\bdjango\b","\bflask\b"))
+            return List.of("code");
+
+        // ── Finanza ──
+        if (matches(q, "\bmacd\b","\brsi\b","\bborsa\b","analisi.*azion","azione.*borsa",
+                       "\btrading\b","\binvestimento\b","\bdividend","portfolio",
+                       "\bstocks\b","\bnyse\b","\bnasdaq\b","analisi fondamentale",
+                       "analisi tecnica","mercato finanziario","rendimento","\bETF\b"))
+            return List.of("finance");
+
+        // ── Crypto ──
+        if (matches(q, "\bbitcoin\b","\bethereum\b","\bcrypto\b","\bweb3\b",
+                       "\bdefi\b","\bnft\b","\bsolana\b","\bbnb\b","\bxrp\b",
+                       "criptovalut","blockchain.*invest","wallet.*crypto"))
+            return List.of("crypto");
+
+        // ── Notizie / Ricerca web ──
+        if (matches(q, "\bnotizie\b","\bnews\b","ultime notizie","cronaca",
+                       "cosa e successo","aggiornamenti su","breaking news",
+                       "\boggi\b.*accaduto","cerca.*web","cerca.*internet",
+                       "cerca.*google","\bgoogle\b.*cerca","ricerca.*online"))
+            return List.of("research");
+
+        // ── Medicina ──
+        if (matches(q, "\bsintomi\b","\bsintomo\b","\bmalattia\b","\bfarmaco\b",
+                       "\bmedico\b","\bsalute\b","\bcura\b","\bdiagnosi\b",
+                       "\bdolore\b","\bmedicina\b","effetti.*collaterali",
+                       "pressione.*sangue","\bdiabete\b","\bvaccino\b"))
+            return List.of("medical");
+
+        // ── Legale ──
+        if (matches(q, "\blegge\b","\bcontratto\b","\bdiritto\b","\bgdpr\b",
+                       "\bnormativa\b","\bavvocato\b","\btribunale\b","\breato\b",
+                       "\bcausa\b","\bcodice civile\b","\bconsumer rights\b"))
+            return List.of("legal");
+
+        // ── Cucina ──
+        if (matches(q, "\bricetta\b","\bricette\b","come.*cucinare","ingredienti per",
+                       "\bpasta\b.*cucinare","\bpizza\b.*fare","prepara.*piatto",
+                       "\bchef\b","cosa.*cucino","cosa.*mangio"))
+            return List.of("cooking");
+
+        // ── Viaggi ──
+        if (matches(q, "\bviaggio\b","\bvacanza\b","\bhotel\b","\bvolo\b",
+                       "\bdestinazione\b","dove.*andare","cosa.*visitare",
+                       "\bturismo\b","migliore.*meta","itinerario"))
+            return List.of("travel");
+
+        // ── Fitness ──
+        if (matches(q, "\ballenamento\b","\besercizio\b","\bpalestra\b",
+                       "\bdieta\b","\bfitness\b","\bsport\b","perdere.*peso",
+                       "\bmuscoli\b","\bcalorie\b","piano.*allenamento"))
+            return List.of("fitness");
+
+        // ── Matematica ──
+        if (matches(q, "\bcalcola\b","\bmatematica\b","\bequazione\b",
+                       "\bderivata\b","\bintegrale\b","\bmatrice\b",
+                       "\bstatistica\b","\bprobabilita\b","risolvi.*problema"))
+            return List.of("math");
+
+        // ── Psicologia ──
+        if (matches(q, "\bpsicolog","\bansia\b","\bdepression","\btrauma\b",
+                       "\bemozioni\b","\brelazione\b","sto male","mi sento",
+                       "\bautostima\b","\bmotivazione\b"))
+            return List.of("psychology");
+
+        // ── Traduzione ──
+        if (matches(q, "traduci","in inglese","in spagnolo","in francese","in tedesco",
+                       "in cinese","in giapponese","traduzione di","come si dice"))
+            return List.of("translator");
+
+        // ── Scrittore creativo ──
+        if (matches(q, "scrivi.*storia","crea.*racconto","scrivi.*poesia","crea.*poesia",
+                       "\bromanzo\b","\bfavola\b","\bsceneggiatura\b",
+                       "storia creativa","personaggio per","inventa.*storia"))
+            return List.of("creative");
+
+        // ── Startup / Business ──
+        if (matches(q, "\bstartup\b","\bbusiness plan\b","\bpitch\b",
+                       "\bventure\b","\binvestitori\b","lanciare.*prodotto",
+                       "\bmarketing\b","\bstrategia.*business\b"))
+            return List.of("startup");
+
+        // ── Quantum / Fisica avanzata ──
+        if (matches(q, "\bquantum\b","\bquantistico\b","\bqubit\b","\bfisica quantistica\b",
+                       "\bsovrapposizione\b","\bentanglement\b"))
+            return List.of("quantum");
+
+        // ── Filosofia ──
+        if (matches(q, "\bfilosofia\b","\bfilosofo\b","\betica\b","\bmorale\b",
+                       "\besistenzialismo\b","\bplatone\b","\baristotele\b",
+                       "\bnietzsche\b","senso della vita","libero arbitrio"))
+            return List.of("philosophy");
+
+        // ── Storia ──
+        if (matches(q, "\bstoria\b.*guerra","\bseconda guerra\b","\bprima guerra\b",
+                       "\bimpero romano\b","\brinascimento\b","\brivoluzione\b",
+                       "\bstorico\b","\bcivilta\b","\bsecolo\b.*storia"))
+            return List.of("history");
+
+        // ── Sicurezza / Cyber ──
+        if (matches(q, "\bsicurezza\b.*sistema","\bvulnerabilit","\bhacking\b",
+                       "\bpentest\b","\bfirewall\b","\bmalware\b","\bcyber\b",
+                       "\bsql injection\b","\bxss\b","analisi.*sicurezza"))
+            return List.of("security");
+
+        // ── AI / ML ──
+        if (matches(q, "\bllm\b","\bgpt\b","\bmachine learning\b","\bneural network\b",
+                       "\bdeep learning\b","\bfine.tun","\brag\b","\bembedding\b",
+                       "come funziona.*ai","intelligenza artificiale.*funziona"))
+            return List.of("ai");
+
+        return List.of("reasoner");
+    }
+
+    /** Helper: controlla se la query matcha almeno uno dei pattern regex */
+    private boolean matches(String query, String... patterns) {
+        for (String p : patterns) {
+            try {
+                if (query.matches(".*" + p + ".*")) return true;
+            } catch (Exception e) {
+                if (query.contains(p.replaceAll("\\b|\\B|\*|\?|\+|\.", ""))) return true;
+            }
+        }
+        return false;
     }
     // ════════════════════════════════════════════════════════════════════════
     // PUPPETEER BROWSER AGENT — controllo browser completo
