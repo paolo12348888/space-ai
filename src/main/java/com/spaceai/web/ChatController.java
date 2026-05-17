@@ -3438,7 +3438,8 @@ public class ChatController {
                 ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
                 if (pistonResp.getBody() instanceof Map) {
                     Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
-                    String output = (String)pr.getOrDefault("output","");
+                    Object _out = pr.getOrDefault("output","");
+                    String output = _out != null ? _out.toString() : "";
                     if (output.contains("MUSICXML_B64:")) {
                         midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
                         log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
