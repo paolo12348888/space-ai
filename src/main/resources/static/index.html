@@ -54,6 +54,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter"
 .chips{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;max-width:480px;margin-top:4px}
 .chip{padding:8px 14px;border-radius:24px;background:var(--surface);border:1px solid var(--border);font-size:.77rem;color:var(--muted);cursor:pointer;transition:all .18s}
 .chip:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim);transform:translateY(-2px)}
+@keyframes agPulse{0%,100%{box-shadow:0 0 0 0 rgba(0,200,255,0.2)}50%{box-shadow:0 0 0 6px rgba(0,200,255,0.05)}}
 .row{display:flex;gap:10px;padding:7px 24px;animation:msgIn .2s ease}
 @media(max-width:640px){.row{padding:7px 14px}}
 @keyframes msgIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
@@ -195,16 +196,16 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
         </div>
-        <!-- Live agent hint — aggiornato mentre si digita -->
-        <div id="liveAgentHint" style="
-          margin-top:14px;background:rgba(13,20,33,0.85);
-          border:1px solid rgba(0,200,255,0.15);border-radius:14px;
-          padding:12px 18px;display:flex;align-items:center;gap:12px;
-          max-width:420px;width:90%;transition:all .3s;display:none">
-          <span id="liveAgentIcon" style="font-size:1.3rem">🤖</span>
+
+        <!-- Box agente live — appare SOLO mentre si digita, nascosto di default -->
+        <div id="liveAgentHint" style="display:none;margin-top:14px;
+          background:rgba(0,200,255,0.07);border:1px solid rgba(0,200,255,0.3);
+          border-radius:14px;padding:14px 20px;align-items:center;gap:14px;
+          max-width:400px;width:90%;animation:agPulse 2s ease-in-out infinite">
+          <span id="liveAgentIcon" style="font-size:1.5rem">🤖</span>
           <div>
-            <div id="liveAgentName" style="color:var(--accent);font-weight:700;font-size:.9rem"></div>
-            <div style="color:#4a6080;font-size:.72rem;font-family:monospace">verrà attivato automaticamente</div>
+            <div id="liveAgentName" style="color:var(--accent);font-weight:700;font-size:.95rem;font-family:'Syne',sans-serif"></div>
+            <div style="color:#3a5070;font-size:.72rem;font-family:monospace;margin-top:2px">verrà attivato automaticamente</div>
           </div>
         </div>
       </div>
@@ -233,7 +234,7 @@ textarea::placeholder{color:var(--muted)}
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span style="color:var(--accent);cursor:pointer;font-weight:600" onclick="startSpaces()" id="heySpacesHint">&#127756; Hey SPACES</span> per AI vocale</div>
+      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span id="heyHint" onclick="startSpaces()" style="color:var(--accent);font-weight:700;cursor:pointer">&#127756; Hey SPACES</span> per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -587,134 +588,128 @@ renderChatHistory();
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 
-// ══════════════════════════════════════════════════════════
-// LIVE AGENT DETECTION — specchio esatto del backend fastRoute
-// Aggiorna l'hint mentre l'utente digita (debounce 150ms)
-// ══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// LIVE AGENT DETECTION
+// Mentre l'utente digita, rileva l'agente e mostra il box hint.
+// Stesse regole del backend fastRoute — 0ms, nessuna API.
+// ═══════════════════════════════════════════════════════════════
 (function(){
-  var AGENTS = {
-    music_generator: {icon:"🎵", label:"Compositore Musicale",
-      re:/crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone.*su|\bcanzone\b|\bbrano\b|\bsong\b|musica.*per|ritornello|strofa|melodia/},
-    image_generator: {icon:"🎨", label:"Generatore Immagini",
-      re:/genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di/},
-    code:            {icon:"💻", label:"Programmatore",
-      re:/python|javascript|java|codice|programma|funzione che|script|\bdebug\b|\bbug\b|html|css|\bsql\b|\bapi\b|react/},
-    finance:         {icon:"📈", label:"Analista Finanziario",
-      re:/\bmacd\b|\brsi\b|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale|analisi tecnica/},
-    crypto:          {icon:"₿", label:"Esperto Crypto",
-      re:/bitcoin|ethereum|crypto|criptovalut|\bdefi\b|\bnft\b|solana|blockchain.*invest/},
-    research:        {icon:"📰", label:"Ricercatore / Notizie",
-      re:/notizie|\bnews\b|ultime notizie|cronaca|cosa.*successo|aggiornamenti|cerca.*web|cerca.*google/},
-    medical:         {icon:"🩺", label:"Consulente Medico",
-      re:/sintomi|sintomo|malattia|farmaco|medico|salute|cura|diagnosi|dolore|medicina/},
-    legal:           {icon:"⚖️", label:"Consulente Legale",
-      re:/\blegge\b|contratto|diritto|gdpr|normativa|avvocato|tribunale|reato/},
-    cooking:         {icon:"👨‍🍳", label:"Chef & Ricette",
-      re:/ricetta|ricette|come.*cucinare|ingredienti per|cosa.*cucino|cosa.*mangio/},
-    travel:          {icon:"✈️", label:"Esperto Viaggi",
-      re:/viaggio|vacanza|hotel|\bvolo\b|destinazione|dove.*andare|cosa.*visitare|turismo/},
-    fitness:         {icon:"💪", label:"Coach Fitness",
-      re:/allenamento|esercizio|palestra|\bdieta\b|fitness|perdere.*peso|muscoli|calorie/},
-    math:            {icon:"🔢", label:"Matematico",
-      re:/calcola|matematica|equazione|derivata|integrale|matrice|statistica|probabilita/},
-    psychology:      {icon:"🧠", label:"Psicologo",
-      re:/psicolog|ansia|depress|trauma|emozioni|relazione|sto male|mi sento|autostima/},
-    translator:      {icon:"🌍", label:"Traduttore",
-      re:/traduci|in inglese|in spagnolo|in francese|in tedesco|traduzione di|come si dice/},
-    creative:        {icon:"✍️", label:"Scrittore Creativo",
-      re:/scrivi.*storia|crea.*racconto|scrivi.*poesia|romanzo|favola|storia creativa/},
-    startup:         {icon:"🚀", label:"Business & Startup",
-      re:/startup|business plan|\bpitch\b|marketing|strategia.*business/},
-    philosophy:      {icon:"💭", label:"Filosofo",
-      re:/filosofia|filosofo|etica|morale|esistenzialismo|platone|nietzsche|senso della vita/},
-    security:        {icon:"🛡️", label:"Security Analyst",
-      re:/sicurezza.*sistema|vulnerabilit|hacking|pentest|firewall|malware|cyber|sql injection/},
-    quantum:         {icon:"⚡", label:"Quantum AI",
-      re:/quantum|quantistico|qubit|entanglement|sovrapposizione/},
-    reasoner:        {icon:"🤖", label:"Ragionatore Generale", re:null}
+  var AG = {
+    music_generator:{i:"🎵",l:"Compositore Musicale",
+      r:/crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone.*su|canzone|brano|song|musica.*per|ritornello|strofa|melodia|musica/},
+    image_generator:{i:"🎨",l:"Generatore Immagini",
+      r:/genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di/},
+    code:           {i:"💻",l:"Programmatore",
+      r:/python|javascript|java|codice|programma|funzione che|script|debug|bug|html|css|sql|api|react|implementa/},
+    finance:        {i:"📈",l:"Analista Finanziario",
+      r:/macd|rsi|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale|analisi tecnica|ETF/},
+    crypto:         {i:"₿",l:"Esperto Crypto",
+      r:/bitcoin|ethereum|crypto|criptovalut|defi|nft|solana|blockchain.*invest/},
+    research:       {i:"📰",l:"Ricercatore / Notizie",
+      r:/notizie|news|ultime notizie|cronaca|cosa.*successo|aggiornamenti|cerca.*web|cerca.*google/},
+    medical:        {i:"🩺",l:"Consulente Medico",
+      r:/sintomi|sintomo|malattia|farmaco|medico|salute|cura|diagnosi|dolore/},
+    legal:          {i:"⚖️",l:"Consulente Legale",
+      r:/legge|contratto|diritto|gdpr|normativa|avvocato|tribunale|reato/},
+    cooking:        {i:"👨‍🍳",l:"Chef & Ricette",
+      r:/ricetta|ricette|come.*cucinare|ingredienti per|cosa.*cucino|cosa.*mangio/},
+    travel:         {i:"✈️",l:"Esperto Viaggi",
+      r:/viaggio|vacanza|hotel|volo|destinazione|dove.*andare|cosa.*visitare/},
+    fitness:        {i:"💪",l:"Coach Fitness",
+      r:/allenamento|esercizio|palestra|dieta|fitness|perdere.*peso|muscoli|calorie/},
+    math:           {i:"🔢",l:"Matematico",
+      r:/calcola|matematica|equazione|derivata|integrale|matrice|statistica|probabilita/},
+    psychology:     {i:"🧠",l:"Psicologo",
+      r:/psicolog|ansia|depress|trauma|emozioni|relazione|sto male|mi sento/},
+    translator:     {i:"🌍",l:"Traduttore",
+      r:/traduci|in inglese|in spagnolo|in francese|in tedesco|traduzione di|come si dice/},
+    security:       {i:"🛡️",l:"Security Analyst",
+      r:/sicurezza.*sistema|vulnerabilit|hacking|pentest|firewall|malware|cyber/},
+    quantum:        {i:"⚡",l:"Quantum AI",
+      r:/quantum|quantistico|qubit|entanglement/},
+    philosophy:     {i:"💭",l:"Filosofo",
+      r:/filosofia|filosof|etica|morale|esistenzialismo|platone|nietzsche|senso della vita/},
+    history:        {i:"📚",l:"Storico",
+      r:/storia.*guerra|seconda guerra|prima guerra|impero romano|rinascimento|rivoluzione storica/},
+    creative:       {i:"✍️",l:"Scrittore Creativo",
+      r:/scrivi.*storia|crea.*racconto|scrivi.*poesia|romanzo|favola|storia creativa/},
+    startup:        {i:"🚀",l:"Business & Startup",
+      r:/startup|business plan|pitch|marketing|strategia.*business/}
   };
 
-  function detectLocal(text){
-    var q = text.toLowerCase()
+  function detect(txt){
+    var q=txt.toLowerCase()
       .replace(/[àáâã]/g,"a").replace(/[èéêë]/g,"e")
-      .replace(/[ìíîï]/g,"i").replace(/[òóôõ]/g,"o")
-      .replace(/[ùúûü]/g,"u");
-    for(var id in AGENTS){
-      if(id==="reasoner") continue;
-      var re=AGENTS[id].re;
-      if(re && re.test(q)) return id;
-    }
+      .replace(/[ìíîï]/g,"i").replace(/[òóôõ]/g,"o").replace(/[ùúûü]/g,"u");
+    for(var k in AG){ if(AG[k].r && AG[k].r.test(q)) return k; }
     return null;
   }
 
-  var hint    = document.getElementById("liveAgentHint");
-  var hIcon   = document.getElementById("liveAgentIcon");
-  var hName   = document.getElementById("liveAgentName");
-  var modeLbl = document.getElementById("modeLbl");
-  var debT    = null;
-  var lastId  = null;
+  var hint=document.getElementById("liveAgentHint");
+  var hIcon=document.getElementById("liveAgentIcon");
+  var hName=document.getElementById("liveAgentName");
+  var modeLbl=document.getElementById("modeLbl");
+  var debT=null, lastId=null;
 
-  inpEl.addEventListener("input", function(){
+  inpEl.addEventListener("input",function(){
     clearTimeout(debT);
-    debT = setTimeout(function(){
-      var val = inpEl.value.trim();
-      if(!val){
-        if(hint) hint.style.display="none";
-        if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
-        lastId = null; return;
+    debT=setTimeout(function(){
+      var v=inpEl.value.trim();
+      if(!v){
+        if(hint)hint.style.display="none";
+        if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
+        lastId=null; return;
       }
-      var id = detectLocal(val);
-      if(id === lastId) return;
-      lastId = id;
-      var info = id ? AGENTS[id] : null;
-      if(info && hint){
-        if(hIcon) hIcon.textContent = info.icon;
-        if(hName) hName.textContent = info.label;
-        hint.style.display = "flex";
-        // Aggiorna anche badge in basso
-        if(modeLbl) modeLbl.innerHTML = info.icon + " " + info.label;
+      var id=detect(v);
+      if(id===lastId) return;
+      lastId=id;
+      if(id && hint){
+        if(hIcon) hIcon.textContent=AG[id].i;
+        if(hName) hName.textContent=AG[id].l;
+        hint.style.display="flex";
+        if(modeLbl) modeLbl.innerHTML=AG[id].i+" "+AG[id].l;
       } else if(hint){
-        hint.style.display = "none";
-        if(modeLbl) modeLbl.innerHTML = "&#129302; Auto";
+        hint.style.display="none";
+        if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
       }
-    }, 150);
+    },150);
   });
 })();
 
-// ══════════════════════════════════════════════════════════
-// HEY SPACES wakeword listener in background
-// ══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// HEY SPACES — Wakeword listener in background
+// ═══════════════════════════════════════════════════════════════
 (function(){
   if(!window.SpeechRecognition&&!window.webkitSpeechRecognition) return;
   var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  var wakeRec=null, wakeActive=false;
-  var WAKEWORDS=["hey spaces","hey space","ehi spaces","ehi space"];
-
-  function startWake(){
-    if(spacesOn||wakeActive) return;
+  var rec=null, active=false;
+  var WW=["hey spaces","hey space","ehi spaces","ehi space"];
+  function startW(){
+    if(spacesOn||active) return;
     try{
-      wakeRec=new SR();
-      wakeRec.lang="it-IT"; wakeRec.continuous=false;
-      wakeRec.interimResults=false; wakeRec.maxAlternatives=3;
-      wakeActive=true;
-      wakeRec.onresult=function(e){
-        wakeActive=false;
-        var said="";
-        for(var i=0;i<e.results[0].length;i++) said+=e.results[0][i].transcript.toLowerCase()+" ";
-        if(WAKEWORDS.some(function(w){return said.includes(w);})){
-          var h=document.getElementById("heySpacesHint");
-          if(h){h.style.background="var(--accent)";h.style.color="#000";h.style.padding="1px 8px";h.style.borderRadius="6px";
-            setTimeout(function(){h.style.background="";h.style.color="var(--accent)";h.style.padding="";},1500);}
-          setTimeout(function(){startSpaces();},300);
-        } else { setTimeout(startWake,1000); }
+      rec=new SR(); rec.lang="it-IT"; rec.continuous=false;
+      rec.interimResults=false; rec.maxAlternatives=3; active=true;
+      rec.onresult=function(e){
+        active=false;
+        var s=""; for(var i=0;i<e.results[0].length;i++) s+=e.results[0][i].transcript.toLowerCase()+" ";
+        if(WW.some(function(w){return s.includes(w);})){
+          var h=document.getElementById("heyHint");
+          if(h){h.style.background="var(--accent)";h.style.color="#000";h.style.padding="2px 8px";h.style.borderRadius="6px";
+            setTimeout(function(){h.style.background="";h.style.color="var(--accent)";h.style.padding="";h.style.borderRadius="";},1500);}
+          setTimeout(startSpaces,400);
+        } else setTimeout(startW,1000);
       };
-      wakeRec.onerror=function(e){ wakeActive=false; if(e.error!=="aborted"&&e.error!=="not-allowed") setTimeout(startWake,3000); };
-      wakeRec.onend=function(){ wakeActive=false; if(!spacesOn) setTimeout(startWake,1500); };
-      wakeRec.start();
-    }catch(err){ wakeActive=false; }
+      rec.onerror=function(e){active=false;if(e.error!=="aborted"&&e.error!=="not-allowed")setTimeout(startW,3000);};
+      rec.onend=function(){active=false;if(!spacesOn)setTimeout(startW,1500);};
+      rec.start();
+    }catch(e){active=false;}
   }
-  setTimeout(startWake, 3000);
+  setTimeout(startW,3000);
 })();
+
+// ═══════════════════════════════════════════════════════════════
+// Badge agente dopo ogni risposta
+// ═══════════════════════════════════════════════════════════════
 function handleFiles(f){for(var i=0;i<f.length;i++){if(!attachedFiles.find(function(x){return x.name===f[i].name;}))attachedFiles.push(f[i]);}renderFiles();}
 function getFileIcon(f){
   var t=f.type||""; var n=f.name.toLowerCase();
@@ -1020,26 +1015,27 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          // Aggiorna badge in basso con agente usato
-          var AICONS={"music_generator":"🎵","image_generator":"🎨","code":"💻",
-            "finance":"📈","crypto":"₿","research":"📰","medical":"🩺","legal":"⚖️",
-            "cooking":"👨‍🍳","travel":"✈️","fitness":"💪","math":"🔢","psychology":"🧠",
-            "translator":"🌍","creative":"✍️","startup":"🚀","philosophy":"💭",
-            "security":"🛡️","quantum":"⚡","ai":"🤖","reasoner":"🤖",
-            "debug":"🔧","history":"📚","science":"🔬","quantum":"⚡"};
-          var ALABELS={"music_generator":"Musica","image_generator":"Immagini","code":"Codice",
-            "finance":"Finanza","crypto":"Crypto","research":"Notizie","medical":"Medico",
-            "legal":"Legale","cooking":"Chef","travel":"Viaggi","fitness":"Fitness",
-            "math":"Matematica","psychology":"Psicologia","translator":"Traduttore",
-            "creative":"Scrittore","startup":"Startup","philosophy":"Filosofia",
-            "security":"Security","quantum":"Quantum","ai":"AI","reasoner":"Auto",
-            "debug":"Debug","history":"Storia","science":"Scienza"};
-          var modLbl=document.getElementById("modeLbl");
-          if(modLbl){
-            var ic=AICONS[lastAgent]||"🤖";
-            var lb=ALABELS[lastAgent]||lastAgent.replace(/_/g," ");
-            modLbl.innerHTML=ic+" "+lb;
+          var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
+            crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
+            travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
+            security:"🛡️",quantum:"⚡",philosophy:"💭",history:"📚",creative:"✍️",
+            startup:"🚀",debug:"🔧",science:"🔬",ai:"🤖",reasoner:"🤖"};
+          var _AL={music_generator:"Musica",image_generator:"Immagini",code:"Codice",
+            finance:"Finanza",crypto:"Crypto",research:"Notizie",medical:"Medico",
+            legal:"Legale",cooking:"Chef",travel:"Viaggi",fitness:"Fitness",
+            math:"Matematica",psychology:"Psicologia",translator:"Traduttore",
+            security:"Security",quantum:"Quantum",philosophy:"Filosofia",
+            history:"Storia",creative:"Scrittore",startup:"Startup",
+            debug:"Debug",science:"Scienza",ai:"AI",reasoner:"Auto"};
+          var ml=document.getElementById("modeLbl");
+          if(ml){
+            var ic=_AI[lastAgent]||"🤖";
+            var lb=_AL[lastAgent]||lastAgent.replace(/_/g," ");
+            ml.innerHTML=ic+" "+lb;
           }
+          // Nascondi hint dopo invio
+          var lh=document.getElementById("liveAgentHint");
+          if(lh) lh.style.display="none";
         }
         lastQuery=text;
         // ── Music Gen ─────────────────────────────────────────────────
