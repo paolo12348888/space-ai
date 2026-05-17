@@ -3438,8 +3438,8 @@ public class ChatController {
                 ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
                 if (pistonResp.getBody() instanceof Map) {
                     Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
-                    Object _out = pr.getOrDefault("output","");
-                    String output = _out != null ? _out.toString() : "";
+                    Object _outObj = pr.getOrDefault("output","");
+                    String output = _outObj != null ? _outObj.toString() : "";
                     if (output.contains("MUSICXML_B64:")) {
                         midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
                         log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
@@ -5246,193 +5246,78 @@ public class ChatController {
             }
         }
     }
-    /**
-     * ROUTING AGENTI v2 — Classificatore deterministico a priorità
-     * Non usa più LLM per il routing (troppo lento/inaffidabile).
-     * Usa regex su parole chiave italiane+inglesi con scoring pesato.
-     * Fallback: neuralRoute() → reasoner
-     */
     private List<String> routeQuery(String query, String baseUrl, String apiKey, String model) {
-        // ── Classificazione deterministica veloce (sempre attiva) ──
-        List<String> fast = fastRoute(query);
-        if (!fast.isEmpty() && !fast.get(0).equals("reasoner")) {
-            for (String a : fast) backpropagate(a, query, 0.5);
-            log.debug("FastRoute → {}", fast);
-            return fast;
-        }
-        // ── Fallback: Neural Route ──
-        try {
-            List<String> neural = neuralRoute(query);
-            if (!neural.isEmpty() && !neural.get(0).equals("reasoner")) {
-                for (String a : neural) backpropagate(a, query, 0.4);
-                log.debug("NeuralRoute → {}", neural);
-                return neural;
-            }
-        } catch (Exception e) {
-            log.warn("NeuralRoute error: {}", e.getMessage());
-        }
-        return List.of("reasoner");
-    }
-
-    /**
-     * Classificatore deterministico a regex pesate.
-     * Ogni categoria ha una lista di pattern — il primo match vince.
-     * Aggiornabile senza toccare la logica LLM.
-     */
-    private List<String> fastRoute(String query) {
+        // Classificatore deterministico — veloce, nessuna chiamata LLM, nessun timeout
         String q = query.toLowerCase()
-            .replaceAll("[àáâã]","a").replaceAll("[èéêë]","e")
-            .replaceAll("[ìíîï]","i").replaceAll("[òóôõ]","o")
-            .replaceAll("[ùúûü]","u");
+            .replace("à","a").replace("á","a").replace("è","e").replace("é","e")
+            .replace("ì","i").replace("í","i").replace("ò","o").replace("ó","o")
+            .replace("ù","u").replace("ú","u");
 
-        // ── Musica (massima priorità — era il caso rotto) ──
-        if (matches(q, "crea.*canzone","scrivi.*canzone","genera.*canzone","componi.*canzone",
-                       "canzone.*su","canzone.*pop","canzone.*rock","canzone.*jazz",
-                       "canzone.*trap","canzone.*indie","canzone.*italiana",
-                       "crea.*brano","scrivi.*brano","genera.*brano","nuovo brano",
-                       "crea.*musica","genera.*musica","musica.*per",
-                       "ritornello","strofa","testo.*canzone","melodia",
-                       "\bcanzone\b","\bbrano\b","\bsong\b","componi","compositore"))
+        // Musica — massima priorità
+        if (q.matches(".*(crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone.*su|\bcanzone\b|\bbrano\b|\bsong\b|musica.*per|ritornello|strofa|melodia|\bmusica\b).*"))
             return List.of("music_generator");
-
-        // ── Immagini ──
-        if (matches(q, "genera.*immagin","crea.*immagin","disegna","dipingi","illustra",
-                       "foto di","immagine di","genera un'immagine","crea un'immagine",
-                       "visualizza","genera.*svg","disegno di"))
+        // Immagini
+        if (q.matches(".*(genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di).*"))
             return List.of("image_generator");
-
-        // ── Codice ──
-        if (matches(q, "\bpython\b","\bjava\b","\bjavascript\b","\btypescript\b",
-                       "\breact\b","\bsql\b","\bhtml\b","\bcss\b","\bapi\b",
-                       "scrivi.*codice","codice per","funzione che","programma che",
-                       "script per","debug","errore nel codice","\bbug\b",
-                       "implementa","refactoring","unit test","\bgit\b",
-                       "\bnode\b","\bspring\b","\bdjango\b","\bflask\b"))
+        // Codice
+        if (q.matches(".*(\bpython\b|\bjava\b|\bjavascript\b|\bsql\b|\bhtml\b|\bcss\b|codice|programma|funzione che|script|\bdebug\b|\bbug\b|implementa|react|\bapi\b).*"))
             return List.of("code");
-
-        // ── Finanza ──
-        if (matches(q, "\bmacd\b","\brsi\b","\bborsa\b","analisi.*azion","azione.*borsa",
-                       "\btrading\b","\binvestimento\b","\bdividend","portfolio",
-                       "\bstocks\b","\bnyse\b","\bnasdaq\b","analisi fondamentale",
-                       "analisi tecnica","mercato finanziario","rendimento","\bETF\b"))
+        // Finanza
+        if (q.matches(".*(\bmacd\b|\brsi\b|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale|analisi tecnica|\betf\b).*"))
             return List.of("finance");
-
-        // ── Crypto ──
-        if (matches(q, "\bbitcoin\b","\bethereum\b","\bcrypto\b","\bweb3\b",
-                       "\bdefi\b","\bnft\b","\bsolana\b","\bbnb\b","\bxrp\b",
-                       "criptovalut","blockchain.*invest","wallet.*crypto"))
+        // Crypto
+        if (q.matches(".*(bitcoin|ethereum|\bcrypto\b|criptovalut|\bdefi\b|\bnft\b|solana|blockchain.*invest).*"))
             return List.of("crypto");
-
-        // ── Notizie / Ricerca web ──
-        if (matches(q, "\bnotizie\b","\bnews\b","ultime notizie","cronaca",
-                       "cosa e successo","aggiornamenti su","breaking news",
-                       "\boggi\b.*accaduto","cerca.*web","cerca.*internet",
-                       "cerca.*google","\bgoogle\b.*cerca","ricerca.*online"))
+        // Notizie
+        if (q.matches(".*(\bnotizie\b|\bnews\b|ultime notizie|cronaca|cosa.*successo|aggiornamenti su|breaking news).*"))
             return List.of("research");
-
-        // ── Medicina ──
-        if (matches(q, "\bsintomi\b","\bsintomo\b","\bmalattia\b","\bfarmaco\b",
-                       "\bmedico\b","\bsalute\b","\bcura\b","\bdiagnosi\b",
-                       "\bdolore\b","\bmedicina\b","effetti.*collaterali",
-                       "pressione.*sangue","\bdiabete\b","\bvaccino\b"))
+        // Medicina
+        if (q.matches(".*(sintomi|sintomo|malattia|\bfarmaco\b|\bmedico\b|\bsalute\b|\bcura\b|diagnosi|\bdolore\b|medicina).*"))
             return List.of("medical");
-
-        // ── Legale ──
-        if (matches(q, "\blegge\b","\bcontratto\b","\bdiritto\b","\bgdpr\b",
-                       "\bnormativa\b","\bavvocato\b","\btribunale\b","\breato\b",
-                       "\bcausa\b","\bcodice civile\b","\bconsumer rights\b"))
+        // Legale
+        if (q.matches(".*(\blegge\b|\bcontratto\b|\bdiritto\b|\bgdpr\b|\bnormativa\b|avvocato|tribunale|\breato\b).*"))
             return List.of("legal");
-
-        // ── Cucina ──
-        if (matches(q, "\bricetta\b","\bricette\b","come.*cucinare","ingredienti per",
-                       "\bpasta\b.*cucinare","\bpizza\b.*fare","prepara.*piatto",
-                       "\bchef\b","cosa.*cucino","cosa.*mangio"))
+        // Cucina
+        if (q.matches(".*(\bricetta\b|\bricette\b|come.*cucinare|ingredienti per|cosa.*cucino|cosa.*mangio).*"))
             return List.of("cooking");
-
-        // ── Viaggi ──
-        if (matches(q, "\bviaggio\b","\bvacanza\b","\bhotel\b","\bvolo\b",
-                       "\bdestinazione\b","dove.*andare","cosa.*visitare",
-                       "\bturismo\b","migliore.*meta","itinerario"))
+        // Viaggi
+        if (q.matches(".*(\bviaggio\b|\bvacanza\b|\bhotel\b|\bvolo\b|dove.*andare|cosa.*visitare|\bturismo\b).*"))
             return List.of("travel");
-
-        // ── Fitness ──
-        if (matches(q, "\ballenamento\b","\besercizio\b","\bpalestra\b",
-                       "\bdieta\b","\bfitness\b","\bsport\b","perdere.*peso",
-                       "\bmuscoli\b","\bcalorie\b","piano.*allenamento"))
+        // Fitness
+        if (q.matches(".*(allenamento|esercizio|\bpalestra\b|\bdieta\b|\bfitness\b|perdere.*peso|\bmuscoli\b|calorie).*"))
             return List.of("fitness");
-
-        // ── Matematica ──
-        if (matches(q, "\bcalcola\b","\bmatematica\b","\bequazione\b",
-                       "\bderivata\b","\bintegrale\b","\bmatrice\b",
-                       "\bstatistica\b","\bprobabilita\b","risolvi.*problema"))
+        // Matematica
+        if (q.matches(".*(calcola|matematica|equazione|derivata|integrale|\bmatrice\b|statistica|probabilita).*"))
             return List.of("math");
-
-        // ── Psicologia ──
-        if (matches(q, "\bpsicolog","\bansia\b","\bdepression","\btrauma\b",
-                       "\bemozioni\b","\brelazione\b","sto male","mi sento",
-                       "\bautostima\b","\bmotivazione\b"))
-            return List.of("psychology");
-
-        // ── Traduzione ──
-        if (matches(q, "traduci","in inglese","in spagnolo","in francese","in tedesco",
-                       "in cinese","in giapponese","traduzione di","come si dice"))
+        // Traduzione
+        if (q.matches(".*(traduci|in inglese|in spagnolo|in francese|in tedesco|traduzione di|come si dice).*"))
             return List.of("translator");
-
-        // ── Scrittore creativo ──
-        if (matches(q, "scrivi.*storia","crea.*racconto","scrivi.*poesia","crea.*poesia",
-                       "\bromanzo\b","\bfavola\b","\bsceneggiatura\b",
-                       "storia creativa","personaggio per","inventa.*storia"))
+        // Scrittura creativa
+        if (q.matches(".*(scrivi.*storia|crea.*racconto|scrivi.*poesia|\bromanzo\b|\bfavola\b|storia creativa).*"))
             return List.of("creative");
-
-        // ── Startup / Business ──
-        if (matches(q, "\bstartup\b","\bbusiness plan\b","\bpitch\b",
-                       "\bventure\b","\binvestitori\b","lanciare.*prodotto",
-                       "\bmarketing\b","\bstrategia.*business\b"))
+        // Startup
+        if (q.matches(".*(\bstartup\b|business plan|\bpitch\b|\bmarketing\b|strategia.*business).*"))
             return List.of("startup");
-
-        // ── Quantum / Fisica avanzata ──
-        if (matches(q, "\bquantum\b","\bquantistico\b","\bqubit\b","\bfisica quantistica\b",
-                       "\bsovrapposizione\b","\bentanglement\b"))
+        // Quantum
+        if (q.matches(".*(\bquantum\b|quantistico|\bqubit\b|entanglement).*"))
             return List.of("quantum");
-
-        // ── Filosofia ──
-        if (matches(q, "\bfilosofia\b","\bfilosofo\b","\betica\b","\bmorale\b",
-                       "\besistenzialismo\b","\bplatone\b","\baristotele\b",
-                       "\bnietzsche\b","senso della vita","libero arbitrio"))
-            return List.of("philosophy");
-
-        // ── Storia ──
-        if (matches(q, "\bstoria\b.*guerra","\bseconda guerra\b","\bprima guerra\b",
-                       "\bimpero romano\b","\brinascimento\b","\brivoluzione\b",
-                       "\bstorico\b","\bcivilta\b","\bsecolo\b.*storia"))
-            return List.of("history");
-
-        // ── Sicurezza / Cyber ──
-        if (matches(q, "\bsicurezza\b.*sistema","\bvulnerabilit","\bhacking\b",
-                       "\bpentest\b","\bfirewall\b","\bmalware\b","\bcyber\b",
-                       "\bsql injection\b","\bxss\b","analisi.*sicurezza"))
+        // Sicurezza
+        if (q.matches(".*(sicurezza.*sistema|vulnerabilit|\bhacking\b|pentest|\bfirewall\b|\bmalware\b|\bcyber\b).*"))
             return List.of("security");
-
-        // ── AI / ML ──
-        if (matches(q, "\bllm\b","\bgpt\b","\bmachine learning\b","\bneural network\b",
-                       "\bdeep learning\b","\bfine.tun","\brag\b","\bembedding\b",
-                       "come funziona.*ai","intelligenza artificiale.*funziona"))
-            return List.of("ai");
-
-        return List.of("reasoner");
-    }
-
-    /** Helper: controlla se la query matcha almeno uno dei pattern regex */
-    private boolean matches(String query, String... patterns) {
-        for (String p : patterns) {
-            try {
-                if (query.matches(".*" + p + ".*")) return true;
-            } catch (Exception e) {
-                String plain = p.replaceAll("[^a-zA-Z0-9\\s\\u00C0-\\u024F]", "");
-                if (query.contains(plain)) return true;
-            }
+        // Psicologia
+        if (q.matches(".*(psicolog|\bansia\b|depress|\btrauma\b|emozioni|sto male|mi sento).*"))
+            return List.of("psychology");
+        // SPACES
+        if (q.matches(".*(\bspaces\b|briefing|modalita.*voce).*"))
+            return List.of("spaces");
+        // Fallback neural route
+        try {
+            List<String> nr = neuralRoute(query);
+            if (!nr.isEmpty() && !nr.get(0).equals("reasoner")) return nr;
+        } catch (Exception e) {
+            log.debug("NeuralRoute fallback error: {}", e.getMessage());
         }
-        return false;
+        return List.of("reasoner");
     }
     // ════════════════════════════════════════════════════════════════════════
     // PUPPETEER BROWSER AGENT — controllo browser completo
