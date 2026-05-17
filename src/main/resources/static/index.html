@@ -54,10 +54,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:"Inter"
 .chips{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;max-width:480px;margin-top:4px}
 .chip{padding:8px 14px;border-radius:24px;background:var(--surface);border:1px solid var(--border);font-size:.77rem;color:var(--muted);cursor:pointer;transition:all .18s}
 .chip:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim);transform:translateY(-2px)}
-#liveAgentHint.active{border-color:rgba(0,200,255,0.45);background:rgba(0,200,255,0.07)}
-#liveAgentHint.active #liveAgentText{color:#c8e8ff}
-@keyframes agentPulse{0%,100%{opacity:.7}50%{opacity:1}}
-#liveAgentHint.active{animation:agentPulse 2s ease-in-out infinite}
 .row{display:flex;gap:10px;padding:7px 24px;animation:msgIn .2s ease}
 @media(max-width:640px){.row{padding:7px 14px}}
 @keyframes msgIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
@@ -172,8 +168,6 @@ textarea::placeholder{color:var(--muted)}
       <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
         <span style="font-size:.6rem;color:#b060ff;opacity:.8;cursor:pointer" onclick="showNeuralPanel()">&#129504; neural</span>
         <span style="font-size:.6rem;color:#b060ff;opacity:.8">&#9889; quantum</span>
-        <span id="agentBadge" style="font-size:.6rem;color:var(--accent);font-family:monospace;
-          opacity:0;transition:opacity .4s;margin-left:2px;white-space:nowrap"></span>
         <span style="font-size:.6rem;opacity:.7" id="emotionIndicator" title="Emozione rilevata">😐</span>
         <div class="dot"></div>
       </div>
@@ -184,27 +178,31 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <!-- Live agent hint — appare mentre si scrive -->
-        <div id="liveAgentHint" style="
-          margin-top:18px;
-          background:rgba(13,20,33,0.85);
-          border:1px solid rgba(0,200,255,0.15);
-          border-radius:14px;
-          padding:14px 20px;
-          display:flex;
-          align-items:center;
-          gap:12px;
-          max-width:420px;
-          width:90%;
-          transition:all .3s;
-        ">
-          <span id="liveAgentIcon" style="font-size:1.4rem">🤖</span>
-          <span id="liveAgentText" style="
-            color:var(--muted);
-            font-size:.82rem;
-            font-family:'Syne',sans-serif;
-            line-height:1.4;
-          ">Scrivi qualcosa per attivare automaticamente l&apos;agente giusto...</span>
+        <div class="chips">
+          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
+          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
+          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
+          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
+          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
+          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
+          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
+          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
+          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
+          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
+          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
+          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
+          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
+          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
+          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
+          <div class="chip" onclick="qs('Crea un video della Terra che ruota intorno al Sole')">&#127916; Video AI</div>
+          <div class="chip" onclick="qs('Genera audio con voce femminile: Benvenuto su SPACE AI, il tuo assistente intelligente')">&#127908; Audio TTS</div>
+          <div class="chip" onclick="showMusicPanel()">&#127911; Crea Canzone</div>
+          <div class="chip" onclick="showGoalPanel()">&#127919; Goal Delegation</div>
+          <div class="chip" onclick="showOrchestratePanel()">&#129415; Sub-Agents</div>
+          <div class="chip" onclick="checkSystemStatus()">&#128994; Status</div>
+          <div class="chip" onclick="loadBrainStatus()">&#129504; Stato Brain</div>
+          <div class="chip" onclick="qs('Analizza vulnerabilita di sicurezza di un sistema web')">&#128737; Security Scan</div>
+          <div class="chip" onclick="qs('Ragiona autonomamente: qual e il futuro dell AI nel 2030?')">&#129504; Neural Reasoning</div>
         </div>
       </div>
     </div>
@@ -232,7 +230,7 @@ textarea::placeholder{color:var(--muted)}
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; &#127756; SPACES per AI vocale</div>
+      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span id="heySpacesHint" style="color:var(--accent);cursor:pointer" onclick="startSpaces()">&#127756; <strong>Hey SPACES</strong></span> per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -498,7 +496,19 @@ function setMode(m){
     search:"&#128269; Ricerca",image:"&#127912; Immagine",spaces:"&#127756; SPACES",
     security:"&#128737; AEGIS",neural:"&#129504; Neural",
     temporal:"&#8987; Temporal",dream:"&#129704; Dream",
-    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario"
+    socratic:"&#129302; Socratic",counterfactual:"&#10067; Scenario",
+    financial_analyst:"&#128200; Finanza",coder:"&#128187; Codice",
+    image_generator:"&#127912; Immagine",music_generator:"&#127911; Musica",
+    news_analyst:"&#128240; Notizie",web_search:"&#127760; Web",
+    doctor:"&#129514; Medico",legal_advisor:"&#9878; Legale",
+    chef:"&#128104;&#8205;&#127859; Chef",psychologist:"&#129504; Psicologo",
+    scientist:"&#128300; Scienza",philosopher:"&#128173; Filosofo",
+    historian:"&#128218; Storia",mathematician:"&#128290; Matematica",
+    creative_writer:"&#9997; Scrittore",translator:"&#127757; Traduttore",
+    fitness_coach:"&#128170; Fitness",travel_advisor:"&#9992; Viaggi",
+    dream_synthesizer:"&#127769; Dream",temporal_reasoner:"&#8987; Temporal",
+    quantum_reasoner:"&#9889; Quantum",visual_creative:"&#127912; Creativo",
+    security_analyst:"&#128737; Security",reasoner:"&#129302; Ragionatore"
   };
   document.getElementById("modeLbl").innerHTML=L[m]||"&#129302; Auto";
   var ph={
@@ -586,132 +596,86 @@ renderChatHistory();
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 
-// ── Live agent detection mentre si digita ──────────────────────────
+// ══════════════════════════════════════════════════════════
+// HEY SPACES — Wakeword listener in background
+// Ascolta in background, si attiva con "Hey SPACES"
+// ══════════════════════════════════════════════════════════
 (function(){
-  // Mappa agente → icona + label
-  var AGENT_MAP = {
-    financial_analyst: {icon:"📈", label:"Analista Finanziario"},
-    coder:             {icon:"💻", label:"Programmatore"},
-    image_generator:   {icon:"🎨", label:"Generatore Immagini"},
-    music_generator:   {icon:"🎵", label:"Compositore Musicale"},
-    news_analyst:      {icon:"📰", label:"Analista Notizie"},
-    web_search:        {icon:"🌐", label:"Ricerca Web Live"},
-    doctor:            {icon:"🩺", label:"Consulente Medico"},
-    legal_advisor:     {icon:"⚖️", label:"Consulente Legale"},
-    chef:              {icon:"👨‍🍳", label:"Chef & Ricette"},
-    psychologist:      {icon:"🧠", label:"Psicologo"},
-    scientist:         {icon:"🔬", label:"Scienziato"},
-    philosopher:       {icon:"💭", label:"Filosofo"},
-    historian:         {icon:"📚", label:"Storico"},
-    mathematician:     {icon:"🔢", label:"Matematico"},
-    creative_writer:   {icon:"✍️", label:"Scrittore Creativo"},
-    translator:        {icon:"🌍", label:"Traduttore"},
-    fitness_coach:     {icon:"💪", label:"Coach Fitness"},
-    travel_advisor:    {icon:"✈️", label:"Esperto Viaggi"},
-    dream_synthesizer: {icon:"🌙", label:"Dream Synthesis"},
-    temporal_reasoner: {icon:"⏳", label:"Temporal Reasoning"},
-    quantum_reasoner:  {icon:"⚡", label:"Quantum AI"},
-    socratic:          {icon:"🤔", label:"Metodo Socratico"},
-    visual_creative:   {icon:"🎭", label:"Creativo Visivo"},
-    security_analyst:  {icon:"🛡️", label:"Security Analyst"},
-    reasoner:          {icon:"🤖", label:"Ragionatore Generale"}
-  };
+  if(!window.SpeechRecognition&&!window.webkitSpeechRecognition) return;
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  var wakeRec=null;
+  var wakeActive=false;
+  var WAKEWORDS=["hey spaces","hey space","ehi spaces","ehi space","hey spices"];
 
-  // Regole di classificazione lato client (specchio del backend)
-  function detectAgent(text) {
-    var q = text.toLowerCase();
-    if(!q.trim()) return null;
+  function startWakeListener(){
+    if(spacesOn||wakeActive) return; // non ascoltare se SPACES è già attivo
+    try{
+      wakeRec=new SR();
+      wakeRec.lang="it-IT";
+      wakeRec.continuous=false;
+      wakeRec.interimResults=false;
+      wakeRec.maxAlternatives=3;
+      wakeActive=true;
 
-    if(q.match(/crea.*canzone|componi|scrivi.*canzone|canzone|brano|musica|melodia|song/))
-      return "music_generator";
-    if(q.match(/genera.*immagin|disegna|crea.*immagin|dipingi|illustra|foto di/))
-      return "image_generator";
-    if(q.match(/codice|python|javascript|java|funzione|script|programma|debug|sql|api|html|css|react|git/))
-      return "coder";
-    if(q.match(/azione|borsa|stock|trading|macd|analisi.*azion|investimento|bitcoin|crypto|forex|finanza|mercato/))
-      return "financial_analyst";
-    if(q.match(/notizie|news|oggi|ultime ore|aggiornamento|cronaca|breaking/))
-      return "news_analyst";
-    if(q.match(/cerca|google|ricerca|trova.*web|link|sito/))
-      return "web_search";
-    if(q.match(/sintomo|malattia|cura|medico|salute|farmaco|dolore|diagnosi/))
-      return "doctor";
-    if(q.match(/legge|contratto|avvocato|diritto|tribunale|causa|reato/))
-      return "legal_advisor";
-    if(q.match(/ricetta|cucinare|ingredienti|piatto|chef|cibo|mangiare/))
-      return "chef";
-    if(q.match(/psicolog|ansia|depressione|emozione|sentimento|relazione|trauma/))
-      return "psychologist";
-    if(q.match(/fisica|chimica|biologia|scienza|esperimento|teoria|quantistic/))
-      return "scientist";
-    if(q.match(/filosof|esistenz|etica|morale|platone|aristotele|nietzsche/))
-      return "philosopher";
-    if(q.match(/storia|storico|guerra|impero|rivoluzione|secolo|civiltà/))
-      return "historian";
-    if(q.match(/matemat|calcolo|equazione|algebra|geometria|statistica|probabilità/))
-      return "mathematician";
-    if(q.match(/racconto|storia.*creativa|romanzo|poesia|scrivi.*storia|personaggio/))
-      return "creative_writer";
-    if(q.match(/traduci|traduzione|inglese|spagnolo|francese|tedesco|lingua/))
-      return "translator";
-    if(q.match(/allenamento|esercizio|palestra|dieta|fitness|sport|muscoli/))
-      return "fitness_coach";
-    if(q.match(/viaggio|vacanza|hotel|volo|città.*visit|tour|destinazione/))
-      return "travel_advisor";
-    if(q.match(/sogno|dream|visione.*futura|scenario.*futuro|immagina.*mondo/))
-      return "dream_synthesizer";
-    if(q.match(/futuro.*di|evoluzione.*di|tra.*anni|previsione|timeline/))
-      return "temporal_reasoner";
-    if(q.match(/quantum|quantistico|qubit|sovrapposizione|entanglement/))
-      return "quantum_reasoner";
-    if(q.match(/perché|socratico|dialogo|definizione.*di|cosa.*significa|dimostra/))
-      return "socratic";
-    if(q.match(/sicurezza|vulnerabilit|hacking|pentest|firewall|malware|cyber/))
-      return "security_analyst";
-    if(q.match(/svg|animazione|visivo|arte|colore|design|grafica/))
-      return "visual_creative";
-    return "reasoner";
+      wakeRec.onresult=function(e){
+        wakeActive=false;
+        var said="";
+        for(var i=0;i<e.results[0].length;i++){
+          said+=e.results[0][i].transcript.toLowerCase()+" ";
+        }
+        var triggered=WAKEWORDS.some(function(w){return said.includes(w);});
+        if(triggered){
+          // Feedback visivo
+          var hint=document.getElementById("heySpacesHint");
+          if(hint){
+            hint.style.color="#fff";hint.style.background="var(--accent)";
+            hint.style.padding="2px 8px";hint.style.borderRadius="6px";
+            setTimeout(function(){
+              hint.style.color="var(--accent)";hint.style.background="";
+              hint.style.padding="";
+            },1500);
+          }
+          // Avvia SPACES
+          setTimeout(function(){startSpaces();},300);
+        } else {
+          // Riascolta
+          setTimeout(startWakeListener,1000);
+        }
+      };
+
+      wakeRec.onerror=function(e){
+        wakeActive=false;
+        if(e.error!=="aborted"&&e.error!=="not-allowed"){
+          setTimeout(startWakeListener,3000);
+        }
+      };
+
+      wakeRec.onend=function(){
+        wakeActive=false;
+        if(!spacesOn) setTimeout(startWakeListener,1500);
+      };
+
+      wakeRec.start();
+    }catch(err){
+      wakeActive=false;
+    }
   }
 
-  var hint    = document.getElementById("liveAgentHint");
-  var hIcon   = document.getElementById("liveAgentIcon");
-  var hText   = document.getElementById("liveAgentText");
-  var debounceT = null;
-  var lastDetected = null;
+  // Avvia il wakeword listener dopo 3 secondi dal caricamento
+  setTimeout(function(){
+    // Aggiorna hint per mostrare che è in ascolto
+    var hint=document.getElementById("heySpacesHint");
+    if(hint) hint.title="Wakeword attivo — di\' \'Hey SPACES\' per attivare la voce";
+    startWakeListener();
+  },3000);
 
-  inpEl.addEventListener("input", function(){
-    clearTimeout(debounceT);
-    debounceT = setTimeout(function(){
-      var val = inpEl.value.trim();
-      if(!hint) return;
-
-      if(!val){
-        // Input vuoto → torna al messaggio base
-        if(hIcon)  hIcon.textContent  = "🤖";
-        if(hText)  hText.textContent  = "Scrivi qualcosa per attivare automaticamente l'agente giusto...";
-        hint.classList.remove("active");
-        lastDetected = null;
-        return;
-      }
-
-      var agent = detectAgent(val);
-      if(agent === lastDetected) return; // nessun cambiamento
-      lastDetected = agent;
-
-      var info = AGENT_MAP[agent] || AGENT_MAP["reasoner"];
-      if(hIcon) hIcon.textContent = info.icon;
-      if(hText) hText.innerHTML =
-        "<strong style='color:var(--accent)'>" + info.label + "</strong>" +
-        "<br><span style='font-size:.75rem;opacity:.6'>verrà attivato automaticamente</span>";
-      hint.classList.add("active");
-    }, 120); // debounce 120ms
-  });
-
-  // Quando si invia, nascondi il welcome
-  var origSend = window.sendMsg;
-  window.sendMsg = function(){
-    if(hint) hint.classList.remove("active");
-    if(origSend) origSend.apply(this, arguments);
+  // Quando SPACES viene chiuso, riprendi il wakeword listener
+  var origSetMode=window.setMode;
+  window.setMode=function(m){
+    if(origSetMode) origSetMode(m);
+    if(m!=="spaces"&&!wakeActive){
+      setTimeout(startWakeListener,2000);
+    }
   };
 })();
 function handleFiles(f){for(var i=0;i<f.length;i++){if(!attachedFiles.find(function(x){return x.name===f[i].name;}))attachedFiles.push(f[i]);}renderFiles();}
@@ -954,6 +918,39 @@ async function loadNeuralData(){
       kgn+" nodi connessi nel grafo della conoscenza":"In costruzione...";
   }catch(e){console.log("Neural panel error:",e);}
 }
+// ── Agente persistito: rimane attivo finché topic è attinente ──────
+var persistedAgent = null;
+
+function agentTopicMatch(agent, text){
+  var q = (text||"").toLowerCase();
+  var map = {
+    financial_analyst: /borsa|azione|trading|investimento|bitcoin|crypto|finanza|mercato|macd|stock|dividendo/,
+    coder:             /codice|python|javascript|java|funzione|script|programma|debug|sql|api|html|css|react|git|bug/,
+    image_generator:   /immagin|disegna|genera.*foto|illustra|dipingi|foto di/,
+    music_generator:   /canzone|musica|melodia|brano|song|ritornello|compositore|accordo/,
+    news_analyst:      /notizie|news|cronaca|ultime ore|aggiornamento|oggi.*accad/,
+    web_search:        /cerca|google|ricerca web|trova online|link/,
+    doctor:            /sintomo|malattia|cura|medico|salute|farmaco|dolore|diagnosi/,
+    legal_advisor:     /legge|contratto|avvocato|diritto|tribunale|causa|reato/,
+    chef:              /ricetta|cucinare|ingredienti|piatto|cibo|mangiare|cucina/,
+    psychologist:      /psicolog|ansia|depressione|emozione|sentimento|relazione/,
+    scientist:         /fisica|chimica|biologia|scienza|esperimento|teoria/,
+    philosopher:       /filosof|esistenz|etica|morale/,
+    historian:         /storia|storico|guerra|impero|rivoluzione|secolo/,
+    mathematician:     /matemat|calcolo|equazione|algebra|geometria|statistica/,
+    creative_writer:   /racconto|storia.*creativa|romanzo|poesia|scrivi.*storia/,
+    translator:        /traduci|traduzione|inglese|spagnolo|francese|tedesco/,
+    fitness_coach:     /allenamento|esercizio|palestra|dieta|fitness|sport|muscoli/,
+    travel_advisor:    /viaggio|vacanza|hotel|volo|città.*visit|destinazione/,
+    dream_synthesizer: /sogno|dream|visione.*futura|scenario.*futuro/,
+    temporal_reasoner: /futuro.*di|evoluzione.*di|tra.*anni|previsione|timeline/,
+    quantum_reasoner:  /quantum|quantistico|qubit/,
+    security_analyst:  /sicurezza|vulnerabilit|hacking|pentest|firewall|malware/
+  };
+  var re = map[agent];
+  return re ? re.test(q) : false;
+}
+
 async function sendMsg(){
   // Leggi testo PRIMA di tutto
   var text=inpEl.value.trim();
@@ -1001,6 +998,30 @@ async function sendMsg(){
   else if(curMode==="dream")msg="[DREAM SYNTHESIS - genera soluzioni creative per:] "+text;
   else if(curMode==="socratic")msg="[SOCRATIC MODE - insegna con metodo socratico:] "+text;
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
+
+  // ── Persistenza agente: se topic è ancora attinente, forza lo stesso agente ──
+  if(persistedAgent && curMode==="auto"){
+    if(agentTopicMatch(persistedAgent, text)){
+      // Topic ancora attinente → hint visivo che l'agente persiste
+      var lh=document.getElementById("liveAgentHint");
+      var lt=document.getElementById("liveAgentText");
+      var li=document.getElementById("liveAgentIcon");
+      if(lh&&lt){
+        lh.classList.add("active");
+        // Non sovrascrivere il msg — il backend rileverà l'agente dal contesto
+      }
+    } else {
+      // Topic cambiato → reset agente
+      persistedAgent=null;
+      setMode("auto");
+      var lh2=document.getElementById("liveAgentHint");
+      var lt2=document.getElementById("liveAgentText");
+      var li2=document.getElementById("liveAgentIcon");
+      if(lh2){lh2.classList.remove("active");}
+      if(li2) li2.textContent="🤖";
+      if(lt2) lt2.innerHTML="Rilevato cambio argomento — nuovo agente in arrivo...";
+    }
+  }
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
   addRow(text,"user");
@@ -1018,7 +1039,15 @@ async function sendMsg(){
       if(data.error){addRow("Errore: "+data.error,"err");}
       else{
         if(data.agents){
-          lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+          var rawAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+          // Aggiorna solo se agente è cambiato — persistenza automatica
+          if(rawAgent!==lastAgent){
+            lastAgent=rawAgent;
+            persistedAgent=rawAgent; // persisti l'agente per le prossime domande
+            // Aggiorna badge in basso (modeLbl)
+            setMode(rawAgent);
+          }
+          // Badge header lampeggia brevemente
           var agBadge=document.getElementById("agentBadge");
           if(agBadge){
             var ICONS={"financial_analyst":"📈","coder":"💻","image_generator":"🎨",
@@ -1032,7 +1061,7 @@ async function sendMsg(){
             var ic=ICONS[lastAgent]||"🤖";
             agBadge.textContent=ic+" "+lastAgent.replace(/_/g," ");
             agBadge.style.opacity="1";
-            setTimeout(function(){agBadge.style.opacity="0";},4000);
+            setTimeout(function(){agBadge.style.opacity="0";},5000);
           }
         }
         lastQuery=text;
