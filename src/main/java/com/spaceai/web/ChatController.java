@@ -498,7 +498,7 @@ public class ChatController {
         for (String p : patterns) {
             int idx = s.indexOf(p);
             if (idx > 2 && idx < s.length() - p.length() - 2) {
-                String subj = s.substring(0, idx).trim().replaceAll("\s+", "_");
+                String subj = s.substring(0, idx).trim().replaceAll("\\s+", "_");
                 String obj  = s.substring(idx + p.length()).trim();
                 if (subj.length() >= 2 && obj.length() >= 3)
                     return new String[]{subj, obj.substring(0, Math.min(60, obj.length()))};
@@ -1073,8 +1073,8 @@ public class ChatController {
         if (fact == null || fact.isBlank()) return 0;
         String q = query.toLowerCase();
         String f = fact.toLowerCase();
-        String[] qWords = q.split("\s+");
-        String[] fWords = f.split("\s+");
+        String[] qWords = q.split("\\s+");
+        String[] fWords = f.split("\\s+");
 
         // 1. Keyword overlap (unigram)
         int overlap = 0;
@@ -1135,7 +1135,7 @@ public class ChatController {
 
         // 4. SharedKnowledge rilevante (top concetti della query)
         String q = query.toLowerCase();
-        for (String word : q.split("\s+")) {
+        for (String word : q.split("\\s+")) {
             if (word.length() > 4) {
                 Set<String> shared = sharedKnowledge.get(word);
                 if (shared != null)
@@ -1915,7 +1915,7 @@ public class ChatController {
                                                   @RequestParam String path) {
         try {
             JsonNode file = githubApi("/repos/" + owner + "/" + repo + "/contents/" + path);
-            String encoded = file.path("content").asText().replaceAll("\s", "");
+            String encoded = file.path("content").asText().replaceAll("\\s", "");
             String content = new String(Base64.getDecoder().decode(encoded), StandardCharsets.UTF_8);
             // Auto-indicizza nel RAG per poter fare domande sul file
             String docId = "github/" + owner + "/" + repo + "/" + path;
@@ -2334,7 +2334,7 @@ public class ChatController {
                     String[] parts = params.split("/", 3);
                     if (parts.length >= 3) {
                         JsonNode f = githubApi("/repos/" + parts[0] + "/" + parts[1] + "/contents/" + parts[2]);
-                        String enc = f.path("content").asText().replaceAll("\s", "");
+                        String enc = f.path("content").asText().replaceAll("\\s", "");
                         return new String(Base64.getDecoder().decode(enc), StandardCharsets.UTF_8)
                             .substring(0, Math.min(3000, Integer.MAX_VALUE));
                     }
@@ -3155,7 +3155,7 @@ public class ChatController {
                 .replaceAll("&amp;",                         "&")
                 .replaceAll("&lt;",                          "<")
                 .replaceAll("&gt;",                          ">")
-                .replaceAll("\s{3,}",                       " ")
+                .replaceAll("\\s{3,}",                       " ")
                 .trim();
 
             // Limita a 6000 caratteri per il contesto LLM
@@ -3237,7 +3237,7 @@ public class ChatController {
                 method.equals("GET") ? HttpMethod.GET : HttpMethod.POST,
                 new HttpEntity<>(fBody, fh), String.class);
             String respText = resp.getBody() != null ?
-                resp.getBody().replaceAll("<[^>]+>"," ").replaceAll("\s{3,}"," ").trim() : "";
+                resp.getBody().replaceAll("<[^>]+>"," ").replaceAll("\\s{3,}"," ").trim() : "";
             return ResponseEntity.ok(Map.of(
                 "status", resp.getStatusCode().value(),
                 "url", url, "method", method,
@@ -5865,7 +5865,7 @@ public class ChatController {
         resp.append("\uD83E\uDD16 **SPACE AI - Risposta Autonoma** *(fonte: ").append(source).append(")*\n\n");
         // Trova le frasi più rilevanti per la query
         String q = query.toLowerCase();
-        String[] qWords = q.split("\s+");
+        String[] qWords = q.split("\\s+");
         List<String> relevant = new ArrayList<>();
         for (String sent : sentences) {
             if (sent.trim().length() < 15) continue;
@@ -6405,7 +6405,7 @@ public class ChatController {
                     url, HttpMethod.GET, new HttpEntity<>(h), String.class);
                 // Rimuove tag HTML
                 text = resp.getBody() == null ? "" :
-                    resp.getBody().replaceAll("<[^>]+>", " ").replaceAll("\s{3,}", " ").trim();
+                    resp.getBody().replaceAll("<[^>]+>", " ").replaceAll("\\s{3,}", " ").trim();
                 if (docId.startsWith("doc_")) docId = url.replaceAll("https?://", "").substring(0, Math.min(60, url.length()));
             } catch (Exception e) {
                 return ResponseEntity.status(502).body(Map.of("error", "Impossibile scaricare URL: " + e.getMessage()));
