@@ -5427,7 +5427,8 @@ public class ChatController {
             try {
                 if (query.matches(".*" + p + ".*")) return true;
             } catch (Exception e) {
-                if (query.contains(p.replaceAll("\\b|\\B|\*|\?|\+|\.", ""))) return true;
+                String plain = p.replaceAll("[^a-zA-Z0-9\\s\\u00C0-\\u024F]", "");
+                if (query.contains(plain)) return true;
             }
         }
         return false;
