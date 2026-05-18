@@ -195,6 +195,7 @@ textarea::placeholder{color:var(--muted)}
           <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
           <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
           <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
+          <div class="chip" onclick="showUltraReviewPanel()" style="border-color:rgba(180,100,255,0.4);color:#c084fc">&#129504; Ultra Review</div>
         </div>
 
         <!-- Box agente live — appare SOLO mentre si digita, nascosto di default -->
@@ -1772,5 +1773,177 @@ async function sendMsg(){
     </div>
   </div>
 </div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!-- ULTRA REVIEW PANEL                                     -->
+<!-- ══════════════════════════════════════════════════════ -->
+<div id="ultraReviewPanel" style="display:none;position:fixed;inset:0;z-index:9000;
+  background:rgba(0,0,0,0.82);backdrop-filter:blur(6px);overflow-y:auto">
+  <div style="max-width:660px;margin:40px auto;background:#0d1421;border:1px solid rgba(180,100,255,0.3);
+    border-radius:18px;padding:28px 32px;position:relative">
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px">
+      <span style="font-size:2rem">🧠</span>
+      <div>
+        <div style="font-size:1.2rem;font-weight:800;color:#c084fc;font-family:'Syne',sans-serif">Ultra Review</div>
+        <div style="font-size:.75rem;color:#4a6080;font-family:monospace">Analisi critica 5 fasi · ispirata a Constitutional AI</div>
+      </div>
+      <button onclick="closeUltraReviewPanel()" style="margin-left:auto;background:none;border:none;
+        color:#4a6080;font-size:1.4rem;cursor:pointer;padding:4px 8px">✕</button>
+    </div>
+
+    <!-- Come funziona -->
+    <div style="background:rgba(180,100,255,0.07);border-left:3px solid #c084fc;
+      border-radius:0 8px 8px 0;padding:12px 16px;margin-bottom:18px;font-size:.8rem;color:#9060d0;line-height:1.7">
+      <strong style="color:#c084fc">Come funziona:</strong><br>
+      1️⃣ <strong>Comprensione profonda</strong> — cosa si chiede davvero<br>
+      2️⃣ <strong>Multi-prospettiva</strong> — almeno 3 angolazioni diverse<br>
+      3️⃣ <strong>Self-critique loop</strong> — prima risposta → critica → risposta migliorata<br>
+      4️⃣ <strong>Valutazione Constitutional</strong> — score su 5 assi (accuratezza, neutralità...)<br>
+      5️⃣ <strong>Sintesi definitiva</strong> — certo vs incerto, cosa fare in pratica
+    </div>
+
+    <!-- Input topic -->
+    <div style="margin-bottom:14px">
+      <label style="font-size:.8rem;color:#4a6080;display:block;margin-bottom:6px;font-family:monospace">
+        ARGOMENTO DA ANALIZZARE *
+      </label>
+      <textarea id="urTopic" placeholder="Es: 'Conviene investire in Bitcoin nel 2026?' oppure 'I benefici e rischi dell'IA generativa' oppure qualsiasi tema complesso..."
+        style="width:100%;background:#060a10;border:1px solid #1a2744;border-radius:10px;
+        padding:12px;color:#c8d8f0;font-size:.9rem;resize:vertical;min-height:80px;
+        font-family:inherit;outline:none" rows="3"></textarea>
+    </div>
+
+    <!-- Contesto opzionale -->
+    <div style="margin-bottom:14px">
+      <label style="font-size:.8rem;color:#4a6080;display:block;margin-bottom:6px;font-family:monospace">
+        CONTESTO AGGIUNTIVO (opzionale)
+      </label>
+      <textarea id="urContext" placeholder="Aggiungi informazioni di sfondo, vincoli specifici, punto di vista da considerare..."
+        style="width:100%;background:#060a10;border:1px solid #1a2744;border-radius:10px;
+        padding:12px;color:#c8d8f0;font-size:.85rem;resize:vertical;
+        font-family:inherit;outline:none" rows="2"></textarea>
+    </div>
+
+    <!-- Profondità -->
+    <div style="margin-bottom:20px">
+      <label style="font-size:.8rem;color:#4a6080;display:block;margin-bottom:8px;font-family:monospace">
+        PROFONDITÀ ANALISI
+      </label>
+      <div style="display:flex;gap:8px">
+        <button onclick="setURDepth('quick')" id="urBtn_quick"
+          style="flex:1;padding:8px;border-radius:8px;border:1px solid #1a2744;
+          background:#0a1220;color:#4a6080;cursor:pointer;font-size:.8rem;font-family:monospace">
+          ⚡ Rapida<br><span style="font-size:.7rem">~30 sec</span>
+        </button>
+        <button onclick="setURDepth('standard')" id="urBtn_standard"
+          style="flex:1;padding:8px;border-radius:8px;border:1px solid rgba(180,100,255,0.4);
+          background:rgba(180,100,255,0.1);color:#c084fc;cursor:pointer;font-size:.8rem;font-family:monospace">
+          🔍 Standard<br><span style="font-size:.7rem">~60 sec</span>
+        </button>
+        <button onclick="setURDepth('deep')" id="urBtn_deep"
+          style="flex:1;padding:8px;border-radius:8px;border:1px solid #1a2744;
+          background:#0a1220;color:#4a6080;cursor:pointer;font-size:.8rem;font-family:monospace">
+          🧠 Profonda<br><span style="font-size:.7rem">~90 sec</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Run button -->
+    <button id="urRunBtn" onclick="runUltraReview()"
+      style="width:100%;padding:14px;border-radius:12px;border:none;
+      background:linear-gradient(135deg,#7c3aed,#c084fc);color:#fff;
+      font-weight:700;font-size:1rem;cursor:pointer;font-family:'Syne',sans-serif;
+      letter-spacing:.5px">
+      🧠 Avvia Ultra Review
+    </button>
+
+    <div id="urStatus" style="text-align:center;margin-top:10px;font-size:.8rem;
+      color:#4a6080;font-family:monospace;min-height:20px"></div>
+  </div>
+</div>
+
+<script>
+// ── Ultra Review Panel ──────────────────────────────────────
+var urDepth = 'standard';
+
+function showUltraReviewPanel(){
+  document.getElementById('ultraReviewPanel').style.display='block';
+  document.body.style.overflow='hidden';
+}
+function closeUltraReviewPanel(){
+  document.getElementById('ultraReviewPanel').style.display='none';
+  document.body.style.overflow='';
+}
+function setURDepth(d){
+  urDepth=d;
+  ['quick','standard','deep'].forEach(function(k){
+    var btn=document.getElementById('urBtn_'+k);
+    if(k===d){
+      btn.style.borderColor='rgba(180,100,255,0.5)';
+      btn.style.background='rgba(180,100,255,0.15)';
+      btn.style.color='#c084fc';
+    } else {
+      btn.style.borderColor='#1a2744';
+      btn.style.background='#0a1220';
+      btn.style.color='#4a6080';
+    }
+  });
+}
+async function runUltraReview(){
+  var topic=(document.getElementById('urTopic').value||'').trim();
+  var ctx=(document.getElementById('urContext').value||'').trim();
+  if(!topic){document.getElementById('urStatus').textContent='⚠️ Inserisci un argomento';return;}
+
+  var btn=document.getElementById('urRunBtn');
+  var status=document.getElementById('urStatus');
+  btn.disabled=true;
+  btn.textContent='⏳ Analisi in corso...';
+  status.textContent='Fase 1: comprensione profonda...';
+
+  // Animazione fasi
+  var phases=['Fase 1: comprensione profonda...','Fase 2: analisi multi-prospettiva...','Fase 3: self-critique loop...','Fase 4: valutazione constitutional...','Fase 5: sintesi definitiva...'];
+  var pi=0;
+  var phaseInt=setInterval(function(){
+    pi=(pi+1)%phases.length;
+    status.textContent=phases[pi];
+  },4000);
+
+  try {
+    var r=await fetch('/api/ultra-review',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        topic:topic, context:ctx, depth:urDepth,
+        sessionId:SID, baseUrl:API_BASE, apiKey:API_KEY, model:MODEL
+      })
+    });
+    var d=await r.json();
+    clearInterval(phaseInt);
+
+    if(d.error){
+      status.textContent='❌ '+d.error;
+      btn.disabled=false; btn.textContent='🧠 Avvia Ultra Review'; return;
+    }
+
+    closeUltraReviewPanel();
+
+    // Mostra nel chat
+    var header='🧠 **Ultra Review** — *' + topic.substring(0,60) + (topic.length>60?'...':'') + '*\n\n';
+    addRow(header + (d.analysis||'Analisi completata'),'ai');
+
+    // Badge agente
+    var ml=document.getElementById('modeLbl');
+    if(ml) ml.innerHTML='🧠 Ultra Review';
+
+  } catch(e){
+    clearInterval(phaseInt);
+    status.textContent='❌ Errore: '+e.message;
+  }
+  btn.disabled=false; btn.textContent='🧠 Avvia Ultra Review';
+  status.textContent='';
+}
+</script>
+
 </body>
 </html>
