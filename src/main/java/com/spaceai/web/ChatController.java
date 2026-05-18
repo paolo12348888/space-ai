@@ -4501,6 +4501,34 @@ public class ChatController {
             case "psychology": return "Sei PSYCHOLOGY di SPACE AI. Data:" + d + ". Psicologia cognitiva,bias,decision making. Rispondi in italiano.";
             case "research": return "Sei RESEARCH di SPACE AI. Data:" + d + ". Info accurate. Se ci sono [DATI WEB] usali. Rispondi in italiano.";
             case "reasoner": return "Sei REASONER di SPACE AI. Data:" + d + ". Analisi step-by-step,logica formale. Rispondi in italiano.";
+            case "ultra_review": return "Sei ULTRA REVIEW di SPACE AI — il modello di analisi critica piu avanzato, ispirato ai principi di Constitutional AI di Anthropic. Data:" + d + ".\n\n" +
+                "Il tuo processo di analisi OBBLIGATORIO ha 5 fasi distinte che devi seguire sempre:\n\n" +
+                "## FASE 1 — COMPRENSIONE PROFONDA\n" +
+                "Prima di rispondere, analizza esplicitamente:\n" +
+                "- Cosa viene chiesto in superficie vs cosa si vuole davvero sapere\n" +
+                "- Assunzioni implicite nella domanda\n" +
+                "- Possibili ambiguita da chiarire\n\n" +
+                "## FASE 2 — ANALISI MULTI-PROSPETTIVA\n" +
+                "Esamina il tema da almeno 3 angolazioni diverse e contrarie tra loro.\n" +
+                "Per ogni prospettiva indica: argomenti a favore, contro, limiti e contesto.\n\n" +
+                "## FASE 3 — SELF-CRITIQUE LOOP (come fa Claude)\n" +
+                "Scrivi una prima risposta. Poi criticala esplicitamente:\n" +
+                "- Dove potrebbe essere sbagliata o incompleta?\n" +
+                "- Quali bias o assunzioni nasconde?\n" +
+                "- Cosa manca o e stato trascurato?\n" +
+                "Poi riscrivi migliorata.\n\n" +
+                "## FASE 4 — VALUTAZIONE CONSTITUTIONAL\n" +
+                "Valuta la risposta finale su 5 assi (da 1 a 10):\n" +
+                "- Accuratezza: correttezza fattuale\n" +
+                "- Completezza: copertura del tema\n" +
+                "- Neutralita: assenza di bias\n" +
+                "- Utilita: valore pratico per chi chiede\n" +
+                "- Onesta: trasparenza su incertezze e limiti\n\n" +
+                "## FASE 5 — SINTESI DEFINITIVA\n" +
+                "Una risposta finale chiara, onesta e azionabile che integra tutto quanto sopra.\n" +
+                "Includi sempre: cosa e certo, cosa e incerto, cosa fare in pratica.\n\n" +
+                "STILE: Rigoso ma accessibile. Mai dogmatico. Mostra sempre il ragionamento.\n" +
+                "Rispondi in italiano. Usa markdown per la struttura.";
             case "history": return "Sei HISTORY di SPACE AI. Data:" + d + ". Storia mondiale,cause e conseguenze. Rispondi in italiano.";
             case "philosophy": return "Sei PHILOSOPHY di SPACE AI. Data:" + d + ". Etica,epistemologia,AI ethics. Rispondi in italiano.";
             case "economics": return "Sei ECONOMICS di SPACE AI. Data:" + d + ". Micro e macro,teoria dei giochi. Rispondi in italiano.";
@@ -5289,8 +5317,73 @@ public class ChatController {
         if (q.contains("shopify") || q.contains("ecommerce")) return List.of("ecommerce");
         if (q.contains("analisi") || q.contains("analizza")) return List.of("analyst");
         if (q.contains("strategia")) return List.of("strategist");
+        // Ultra Review — analisi critica approfondita
+        if (q.contains("ultra review") || q.contains("analisi critica") ||
+            q.contains("analisi approfondita") || q.contains("review completa") ||
+            q.contains("valuta criticamente") || q.contains("analisi 360") ||
+            q.contains("pro e contro") || q.contains("pro contro") ||
+            q.contains("tutti i lati") || q.contains("analisi dettagliata"))
+            return List.of("ultra_review");
         return List.of("reasoner");
     }
+    // ════════════════════════════════════════════════════════════════════════
+    // ULTRA REVIEW — Analisi critica 5 fasi ispirata a Constitutional AI
+    // Endpoint dedicato: POST /api/ultra-review
+    // ════════════════════════════════════════════════════════════════════════
+
+    @PostMapping("/ultra-review")
+    public ResponseEntity<Object> ultraReview(@RequestBody Map<String, String> body) {
+        String topic     = body.getOrDefault("topic", "").trim();
+        String context   = body.getOrDefault("context", "").trim();
+        String depth     = body.getOrDefault("depth", "deep"); // deep | standard | quick
+        String baseUrl2  = body.getOrDefault("baseUrl",  env("AI_BASE_URL", "https://api.groq.com/openai/v1"));
+        String apiKey2   = body.getOrDefault("apiKey",   env("AI_API_KEY", ""));
+        String model2    = body.getOrDefault("model",    env("AI_MODEL",   "llama-3.3-70b-versatile"));
+        String sessionId = body.getOrDefault("sessionId","global");
+
+        if (topic.isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error", "topic obbligatorio"));
+
+        int maxTokens = depth.equals("quick") ? 1000 : depth.equals("standard") ? 2000 : 3500;
+
+        try {
+            // ── FASE 1+2+3: Prima analisi con self-critique ──
+            String phase1Prompt =
+                "Analizza questo argomento con massima profondità critica: " + topic +
+                (context.isEmpty() ? "" : "\nContesto aggiuntivo: " + context) +
+                "\n\nEsegui TUTTE le 5 fasi del metodo Ultra Review:\n" +
+                "1. COMPRENSIONE PROFONDA: cosa si chiede davvero vs in superficie\n" +
+                "2. ANALISI MULTI-PROSPETTIVA: almeno 3 angolazioni diverse e contrarie\n" +
+                "3. SELF-CRITIQUE: scrivi una prima risposta, criticala, riscrivila migliorata\n" +
+                "4. VALUTAZIONE (da 1-10): Accuratezza | Completezza | Neutralità | Utilità | Onestà\n" +
+                "5. SINTESI DEFINITIVA: cosa è certo, cosa è incerto, cosa fare in pratica\n\n" +
+                "Sii rigoroso, onesto sulle incertezze, mostra sempre il ragionamento. Usa markdown.";
+
+            String analysis = callLLM(
+                agentPrompt("ultra_review"),
+                phase1Prompt,
+                new ArrayList<>(), baseUrl2, apiKey2, model2, maxTokens);
+
+            // ── Costruisci risposta strutturata ──
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("topic",     topic);
+            result.put("depth",     depth);
+            result.put("analysis",  analysis);
+            result.put("agent",     "ultra_review");
+            result.put("mode",      "ultra_review");
+            result.put("date",      today());
+
+            // Salva in LTM
+            consolidateToLTM(sessionId, "Ultra Review su: " + topic.substring(0, Math.min(80, topic.length())));
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.warn("UltraReview error: {}", e.getMessage());
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // PUPPETEER BROWSER AGENT — controllo browser completo
     // Usa Browserless API: BROWSERLESS_TOKEN env var
