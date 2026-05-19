@@ -3436,12 +3436,13 @@ public class ChatController {
                 Map<String,String> pistonBody = new HashMap<>();
                 pistonBody.put("language","python"); pistonBody.put("code",pythonCode);
                 ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
-                if (pistonResp.getBody() instanceof Map) {
-                    Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
-                    Object _o = pr.getOrDefault("output","");
-                    String output = _o != null ? _o.toString() : "";
-                    if (output.contains("MUSICXML_B64:")) {
-                        midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
+                Object pistonBody2 = pistonResp.getBody();
+                if (pistonBody2 != null) {
+                    String pistonOut = pistonBody2.toString();
+                    int musicIdx = pistonOut.indexOf("MUSICXML_B64:");
+                    if (musicIdx >= 0) {
+                        midiB64 = pistonOut.substring(musicIdx + 13).trim();
+                        if (midiB64.contains("}")) midiB64 = midiB64.substring(0, midiB64.indexOf("}")).trim();
                         log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
                     }
                 }
@@ -3493,17 +3494,12 @@ public class ChatController {
 
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
-        String q = msg.toLowerCase()
-            .replace("\u00e0","a").replace("\u00e8","e").replace("\u00ec","i")
-            .replace("\u00f2","o").replace("\u00f9","u");
-        return q.contains("canzone") || q.contains("brano") || q.contains("componi") ||
-               q.contains("melodia") || q.contains("ritornello") || q.contains("strofa") ||
-               q.contains("scrivi una canzone") || q.contains("crea una canzone") ||
-               q.contains("fammi una canzone") || q.contains("genera una canzone") ||
-               q.contains("testo canzone") || q.contains("musica per") ||
+        String q = msg.toLowerCase();
+        return q.contains("crea una canzone") || q.contains("componi") ||
+               q.contains("scrivi una canzone") || q.contains("musica per") ||
                q.contains("genera musica") || q.contains("crea musica") ||
-               q.contains("canzone su") || q.contains("song") ||
-               (q.contains("music") && q.length() > 10);
+               q.contains("melodia") || q.contains("canzone su") ||
+               q.contains("music") || q.contains("song");
     }
 
     @PostMapping("/audio/generate")
@@ -4829,8 +4825,6 @@ public class ChatController {
             long startTime = System.currentTimeMillis();
             String cacheK = "default:" + userMessage.substring(0, Math.min(80, userMessage.length()));
             // Memoria contestuale: usa neuralMemory (locale, veloce) o Supabase
-            // Agente persistito — il frontend manda l'agente attivo per mantenere il routing
-            String activeAgent = body.getOrDefault("activeAgent", "");
             List<Map<String,String>> fullHistory = neuralMemory.getOrDefault(sessionId, new ArrayList<>());
             if (fullHistory.isEmpty() && !supabaseUrl.isEmpty() && !supabaseKey.isEmpty()) {
                 fullHistory = loadHistory(sessionId, supabaseUrl, supabaseKey);
@@ -4887,7 +4881,6 @@ public class ChatController {
                     mRespMap.put("status","ok"); mRespMap.put("mode","music_gen");
                     mRespMap.put("sessionId",sessionId); mRespMap.put("musicData",mb);
                     mRespMap.put("response","\uD83C\uDFB5 Canzone generata! Usa il player ABCJS per ascoltarla.");
-                    mRespMap.put("agents", "[music_generator]");
                     return ResponseEntity.ok(mRespMap);
                 } catch (Exception me) { log.warn("MusicGen inline: {}", me.getMessage()); }
             }
@@ -4949,12 +4942,7 @@ public class ChatController {
             boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
                 qlv.contains("crea video") || qlv.contains("animazione di") ||
                 qlv.contains("video di") || qlv.contains("fai un video") ||
-                qlv.contains("genera un video") || qlv.contains("realizza un video") ||
-                qlv.contains("puoi creare un video") || qlv.contains("puoi fare un video") ||
-                qlv.contains("fammi un video") || qlv.contains("fai video") ||
-                qlv.contains("costruisci un video") || qlv.contains("produce un video") ||
-                (qlv.contains("video") && (qlv.contains("creare") || qlv.contains("fare") ||
-                 qlv.contains("realizzare") || qlv.contains("produrre") || qlv.contains("girar")));
+                qlv.contains("genera un video") || qlv.contains("realizza un video");
             if (isVideo) {
                 try {
                     log.info("VideoGen: avvio per '{}'", userMessage.substring(0, Math.min(60, userMessage.length())));
@@ -4966,7 +4954,6 @@ public class ChatController {
                     vResp.put("videoHtml", videoHtml);
                     vResp.put("status",    "ok");
                     vResp.put("mode",      "video_gen");
-                    vResp.put("agents",    "[video_gen]");
                     vResp.put("sessionId", sessionId);
                     return ResponseEntity.ok(vResp);
                 } catch (Exception ve) {
@@ -5076,14 +5063,7 @@ public class ChatController {
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
             boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
-                    q.contains("disegna") || q.contains("dipingi") || q.contains("illustra") ||
-                    q.contains("genera un'immagine") || q.contains("crea un'immagine") ||
-                    q.contains("foto di") || q.contains("immagine di") ||
-                    q.contains("genera foto") || q.contains("crea foto") ||
-                    q.contains("visualizza") || q.contains("mostrami un'immagine") ||
-                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera") ||
-                     q.contains("fai") || q.contains("puoi") || q.contains("fammi"))) ||
-                    (q.contains("foto") && (q.contains("genera") || q.contains("crea") || q.contains("fai")));
+                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
             // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────
             if (isVisualCreative && !isImg) {
                 try {
@@ -5162,14 +5142,7 @@ public class ChatController {
                         "sessionId", sessionId, "mode", "thinking"));
             }
             // Router
-            // Se il frontend ha un agente attivo e il topic è ancora attinente, usalo
-            List<String> agents;
-            if (!activeAgent.isEmpty() && !activeAgent.equals("auto") && !activeAgent.equals("reasoner")) {
-                agents = List.of(activeAgent);
-                log.debug("Agente persistito dal frontend: {}", activeAgent);
-            } else {
-                agents = routeQuery(userMessage, baseUrl, apiKey, model);
-            }
+            List<String> agents = routeQuery(userMessage, baseUrl, apiKey, model);
             // Check cache per risposta identica
             cacheK = cacheKey(userMessage, agents.isEmpty() ? "auto" : agents.get(0));
             String cachedResp = getCached(cacheK);
