@@ -179,61 +179,33 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <!-- Box agente live — mostra l'agente che risponderà -->
-        <div id="liveAgentBox" style="
-          margin-top:18px;
-          background:rgba(13,20,33,0.9);
-          border:1px solid rgba(0,200,255,0.18);
-          border-radius:16px;
-          padding:16px 22px;
-          display:flex;
-          align-items:center;
-          gap:14px;
-          max-width:420px;
-          width:90%;
-          transition:all .3s;
-        ">
+        <!-- Box agente live -->
+        <div id="liveAgentBox" style="margin-top:18px;background:rgba(13,20,33,0.9);border:1px solid rgba(0,200,255,0.18);border-radius:16px;padding:16px 22px;display:flex;align-items:center;gap:14px;max-width:420px;width:90%;transition:all .3s">
           <span id="liveAgentIcon" style="font-size:1.6rem;transition:all .3s">🤖</span>
           <div>
-            <div id="liveAgentName" style="
-              color:#4a6080;
-              font-size:.88rem;
-              font-family:'Syne',sans-serif;
-              font-weight:500;
-              transition:all .3s;
-            ">Scrivi qualcosa per attivare l&apos;agente giusto...</div>
-            <div id="liveAgentSub" style="
-              font-size:.68rem;
-              color:#2a3a50;
-              font-family:monospace;
-              margin-top:2px;
-            ">routing automatico</div>
+            <div id="liveAgentName" style="color:#4a6080;font-size:.88rem;font-family:'Syne',sans-serif;font-weight:500;transition:all .3s">Scrivi qualcosa per attivare l&apos;agente giusto...</div>
+            <div id="liveAgentSub" style="font-size:.68rem;color:#2a3a50;font-family:monospace;margin-top:2px">routing automatico</div>
           </div>
         </div>
 
         <!-- Bottone Hey SPACES centrale -->
-        <button id="heySpacesBtn" onclick="toggleSpaces()" style="
-          margin-top:16px;
-          display:flex;align-items:center;gap:10px;
-          background:rgba(0,200,255,0.08);
-          border:1.5px solid rgba(0,200,255,0.25);
-          border-radius:50px;
-          padding:10px 24px;
-          color:var(--accent);
-          font-family:'Syne',sans-serif;
-          font-size:.88rem;font-weight:600;
-          cursor:pointer;
-          transition:all .25s;
-          letter-spacing:.3px;
-        "
-        onmouseover="this.style.background='rgba(0,200,255,0.15)';this.style.borderColor='rgba(0,200,255,0.5)'"
-        onmouseout="this.style.background='rgba(0,200,255,0.08)';this.style.borderColor='rgba(0,200,255,0.25)'">
+        <button id="heySpacesBtn" onclick="toggleSpaces()" style="margin-top:16px;display:flex;align-items:center;gap:10px;background:rgba(0,200,255,0.08);border:1.5px solid rgba(0,200,255,0.25);border-radius:50px;padding:10px 24px;color:var(--accent);font-family:'Syne',sans-serif;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .25s;letter-spacing:.3px">
           <span id="heySpacesIcon" style="font-size:1.1rem">🎙️</span>
           <span id="heySpacesLabel">Hey SPACES</span>
           <span style="font-size:.7rem;opacity:.5;margin-left:2px">AI vocale</span>
         </button>
 
-
+        <!-- Box agente live — appare SOLO mentre si digita, nascosto di default -->
+        <div id="liveAgentHint" style="display:none;margin-top:14px;
+          background:rgba(0,200,255,0.07);border:1px solid rgba(0,200,255,0.3);
+          border-radius:14px;padding:14px 20px;align-items:center;gap:14px;
+          max-width:400px;width:90%;animation:agPulse 2s ease-in-out infinite">
+          <span id="liveAgentIcon" style="font-size:1.5rem">🤖</span>
+          <div>
+            <div id="liveAgentName" style="color:var(--accent);font-weight:700;font-size:.95rem;font-family:'Syne',sans-serif"></div>
+            <div style="color:#3a5070;font-size:.72rem;font-family:monospace;margin-top:2px">verrà attivato automaticamente</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -260,7 +232,7 @@ textarea::placeholder{color:var(--muted)}
           <span class="mlbl" id="modeLbl">&#129302; Auto</span>
         </div>
       </div>
-      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span style="color:#2a4060">&#127756; SPACES per AI vocale</span></div>
+      <div class="hint">Invio per inviare &middot; Shift+Invio per a capo &middot; <span id="heyHint" onclick="startSpaces()" style="color:var(--accent);font-weight:700;cursor:pointer">&#127756; Hey SPACES</span> per AI vocale</div>
     </div>
     <input type="file" id="fIn" style="display:none" multiple accept="*/*" onchange="handleFiles(this.files)"/>
     <input type="file" id="iIn" style="display:none" accept="image/*" onchange="handleFiles(this.files)"/>
@@ -542,36 +514,24 @@ function setMode(m){
 }
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
 function toggleSpaces(){
-  // Non riattivare se già attivo
   if(spacesOn){
-    // Disattiva
-    spacesOn=false;
-    spacesWaiting=false;
+    spacesOn=false;spacesWaiting=false;
     if(window.currentSpacesRec){try{window.currentSpacesRec.stop();}catch(e){}}
     if(window.speechSynthesis)window.speechSynthesis.cancel();
     var btn=document.getElementById("heySpacesBtn");
     var lbl=document.getElementById("heySpacesLabel");
     var ico=document.getElementById("heySpacesIcon");
     if(btn){btn.style.background="rgba(0,200,255,0.08)";btn.style.borderColor="rgba(0,200,255,0.25)";}
-    if(lbl) lbl.textContent="Hey SPACES";
-    if(ico) ico.textContent="🎙️";
-    var ml=document.getElementById("modeLbl");
-    if(ml) ml.innerHTML="&#129302; Auto";
+    if(lbl)lbl.textContent="Hey SPACES";
+    if(ico)ico.textContent="🎙️";
+    setMode("auto");
     return;
   }
   startSpaces();
 }
 function startSpaces(){
   curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
-  // Aggiorna bottone Hey SPACES centrale
-  (function(){
-    var b=document.getElementById("heySpacesBtn");
-    var l=document.getElementById("heySpacesLabel");
-    var ic=document.getElementById("heySpacesIcon");
-    if(b){b.style.background="rgba(0,200,255,0.22)";b.style.borderColor="rgba(0,200,255,0.8)";b.style.boxShadow="0 0 12px rgba(0,200,255,0.3)";}
-    if(l) l.textContent="⏹ Stop SPACES";
-    if(ic) ic.textContent="🔴";
-  })();
+  (function(){var b=document.getElementById("heySpacesBtn");var l=document.getElementById("heySpacesLabel");var ic=document.getElementById("heySpacesIcon");if(b){b.style.background="rgba(0,200,255,0.22)";b.style.borderColor="rgba(0,200,255,0.8)";}if(l)l.textContent="⏹ Stop SPACES";if(ic)ic.textContent="🔴";})();
   addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
   speak("SPACES attivato. Sono pronto.",null);
 }
@@ -643,6 +603,75 @@ renderChatHistory();
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 
+(function(){
+  var AG={
+    music_generator:{i:"🎵",l:"Compositore Musicale",r:/crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone|brano|song|musica.*per|ritornello|strofa|melodia/},
+    image_generator:{i:"🎨",l:"Generatore Immagini",r:/genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di/},
+    code:{i:"💻",l:"Programmatore",r:/python|javascript|java|codice|programma|funzione che|script|debug|bug|html|sql|api|react/},
+    finance:{i:"📈",l:"Analista Finanziario",r:/macd|rsi|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale/},
+    crypto:{i:"₿",l:"Esperto Crypto",r:/bitcoin|ethereum|crypto|criptovalut|defi|nft|solana/},
+    research:{i:"📰",l:"Ricercatore",r:/notizie|news|ultime notizie|cronaca|cosa.*successo|aggiornamenti/},
+    medical:{i:"🩺",l:"Consulente Medico",r:/sintomi|malattia|farmaco|medico|salute|diagnosi/},
+    legal:{i:"⚖️",l:"Consulente Legale",r:/legge|contratto|diritto|avvocato|tribunale/},
+    cooking:{i:"👨‍🍳",l:"Chef & Ricette",r:/ricetta|ricette|come.*cucinare|ingredienti per/},
+    travel:{i:"✈️",l:"Esperto Viaggi",r:/viaggio|vacanza|hotel|volo|dove.*andare/},
+    fitness:{i:"💪",l:"Coach Fitness",r:/allenamento|esercizio|palestra|dieta|fitness/},
+    math:{i:"🔢",l:"Matematico",r:/calcola|matematica|equazione|derivata|integrale/},
+    psychology:{i:"🧠",l:"Psicologo",r:/psicolog|ansia|depress|trauma|emozioni|sto male/},
+    translator:{i:"🌍",l:"Traduttore",r:/traduci|in inglese|in spagnolo|in francese|traduzione di/},
+    security:{i:"🛡️",l:"Security Analyst",r:/sicurezza.*sistema|vulnerabilit|hacking|pentest|malware/},
+    quantum:{i:"⚡",l:"Quantum AI",r:/quantum|quantistico|qubit/},
+    creative:{i:"✍️",l:"Scrittore Creativo",r:/scrivi.*storia|crea.*racconto|scrivi.*poesia|romanzo/},
+    startup:{i:"🚀",l:"Startup & Business",r:/startup|business plan|pitch|marketing/}
+  };
+  function detect(t){
+    var q=t.toLowerCase().replace(/[àáâã]/g,"a").replace(/[èéêë]/g,"e").replace(/[ìíîï]/g,"i").replace(/[òóôõ]/g,"o").replace(/[ùúûü]/g,"u");
+    for(var k in AG){if(AG[k].r&&AG[k].r.test(q))return k;}
+    return null;
+  }
+  var agBox=document.getElementById("liveAgentBox");
+  var hIcon=document.getElementById("liveAgentIcon");
+  var hName=document.getElementById("liveAgentName");
+  var hSub=document.getElementById("liveAgentSub");
+  var modeLbl=document.getElementById("modeLbl");
+  var debT=null,lastId=null;
+
+  function resetBox(){
+    var pa=window._persistedAgent;
+    if(pa&&AG[pa]){
+      if(hIcon)hIcon.textContent=AG[pa].i;
+      if(hName){hName.textContent=AG[pa].l+" (attivo)";hName.style.color="rgba(0,200,255,0.7)";hName.style.fontWeight="600";}
+      if(hSub)hSub.textContent="persiste sullo stesso argomento";
+      if(agBox){agBox.style.borderColor="rgba(0,200,255,0.3)";agBox.style.background="rgba(0,200,255,0.04)";}
+    } else {
+      if(hIcon)hIcon.textContent="🤖";
+      if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
+      if(hSub)hSub.textContent="routing automatico";
+      if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
+      if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
+    }
+  }
+
+  inpEl.addEventListener("input",function(){
+    clearTimeout(debT);
+    debT=setTimeout(function(){
+      var v=inpEl.value.trim();
+      if(!v){resetBox();lastId=null;return;}
+      var id=detect(v);
+      if(id===lastId)return;
+      lastId=id;
+      if(id&&window._persistedAgent&&id!==window._persistedAgent){window._persistedAgent=null;window._persistedCount=0;}
+      if(id){
+        if(hIcon)hIcon.textContent=AG[id].i;
+        if(hName){hName.textContent=AG[id].l;hName.style.color="var(--accent)";hName.style.fontWeight="700";}
+        if(hSub)hSub.textContent="verrà attivato automaticamente";
+        if(agBox){agBox.style.borderColor="rgba(0,200,255,0.45)";agBox.style.background="rgba(0,200,255,0.07)";}
+        if(modeLbl)modeLbl.innerHTML=AG[id].i+" "+AG[id].l;
+      } else {resetBox();}
+    },150);
+  });
+})();
+
 // ═══════════════════════════════════════════════════════════════
 // LIVE AGENT DETECTION
 // Mentre l'utente digita, rileva l'agente e mostra il box hint.
@@ -700,10 +729,9 @@ inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.
     return null;
   }
 
-  var agBox=document.getElementById("liveAgentBox");
+  var hint=document.getElementById("liveAgentHint");
   var hIcon=document.getElementById("liveAgentIcon");
   var hName=document.getElementById("liveAgentName");
-  var hSub=document.getElementById("liveAgentSub");
   var modeLbl=document.getElementById("modeLbl");
   var debT=null, lastId=null;
 
@@ -712,69 +740,20 @@ inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.
     debT=setTimeout(function(){
       var v=inpEl.value.trim();
       if(!v){
-        // Input vuoto — mostra agente persistito se presente
-        var pa=window._persistedAgent;
-        if(pa && AG[pa]){
-          if(hIcon) hIcon.textContent=AG[pa].i;
-          if(hName){
-            hName.textContent=AG[pa].l+" (attivo)";
-            hName.style.color="rgba(0,200,255,0.7)";
-            hName.style.fontWeight="600";
-          }
-          if(hSub) hSub.textContent="persiste sullo stesso argomento";
-          if(agBox){
-            agBox.style.borderColor="rgba(0,200,255,0.3)";
-            agBox.style.background="rgba(0,200,255,0.04)";
-          }
-        } else {
-          if(hIcon) hIcon.textContent="🤖";
-          if(hName){
-            hName.textContent="Scrivi qualcosa per attivare l\'agente giusto...";
-            hName.style.color="#4a6080";
-            hName.style.fontWeight="500";
-          }
-          if(hSub) hSub.textContent="routing automatico";
-          if(agBox){
-            agBox.style.borderColor="rgba(0,200,255,0.18)";
-            agBox.style.background="rgba(13,20,33,0.9)";
-          }
-          if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
-        }
+        if(hint)hint.style.display="none";
+        if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
         lastId=null; return;
       }
       var id=detect(v);
       if(id===lastId) return;
       lastId=id;
-      // Se il nuovo agente è diverso da quello persistito → reset persistenza
-      if(id && window._persistedAgent && id !== window._persistedAgent){
-        window._persistedAgent = null;
-        window._persistedCount = 0;
-      }
-      if(id){
+      if(id && hint){
         if(hIcon) hIcon.textContent=AG[id].i;
-        if(hName){
-          hName.textContent=AG[id].l;
-          hName.style.color="var(--accent)";
-          hName.style.fontWeight="700";
-        }
-        if(hSub) hSub.textContent="verrà attivato automaticamente";
-        if(agBox){
-          agBox.style.borderColor="rgba(0,200,255,0.45)";
-          agBox.style.background="rgba(0,200,255,0.07)";
-        }
+        if(hName) hName.textContent=AG[id].l;
+        hint.style.display="flex";
         if(modeLbl) modeLbl.innerHTML=AG[id].i+" "+AG[id].l;
-      } else {
-        if(hIcon) hIcon.textContent="🤖";
-        if(hName){
-          hName.textContent="Scrivi qualcosa per attivare l\'agente giusto...";
-          hName.style.color="#4a6080";
-          hName.style.fontWeight="500";
-        }
-        if(hSub) hSub.textContent="routing automatico";
-        if(agBox){
-          agBox.style.borderColor="rgba(0,200,255,0.18)";
-          agBox.style.background="rgba(13,20,33,0.9)";
-        }
+      } else if(hint){
+        hint.style.display="none";
         if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
       }
     },150);
@@ -801,8 +780,7 @@ inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.
           var h=document.getElementById("heyHint");
           if(h){h.style.background="var(--accent)";h.style.color="#000";h.style.padding="2px 8px";h.style.borderRadius="6px";
             setTimeout(function(){h.style.background="";h.style.color="var(--accent)";h.style.padding="";h.style.borderRadius="";},1500);}
-          // Solo se SPACES non è già attivo
-          if(!spacesOn) setTimeout(startSpaces,400);
+          setTimeout(startSpaces,400);
         } else setTimeout(startW,1000);
       };
       rec.onerror=function(e){active=false;if(e.error!=="aborted"&&e.error!=="not-allowed")setTimeout(startW,3000);};
@@ -1111,12 +1089,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        message:msg, sessionId:SID, imageBase64:imgBase64||"",
-        mode:curMode||"auto",
-        activeAgent:window._persistedAgent||"",
-        baseUrl:API_BASE||"", apiKey:API_KEY||"", model:MODEL||""
-      })
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:curMode||"auto",activeAgent:window._persistedAgent||""})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
@@ -1126,10 +1099,9 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          // Persisti l'agente per le prossime domande (finché il topic è attinente)
+          // Persisti agente attivo
           if(lastAgent!=="reasoner"&&lastAgent!=="auto"){
             window._persistedAgent=lastAgent;
-            window._persistedCount=(window._persistedCount||0)+1;
           }
           var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
             crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
@@ -1150,15 +1122,8 @@ async function sendMsg(){
             ml.innerHTML=ic+" "+lb;
           }
           // Nascondi hint dopo invio
-          // Reset box agente a stato neutro dopo invio
-          var hNameEl=document.getElementById("liveAgentName");
-          var hIconEl=document.getElementById("liveAgentIcon");
-          var hSubEl=document.getElementById("liveAgentSub");
-          var agBoxEl=document.getElementById("liveAgentBox");
-          if(hIconEl) hIconEl.textContent="🤖";
-          if(hNameEl){hNameEl.textContent="Scrivi qualcosa per attivare l\'agente giusto...";hNameEl.style.color="#4a6080";hNameEl.style.fontWeight="500";}
-          if(hSubEl) hSubEl.textContent="routing automatico";
-          if(agBoxEl){agBoxEl.style.borderColor="rgba(0,200,255,0.18)";agBoxEl.style.background="rgba(13,20,33,0.9)";}
+          var lh=document.getElementById("liveAgentHint");
+          if(lh) lh.style.display="none";
         }
         lastQuery=text;
         // ── Music Gen ─────────────────────────────────────────────────
