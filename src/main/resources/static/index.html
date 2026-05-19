@@ -712,24 +712,44 @@ inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.
     debT=setTimeout(function(){
       var v=inpEl.value.trim();
       if(!v){
-        // Input vuoto — torna al messaggio neutro
-        if(hIcon) hIcon.textContent="🤖";
-        if(hName){
-          hName.textContent="Scrivi qualcosa per attivare l\'agente giusto...";
-          hName.style.color="#4a6080";
-          hName.style.fontWeight="500";
+        // Input vuoto — mostra agente persistito se presente
+        var pa=window._persistedAgent;
+        if(pa && AG[pa]){
+          if(hIcon) hIcon.textContent=AG[pa].i;
+          if(hName){
+            hName.textContent=AG[pa].l+" (attivo)";
+            hName.style.color="rgba(0,200,255,0.7)";
+            hName.style.fontWeight="600";
+          }
+          if(hSub) hSub.textContent="persiste sullo stesso argomento";
+          if(agBox){
+            agBox.style.borderColor="rgba(0,200,255,0.3)";
+            agBox.style.background="rgba(0,200,255,0.04)";
+          }
+        } else {
+          if(hIcon) hIcon.textContent="🤖";
+          if(hName){
+            hName.textContent="Scrivi qualcosa per attivare l\'agente giusto...";
+            hName.style.color="#4a6080";
+            hName.style.fontWeight="500";
+          }
+          if(hSub) hSub.textContent="routing automatico";
+          if(agBox){
+            agBox.style.borderColor="rgba(0,200,255,0.18)";
+            agBox.style.background="rgba(13,20,33,0.9)";
+          }
+          if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
         }
-        if(hSub) hSub.textContent="routing automatico";
-        if(agBox){
-          agBox.style.borderColor="rgba(0,200,255,0.18)";
-          agBox.style.background="rgba(13,20,33,0.9)";
-        }
-        if(modeLbl) modeLbl.innerHTML="&#129302; Auto";
         lastId=null; return;
       }
       var id=detect(v);
       if(id===lastId) return;
       lastId=id;
+      // Se il nuovo agente è diverso da quello persistito → reset persistenza
+      if(id && window._persistedAgent && id !== window._persistedAgent){
+        window._persistedAgent = null;
+        window._persistedCount = 0;
+      }
       if(id){
         if(hIcon) hIcon.textContent=AG[id].i;
         if(hName){
@@ -1091,7 +1111,12 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||""})
+      body:JSON.stringify({
+        message:msg, sessionId:SID, imageBase64:imgBase64||"",
+        mode:curMode||"auto",
+        activeAgent:window._persistedAgent||"",
+        baseUrl:API_BASE||"", apiKey:API_KEY||"", model:MODEL||""
+      })
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
@@ -1101,6 +1126,11 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
+          // Persisti l'agente per le prossime domande (finché il topic è attinente)
+          if(lastAgent!=="reasoner"&&lastAgent!=="auto"){
+            window._persistedAgent=lastAgent;
+            window._persistedCount=(window._persistedCount||0)+1;
+          }
           var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
             crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
             travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
