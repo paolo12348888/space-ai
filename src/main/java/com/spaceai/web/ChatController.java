@@ -2205,7 +2205,7 @@ public class ChatController {
 
     @PostMapping("/qdrant/store")
     public ResponseEntity<Object> qdrantStore(@RequestBody Map<String,String> body) {
-        String text      = ((String) body.getOrDefault("text","")).trim();
+        String text      = (String.valueOf(body.getOrDefault("text",""))).trim();
         String sessionId = body.getOrDefault("sessionId","global");
         String category  = body.getOrDefault("category","memory");
         if (text.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","text obbligatorio"));
@@ -2230,7 +2230,7 @@ public class ChatController {
 
     @PostMapping("/qdrant/search")
     public ResponseEntity<Object> qdrantSearchEndpoint(@RequestBody Map<String,String> body) {
-        String query     = ((String) body.getOrDefault("query","")).trim();
+        String query     = (String.valueOf(body.getOrDefault("query",""))).trim();
         String sessionId = body.getOrDefault("sessionId","global");
         int topK         = Integer.parseInt(body.getOrDefault("topK","5"));
         if (query.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","query obbligatoria"));
@@ -2597,7 +2597,7 @@ public class ChatController {
 
     @PostMapping("/goal/delegate")
     public ResponseEntity<Object> delegateGoal(@RequestBody Map<String,String> body) {
-        String goal      = ((String) body.getOrDefault("goal","")).trim();
+        String goal      = (String.valueOf(body.getOrDefault("goal",""))).trim();
         String context   = body.getOrDefault("context","");   // contesto aziendale opzionale
         String sessionId = body.getOrDefault("sessionId","global");
         String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
@@ -2790,7 +2790,7 @@ public class ChatController {
 
     @PostMapping("/manus/task")
     public ResponseEntity<Object> manusCreateTask(@RequestBody Map<String,String> body) {
-        String goal      = ((String) body.getOrDefault("goal", "")).trim();
+        String goal      = (String.valueOf(body.getOrDefault("goal", ""))).trim();
         String sessionId = body.getOrDefault("sessionId", "global");
         String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
         String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
@@ -3118,7 +3118,7 @@ public class ChatController {
 
     @PostMapping("/manus/browse")
     public ResponseEntity<Object> manusBrowse(@RequestBody Map<String,String> body) {
-        String url       = ((String) body.getOrDefault("url", "")).trim();
+        String url       = (String.valueOf(body.getOrDefault("url", ""))).trim();
         String task      = body.getOrDefault("task", "Estrai il contenuto principale");
         String sessionId = body.getOrDefault("sessionId", "global");
         String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
@@ -3216,8 +3216,8 @@ public class ChatController {
     // Punto 11: Form submission — Computer Use
     @PostMapping("/manus/form-submit")
     public ResponseEntity<Object> manusFormSubmit(@RequestBody Map<String,Object> body) {
-        String url    = (String) body.getOrDefault("url", "");
-        String method = ((String) body.getOrDefault("method", "POST")).toUpperCase();
+        String url    = String.valueOf(body.getOrDefault("url", ""));
+        String method = (String.valueOf(body.getOrDefault("method", "POST"))).toUpperCase();
         @SuppressWarnings("unchecked")
         Map<String,String> formData = (Map<String,String>) body.getOrDefault("formData", new HashMap<>());
         if (url.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","URL obbligatorio"));
@@ -3337,7 +3337,7 @@ public class ChatController {
 
     @PostMapping("/music/generate")
     public ResponseEntity<Object> musicGenerate(@RequestBody Map<String,String> body) {
-        String description = ((String) body.getOrDefault("description","")).trim();
+        String description = (String.valueOf(body.getOrDefault("description",""))).trim();
         String genre       = body.getOrDefault("genre","pop");
         String mood        = body.getOrDefault("mood","happy");
         String tempo       = body.getOrDefault("tempo","120");
@@ -3493,27 +3493,17 @@ public class ChatController {
 
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
-        String q = msg.toLowerCase()
-            .replace("\u00e0","a").replace("\u00e8","e").replace("\u00ec","i")
-            .replace("\u00f2","o").replace("\u00f9","u");
-        // Qualsiasi frase che contenga parole chiave musicali
-        if (q.contains("canzone") || q.contains("brano") || q.contains("song")) return true;
-        if (q.contains("componi") || q.contains("composizione")) return true;
-        if (q.contains("ritornello") || q.contains("strofa") || q.contains("melodia")) return true;
-        if (q.contains("testo canzone") || q.contains("testo della canzone")) return true;
-        if (q.contains("musica per") || q.contains("genera musica") || q.contains("crea musica")) return true;
-        if (q.contains("scrivi una canzone") || q.contains("crea una canzone")) return true;
-        if (q.contains("fammi una canzone") || q.contains("voglio una canzone")) return true;
-        if (q.contains("puoi creare una canzone") || q.contains("puoi scrivere una canzone")) return true;
-        if (q.contains("crea un brano") || q.contains("scrivi un brano")) return true;
-        if (q.contains("canzone pop") || q.contains("canzone rock") || q.contains("canzone jazz")) return true;
-        if (q.contains("canzone triste") || q.contains("canzone allegra") || q.contains("canzone romantica")) return true;
-        return false;
+        String q = msg.toLowerCase();
+        return q.contains("crea una canzone") || q.contains("componi") ||
+               q.contains("scrivi una canzone") || q.contains("musica per") ||
+               q.contains("genera musica") || q.contains("crea musica") ||
+               q.contains("melodia") || q.contains("canzone su") ||
+               q.contains("music") || q.contains("song");
     }
 
     @PostMapping("/audio/generate")
     public ResponseEntity<Object> audioGenerateEndpoint(@RequestBody Map<String,String> body) {
-        String text     = ((String)body.getOrDefault("text","")).trim();
+        String text     = (String.valueOf(body.getOrDefault("text",""))).trim();
         String lang     = body.getOrDefault("lang","it-IT");
         String voice    = body.getOrDefault("voice","femminile");
         if (text.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Testo vuoto"));
@@ -3761,13 +3751,13 @@ public class ChatController {
 
     @PostMapping("/video/analyze")
     public ResponseEntity<Object> analyzeVideo(@RequestBody Map<String,Object> body) {
-        String videoBase64 = (String) body.getOrDefault("videoBase64","");
-        String frameBase64 = (String) body.getOrDefault("frameBase64","");  // singolo frame JPEG
-        String task        = (String) body.getOrDefault("task","Descrivi cosa vedi in questo video");
-        String sessionId   = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2    = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2     = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
-        String model2      = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+        String videoBase64 = String.valueOf(body.getOrDefault("videoBase64",""));
+        String frameBase64 = String.valueOf(body.getOrDefault("frameBase64",""));  // singolo frame JPEG
+        String task        = String.valueOf(body.getOrDefault("task","Descrivi cosa vedi in questo video"));
+        String sessionId   = String.valueOf(body.getOrDefault("sessionId","global"));
+        String baseUrl2    = String.valueOf(body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2     = String.valueOf(body.getOrDefault("apiKey",  env("AI_API_KEY","")));
+        String model2      = String.valueOf(body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile")));
 
         // Caso 1: singolo frame JPEG inviato direttamente
         if (!frameBase64.isEmpty()) {
@@ -3831,11 +3821,11 @@ public class ChatController {
     public ResponseEntity<Object> analyzeVideoFrames(@RequestBody Map<String,Object> body) {
         @SuppressWarnings("unchecked")
         List<String> frames  = (List<String>) body.getOrDefault("frames", new ArrayList<>());
-        String task          = (String) body.getOrDefault("task","Descrivi la sequenza");
-        String sessionId     = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2      = (String) body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2       = (String) body.getOrDefault("apiKey",  env("AI_API_KEY",""));
-        String model2        = (String) body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile"));
+        String task          = String.valueOf(body.getOrDefault("task","Descrivi la sequenza"));
+        String sessionId     = String.valueOf(body.getOrDefault("sessionId","global"));
+        String baseUrl2      = String.valueOf(body.getOrDefault("baseUrl", env("AI_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2       = String.valueOf(body.getOrDefault("apiKey",  env("AI_API_KEY","")));
+        String model2        = String.valueOf(body.getOrDefault("model",   env("AI_MODEL","llama-3.3-70b-versatile")));
 
         if (frames.isEmpty())
             return ResponseEntity.badRequest().body(Map.of("error","Lista frames vuota"));
@@ -3884,7 +3874,7 @@ public class ChatController {
 
     @PostMapping("/video/generate")
     public ResponseEntity<Object> videoGenerate(@RequestBody Map<String,String> body) {
-        String description = ((String)body.getOrDefault("description", body.getOrDefault("goal",""))).trim();
+        String description = (String.valueOf(body.getOrDefault("description", body.getOrDefault("goal","")))).trim();
         String sessionId   = body.getOrDefault("sessionId", "global");
         String baseUrl     = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
         String apiKey      = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
@@ -4015,11 +4005,11 @@ public class ChatController {
 
     @PostMapping("/orchestrate")
     public ResponseEntity<Object> orchestrateSubAgents(@RequestBody Map<String,Object> body) {
-        String goal      = ((String) body.getOrDefault("goal","")).trim();
-        String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
+        String goal      = (String.valueOf(body.getOrDefault("goal",""))).trim();
+        String sessionId = String.valueOf(body.getOrDefault("sessionId","global"));
+        String baseUrl2  = String.valueOf(body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2   = String.valueOf(body.getOrDefault("apiKey",  env("GROQ_API_KEY","")));
+        String model2    = String.valueOf(body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile")));
         @SuppressWarnings("unchecked")
         List<String> requestedAgents = (List<String>) body.getOrDefault("agents",
             List.of("researcher","analyst"));
@@ -4152,12 +4142,12 @@ public class ChatController {
 
     @PostMapping("/mcp/call")
     public ResponseEntity<Object> mcpCallTool(@RequestBody Map<String,Object> body) {
-        String toolName = (String) body.getOrDefault("name", "");
+        String toolName = String.valueOf(body.getOrDefault("name", ""));
         @SuppressWarnings("unchecked")
         Map<String,Object> arguments = (Map<String,Object>) body.getOrDefault("arguments", new HashMap<>());
-        String params    = (String) arguments.getOrDefault("query",
-                           arguments.getOrDefault("params", "").toString());
-        String sessionId = (String) body.getOrDefault("sessionId", "global");
+        String params    = String.valueOf(arguments.getOrDefault("query",
+                           arguments.getOrDefault("params", "")).toString());
+        String sessionId = String.valueOf(body.getOrDefault("sessionId", "global"));
         String baseUrl   = env("GROQ_BASE_URL","https://api.groq.com/openai/v1");
         String apiKey    = env("GROQ_API_KEY","");
         String model     = env("GROQ_MODEL","llama-3.3-70b-versatile");
@@ -4808,7 +4798,7 @@ public class ChatController {
     }
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
-        String userMessage  = ((String) body.getOrDefault("message", "")).trim();
+        String userMessage  = (String.valueOf(body.getOrDefault("message", ""))).trim();
         String sessionId    = body.getOrDefault("sessionId", "default");
         String fileContent  = body.getOrDefault("fileContent", "");
         String thinkingFlag = body.getOrDefault("thinking", "false");
@@ -4940,7 +4930,7 @@ public class ChatController {
                             "Testo: " + textToSpeak.substring(0, Math.min(100, textToSpeak.length())));
                     }
                     aResp.put("status","ok"); aResp.put("mode","audio_gen"); aResp.put("sessionId",sessionId);
-                    saveMessages(sessionId, userMessage, (String)aResp.getOrDefault("response","Audio generato"), supabaseUrl, supabaseKey);
+                    saveMessages(sessionId, userMessage, String.valueOf(aResp.getOrDefault("response","Audio generato")), supabaseUrl, supabaseKey);
                     return ResponseEntity.ok(aResp);
                 } catch (Exception ae) {
                     log.warn("AudioGen failed: {}", ae.getMessage());
@@ -4948,16 +4938,10 @@ public class ChatController {
             }
 
             // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
-            boolean isVideo =
-                qlv.contains("crea un video") || qlv.contains("genera video") ||
+            boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
                 qlv.contains("crea video") || qlv.contains("animazione di") ||
                 qlv.contains("video di") || qlv.contains("fai un video") ||
-                qlv.contains("genera un video") || qlv.contains("realizza un video") ||
-                qlv.contains("puoi creare un video") || qlv.contains("puoi fare un video") ||
-                qlv.contains("fammi un video") || qlv.contains("fai video") ||
-                qlv.contains("costruisci un video") ||
-                (qlv.contains("video") && (qlv.contains("creare") || qlv.contains("fare") ||
-                 qlv.contains("realizzare") || qlv.contains("produrre") || qlv.contains("girar")));
+                qlv.contains("genera un video") || qlv.contains("realizza un video");
             if (isVideo) {
                 try {
                     log.info("VideoGen: avvio per '{}'", userMessage.substring(0, Math.min(60, userMessage.length())));
@@ -5077,18 +5061,8 @@ public class ChatController {
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
-            boolean isImg =
-                q.contains("genera immagine") || q.contains("crea immagine") ||
-                q.contains("disegna") || q.contains("dipingi") || q.contains("illustra") ||
-                q.contains("genera un'immagine") || q.contains("crea un'immagine") ||
-                q.contains("genera un immagine") || q.contains("crea un immagine") ||
-                q.contains("foto di") || q.contains("immagine di") ||
-                q.contains("genera foto") || q.contains("crea foto") ||
-                q.contains("fammi un'immagine") || q.contains("fammi una foto") ||
-                q.contains("mostrami un'immagine") || q.contains("visualizza") ||
-                (q.contains("immagine") && (q.contains("crea") || q.contains("genera") ||
-                 q.contains("fai") || q.contains("puoi") || q.contains("fammi"))) ||
-                (q.contains("foto") && (q.contains("genera") || q.contains("crea") || q.contains("fai")));
+            boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
+                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
             // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────
             if (isVisualCreative && !isImg) {
                 try {
@@ -5125,7 +5099,7 @@ public class ChatController {
                         vr.put("response", visualResp);
                     }
                     saveMessages(sessionId, userMessage,
-                        (String) vr.getOrDefault("response", "Immagine generata."),
+                        String.valueOf(vr.getOrDefault("response", "Immagine generata.")),
                         supabaseUrl, supabaseKey);
                     return ResponseEntity.ok(vr);
                 } catch (Exception ve) {
@@ -5424,13 +5398,13 @@ public class ChatController {
 
     @PostMapping("/manus/computer-use")
     public ResponseEntity<Object> computerUseLoop(@RequestBody Map<String,Object> body) {
-        String goal      = (String) body.getOrDefault("goal","");
-        String startUrl  = (String) body.getOrDefault("url","");
-        String sessionId = (String) body.getOrDefault("sessionId","global");
-        String baseUrl2  = (String) body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
-        String apiKey2   = (String) body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
-        String model2    = (String) body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile"));
-        int    maxSteps  = Integer.parseInt((String)body.getOrDefault("maxSteps","8"));
+        String goal      = String.valueOf(body.getOrDefault("goal",""));
+        String startUrl  = String.valueOf(body.getOrDefault("url",""));
+        String sessionId = String.valueOf(body.getOrDefault("sessionId","global"));
+        String baseUrl2  = String.valueOf(body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1")));
+        String apiKey2   = String.valueOf(body.getOrDefault("apiKey",  env("GROQ_API_KEY","")));
+        String model2    = String.valueOf(body.getOrDefault("model",   env("GROQ_MODEL","llama-3.3-70b-versatile")));
+        int    maxSteps  = Integer.parseInt(String.valueOf(body.getOrDefault("maxSteps","8")));
 
         if (goal.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error","Goal obbligatorio"));
 
@@ -5567,12 +5541,12 @@ public class ChatController {
 
     @PostMapping("/manus/browser")
     public ResponseEntity<Object> manusBrowserControl(@RequestBody Map<String,Object> body) {
-        String action    = (String) body.getOrDefault("action", "navigate");
-        String url       = (String) body.getOrDefault("url", "");
-        String selector  = (String) body.getOrDefault("selector", "");
-        String value     = (String) body.getOrDefault("value", "");
-        String jsCode    = (String) body.getOrDefault("js", "");
-        String sessionId = (String) body.getOrDefault("sessionId", "global");
+        String action    = String.valueOf(body.getOrDefault("action", "navigate"));
+        String url       = String.valueOf(body.getOrDefault("url", ""));
+        String selector  = String.valueOf(body.getOrDefault("selector", ""));
+        String value     = String.valueOf(body.getOrDefault("value", ""));
+        String jsCode    = String.valueOf(body.getOrDefault("js", ""));
+        String sessionId = String.valueOf(body.getOrDefault("sessionId", "global"));
         String token     = env("BROWSERLESS_TOKEN", "");
         String baseUrl2  = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
         String apiKey2   = env("AI_API_KEY",  "");
@@ -6639,7 +6613,7 @@ public class ChatController {
 
     @PostMapping("/security/audit")
     public ResponseEntity<Object> securityAudit(@RequestBody Map<String,String> body) {
-        String target    = ((String) body.getOrDefault("target", "")).trim();
+        String target    = (String.valueOf(body.getOrDefault("target", ""))).trim();
         String auditType = body.getOrDefault("type", "general"); // general, code, network, deps
         String baseUrl   = body.getOrDefault("baseUrl", env("GROQ_BASE_URL","https://api.groq.com/openai/v1"));
         String apiKey    = body.getOrDefault("apiKey",  env("GROQ_API_KEY",""));
