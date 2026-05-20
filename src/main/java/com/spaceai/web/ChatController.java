@@ -3436,13 +3436,12 @@ public class ChatController {
                 Map<String,String> pistonBody = new HashMap<>();
                 pistonBody.put("language","python"); pistonBody.put("code",pythonCode);
                 ResponseEntity<Object> pistonResp = manusExecCode(pistonBody);
-                Object pistonBody2 = pistonResp.getBody();
-                if (pistonBody2 != null) {
-                    String pistonOut = pistonBody2.toString();
-                    int musicIdx = pistonOut.indexOf("MUSICXML_B64:");
-                    if (musicIdx >= 0) {
-                        midiB64 = pistonOut.substring(musicIdx + 13).trim();
-                        if (midiB64.contains("}")) midiB64 = midiB64.substring(0, midiB64.indexOf("}")).trim();
+                if (pistonResp.getBody() instanceof Map) {
+                    Map<?,?> pr = (Map<?,?>)pistonResp.getBody();
+                    Object _o = pr.getOrDefault("output","");
+                    String output = _o != null ? _o.toString() : "";
+                    if (output.contains("MUSICXML_B64:")) {
+                        midiB64 = output.substring(output.indexOf("MUSICXML_B64:") + 13).trim();
                         log.info("Music21 MusicXML generato: {} bytes b64", midiB64.length());
                     }
                 }
@@ -3494,12 +3493,22 @@ public class ChatController {
 
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
-        String q = msg.toLowerCase();
-        return q.contains("crea una canzone") || q.contains("componi") ||
-               q.contains("scrivi una canzone") || q.contains("musica per") ||
-               q.contains("genera musica") || q.contains("crea musica") ||
-               q.contains("melodia") || q.contains("canzone su") ||
-               q.contains("music") || q.contains("song");
+        String q = msg.toLowerCase()
+            .replace("\u00e0","a").replace("\u00e8","e").replace("\u00ec","i")
+            .replace("\u00f2","o").replace("\u00f9","u");
+        // Qualsiasi frase che contenga parole chiave musicali
+        if (q.contains("canzone") || q.contains("brano") || q.contains("song")) return true;
+        if (q.contains("componi") || q.contains("composizione")) return true;
+        if (q.contains("ritornello") || q.contains("strofa") || q.contains("melodia")) return true;
+        if (q.contains("testo canzone") || q.contains("testo della canzone")) return true;
+        if (q.contains("musica per") || q.contains("genera musica") || q.contains("crea musica")) return true;
+        if (q.contains("scrivi una canzone") || q.contains("crea una canzone")) return true;
+        if (q.contains("fammi una canzone") || q.contains("voglio una canzone")) return true;
+        if (q.contains("puoi creare una canzone") || q.contains("puoi scrivere una canzone")) return true;
+        if (q.contains("crea un brano") || q.contains("scrivi un brano")) return true;
+        if (q.contains("canzone pop") || q.contains("canzone rock") || q.contains("canzone jazz")) return true;
+        if (q.contains("canzone triste") || q.contains("canzone allegra") || q.contains("canzone romantica")) return true;
+        return false;
     }
 
     @PostMapping("/audio/generate")
@@ -4939,10 +4948,16 @@ public class ChatController {
             }
 
             // ── VIDEO GENERATION — PRIMA dell'Agent Loop ─────────────────────
-            boolean isVideo = qlv.contains("crea un video") || qlv.contains("genera video") ||
+            boolean isVideo =
+                qlv.contains("crea un video") || qlv.contains("genera video") ||
                 qlv.contains("crea video") || qlv.contains("animazione di") ||
                 qlv.contains("video di") || qlv.contains("fai un video") ||
-                qlv.contains("genera un video") || qlv.contains("realizza un video");
+                qlv.contains("genera un video") || qlv.contains("realizza un video") ||
+                qlv.contains("puoi creare un video") || qlv.contains("puoi fare un video") ||
+                qlv.contains("fammi un video") || qlv.contains("fai video") ||
+                qlv.contains("costruisci un video") ||
+                (qlv.contains("video") && (qlv.contains("creare") || qlv.contains("fare") ||
+                 qlv.contains("realizzare") || qlv.contains("produrre") || qlv.contains("girar")));
             if (isVideo) {
                 try {
                     log.info("VideoGen: avvio per '{}'", userMessage.substring(0, Math.min(60, userMessage.length())));
@@ -5062,8 +5077,18 @@ public class ChatController {
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
-            boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
-                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
+            boolean isImg =
+                q.contains("genera immagine") || q.contains("crea immagine") ||
+                q.contains("disegna") || q.contains("dipingi") || q.contains("illustra") ||
+                q.contains("genera un'immagine") || q.contains("crea un'immagine") ||
+                q.contains("genera un immagine") || q.contains("crea un immagine") ||
+                q.contains("foto di") || q.contains("immagine di") ||
+                q.contains("genera foto") || q.contains("crea foto") ||
+                q.contains("fammi un'immagine") || q.contains("fammi una foto") ||
+                q.contains("mostrami un'immagine") || q.contains("visualizza") ||
+                (q.contains("immagine") && (q.contains("crea") || q.contains("genera") ||
+                 q.contains("fai") || q.contains("puoi") || q.contains("fammi"))) ||
+                (q.contains("foto") && (q.contains("genera") || q.contains("crea") || q.contains("fai")));
             // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────
             if (isVisualCreative && !isImg) {
                 try {
