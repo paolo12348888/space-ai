@@ -179,7 +179,7 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <!-- Box agente live -->
+        <!-- Box agente live — mostra quale agente risponderà -->
         <div id="liveAgentBox" style="margin-top:18px;background:rgba(13,20,33,0.9);border:1px solid rgba(0,200,255,0.18);border-radius:16px;padding:16px 22px;display:flex;align-items:center;gap:14px;max-width:420px;width:90%;transition:all .3s">
           <span id="liveAgentIcon" style="font-size:1.6rem;transition:all .3s">🤖</span>
           <div>
@@ -187,9 +187,8 @@ textarea::placeholder{color:var(--muted)}
             <div id="liveAgentSub" style="font-size:.68rem;color:#2a3a50;font-family:monospace;margin-top:2px">routing automatico</div>
           </div>
         </div>
-
         <!-- Bottone Hey SPACES centrale -->
-        <button id="heySpacesBtn" onclick="toggleSpaces()" style="margin-top:16px;display:flex;align-items:center;gap:10px;background:rgba(0,200,255,0.08);border:1.5px solid rgba(0,200,255,0.25);border-radius:50px;padding:10px 24px;color:var(--accent);font-family:'Syne',sans-serif;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .25s;letter-spacing:.3px">
+        <button id="heySpacesBtn" onclick="toggleSpaces()" style="margin-top:16px;display:flex;align-items:center;gap:10px;background:rgba(0,200,255,0.08);border:1.5px solid rgba(0,200,255,0.25);border-radius:50px;padding:10px 24px;color:var(--accent);font-family:'Syne',sans-serif;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .25s">
           <span id="heySpacesIcon" style="font-size:1.1rem">🎙️</span>
           <span id="heySpacesLabel">Hey SPACES</span>
           <span style="font-size:.7rem;opacity:.5;margin-left:2px">AI vocale</span>
@@ -513,22 +512,6 @@ function setMode(m){
   inpEl.placeholder=ph[m]||"Chiedi qualsiasi cosa...";
 }
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
-function toggleSpaces(){
-  if(spacesOn){
-    spacesOn=false;spacesWaiting=false;
-    if(window.currentSpacesRec){try{window.currentSpacesRec.stop();}catch(e){}}
-    if(window.speechSynthesis)window.speechSynthesis.cancel();
-    var btn=document.getElementById("heySpacesBtn");
-    var lbl=document.getElementById("heySpacesLabel");
-    var ico=document.getElementById("heySpacesIcon");
-    if(btn){btn.style.background="rgba(0,200,255,0.08)";btn.style.borderColor="rgba(0,200,255,0.25)";}
-    if(lbl)lbl.textContent="Hey SPACES";
-    if(ico)ico.textContent="🎙️";
-    setMode("auto");
-    return;
-  }
-  startSpaces();
-}
 function startSpaces(){
   curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
   (function(){var b=document.getElementById("heySpacesBtn");var l=document.getElementById("heySpacesLabel");var ic=document.getElementById("heySpacesIcon");if(b){b.style.background="rgba(0,200,255,0.22)";b.style.borderColor="rgba(0,200,255,0.8)";}if(l)l.textContent="⏹ Stop SPACES";if(ic)ic.textContent="🔴";})();
@@ -603,74 +586,97 @@ renderChatHistory();
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
 
+// ═══════════════════ LIVE AGENT DETECTION ═══════════════════
 (function(){
   var AG={
-    music_generator:{i:"🎵",l:"Compositore Musicale",r:/crea.*canzone|scrivi.*canzone|genera.*canzone|componi|canzone|brano|song|musica.*per|ritornello|strofa|melodia/},
-    image_generator:{i:"🎨",l:"Generatore Immagini",r:/genera.*immagin|crea.*immagin|disegna|dipingi|illustra|foto di|immagine di/},
-    code:{i:"💻",l:"Programmatore",r:/python|javascript|java|codice|programma|funzione che|script|debug|bug|html|sql|api|react/},
-    finance:{i:"📈",l:"Analista Finanziario",r:/macd|rsi|borsa|azioni|trading|investimento|mercato finanziario|analisi fondamentale/},
-    crypto:{i:"₿",l:"Esperto Crypto",r:/bitcoin|ethereum|crypto|criptovalut|defi|nft|solana/},
-    research:{i:"📰",l:"Ricercatore",r:/notizie|news|ultime notizie|cronaca|cosa.*successo|aggiornamenti/},
-    medical:{i:"🩺",l:"Consulente Medico",r:/sintomi|malattia|farmaco|medico|salute|diagnosi/},
-    legal:{i:"⚖️",l:"Consulente Legale",r:/legge|contratto|diritto|avvocato|tribunale/},
-    cooking:{i:"👨‍🍳",l:"Chef & Ricette",r:/ricetta|ricette|come.*cucinare|ingredienti per/},
-    travel:{i:"✈️",l:"Esperto Viaggi",r:/viaggio|vacanza|hotel|volo|dove.*andare/},
-    fitness:{i:"💪",l:"Coach Fitness",r:/allenamento|esercizio|palestra|dieta|fitness/},
-    math:{i:"🔢",l:"Matematico",r:/calcola|matematica|equazione|derivata|integrale/},
-    psychology:{i:"🧠",l:"Psicologo",r:/psicolog|ansia|depress|trauma|emozioni|sto male/},
-    translator:{i:"🌍",l:"Traduttore",r:/traduci|in inglese|in spagnolo|in francese|traduzione di/},
-    security:{i:"🛡️",l:"Security Analyst",r:/sicurezza.*sistema|vulnerabilit|hacking|pentest|malware/},
-    quantum:{i:"⚡",l:"Quantum AI",r:/quantum|quantistico|qubit/},
-    creative:{i:"✍️",l:"Scrittore Creativo",r:/scrivi.*storia|crea.*racconto|scrivi.*poesia|romanzo/},
-    startup:{i:"🚀",l:"Startup & Business",r:/startup|business plan|pitch|marketing/}
+    music_generator:{i:"🎵",l:"Compositore Musicale",r:/canzone|brano|song|componi|melodia|ritornello|strofa|musica per|genera musica/},
+    image_generator:{i:"🎨",l:"Generatore Immagini",r:/disegna|dipingi|illustra|genera.*immagin|crea.*immagin|foto di|immagine di/},
+    video_gen:       {i:"🎬",l:"Video AI",r:/genera.*video|crea.*video|fai.*video|video di/},
+    code:            {i:"💻",l:"Programmatore",r:/python|javascript|java|codice|programma|script|debug|bug|html|sql|api|react/},
+    finance:         {i:"📈",l:"Analista Finanziario",r:/macd|rsi|borsa|azioni|trading|investimento|analisi fondamentale/},
+    crypto:          {i:"₿",l:"Esperto Crypto",r:/bitcoin|ethereum|crypto|criptovalut|defi|nft|solana/},
+    research:        {i:"📰",l:"Ricercatore",r:/notizie|news|ultime notizie|cronaca|aggiornamenti/},
+    medical:         {i:"🩺",l:"Consulente Medico",r:/sintomi|malattia|farmaco|medico|salute|diagnosi/},
+    legal:           {i:"⚖️",l:"Consulente Legale",r:/legge|contratto|diritto|avvocato|tribunale/},
+    cooking:         {i:"👨‍🍳",l:"Chef & Ricette",r:/ricetta|ricette|cucinare|ingredienti per/},
+    travel:          {i:"✈️",l:"Esperto Viaggi",r:/viaggio|vacanza|hotel|volo|dove.*andare/},
+    fitness:         {i:"💪",l:"Coach Fitness",r:/allenamento|esercizio|palestra|dieta|fitness/},
+    math:            {i:"🔢",l:"Matematico",r:/calcola|matematica|equazione|derivata|integrale/},
+    psychology:      {i:"🧠",l:"Psicologo",r:/psicolog|ansia|depress|trauma|sto male/},
+    translator:      {i:"🌍",l:"Traduttore",r:/traduci|in inglese|in spagnolo|traduzione di/},
+    security:        {i:"🛡️",l:"Security",r:/sicurezza.*sistema|vulnerabilit|hacking|pentest|malware/},
+    quantum:         {i:"⚡",l:"Quantum AI",r:/quantum|quantistico|qubit/},
+    ultra_review:    {i:"🧠",l:"Ultra Review",r:/analisi critica|analisi approfondita|review completa|pro e contro/}
   };
   function detect(t){
     var q=t.toLowerCase().replace(/[àáâã]/g,"a").replace(/[èéêë]/g,"e").replace(/[ìíîï]/g,"i").replace(/[òóôõ]/g,"o").replace(/[ùúûü]/g,"u");
     for(var k in AG){if(AG[k].r&&AG[k].r.test(q))return k;}
     return null;
   }
-  var agBox=document.getElementById("liveAgentBox");
-  var hIcon=document.getElementById("liveAgentIcon");
-  var hName=document.getElementById("liveAgentName");
-  var hSub=document.getElementById("liveAgentSub");
-  var modeLbl=document.getElementById("modeLbl");
+  window._detectAgent=detect;
   var debT=null,lastId=null;
-
-  function resetBox(){
-    var pa=window._persistedAgent;
-    if(pa&&AG[pa]){
-      if(hIcon)hIcon.textContent=AG[pa].i;
-      if(hName){hName.textContent=AG[pa].l+" (attivo)";hName.style.color="rgba(0,200,255,0.7)";hName.style.fontWeight="600";}
-      if(hSub)hSub.textContent="persiste sullo stesso argomento";
-      if(agBox){agBox.style.borderColor="rgba(0,200,255,0.3)";agBox.style.background="rgba(0,200,255,0.04)";}
-    } else {
-      if(hIcon)hIcon.textContent="🤖";
-      if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
-      if(hSub)hSub.textContent="routing automatico";
-      if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
-      if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
-    }
-  }
-
   inpEl.addEventListener("input",function(){
     clearTimeout(debT);
     debT=setTimeout(function(){
       var v=inpEl.value.trim();
-      if(!v){resetBox();lastId=null;return;}
+      var agBox=document.getElementById("liveAgentBox");
+      var hIcon=document.getElementById("liveAgentIcon");
+      var hName=document.getElementById("liveAgentName");
+      var hSub=document.getElementById("liveAgentSub");
+      var modeLbl=document.getElementById("modeLbl");
+      if(!v){
+        var pa=window._persistedAgent;
+        if(pa&&AG[pa]){
+          if(hIcon)hIcon.textContent=AG[pa].i;
+          if(hName){hName.textContent=AG[pa].l+" (attivo)";hName.style.color="rgba(0,200,255,0.7)";hName.style.fontWeight="600";}
+          if(hSub)hSub.textContent="persiste finché l'argomento è lo stesso";
+          if(agBox){agBox.style.borderColor="rgba(0,200,255,0.3)";agBox.style.background="rgba(0,200,255,0.04)";}
+        } else {
+          if(hIcon)hIcon.textContent="🤖";
+          if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
+          if(hSub)hSub.textContent="routing automatico";
+          if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
+          if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
+        }
+        lastId=null;return;
+      }
       var id=detect(v);
       if(id===lastId)return;
       lastId=id;
-      if(id&&window._persistedAgent&&id!==window._persistedAgent){window._persistedAgent=null;window._persistedCount=0;}
+      if(id&&window._persistedAgent&&id!==window._persistedAgent){window._persistedAgent=null;}
       if(id){
         if(hIcon)hIcon.textContent=AG[id].i;
         if(hName){hName.textContent=AG[id].l;hName.style.color="var(--accent)";hName.style.fontWeight="700";}
         if(hSub)hSub.textContent="verrà attivato automaticamente";
         if(agBox){agBox.style.borderColor="rgba(0,200,255,0.45)";agBox.style.background="rgba(0,200,255,0.07)";}
         if(modeLbl)modeLbl.innerHTML=AG[id].i+" "+AG[id].l;
-      } else {resetBox();}
+      } else {
+        if(hIcon)hIcon.textContent="🤖";
+        if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
+        if(hSub)hSub.textContent="routing automatico";
+        if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
+        if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
+      }
     },150);
   });
 })();
+
+// ═══════════════════ TOGGLE SPACES ═══════════════════
+function toggleSpaces(){
+  if(spacesOn){
+    spacesOn=false;spacesWaiting=false;
+    if(window.currentSpacesRec){try{window.currentSpacesRec.stop();}catch(e){}}
+    if(window.speechSynthesis)window.speechSynthesis.cancel();
+    var b=document.getElementById("heySpacesBtn");
+    var l=document.getElementById("heySpacesLabel");
+    var ic=document.getElementById("heySpacesIcon");
+    if(b){b.style.background="rgba(0,200,255,0.08)";b.style.borderColor="rgba(0,200,255,0.25)";}
+    if(l)l.textContent="Hey SPACES";
+    if(ic)ic.textContent="🎙️";
+    setMode("auto");return;
+  }
+  startSpaces();
+}
 
 // ═══════════════════════════════════════════════════════════════
 // LIVE AGENT DETECTION
@@ -1034,6 +1040,34 @@ async function loadNeuralData(){
       kgn+" nodi connessi nel grafo della conoscenza":"In costruzione...";
   }catch(e){console.log("Neural panel error:",e);}
 }
+// Parole chiave musica — specchio esatto di needsMusic backend
+function detectsMusicIntent(t){
+  var q=t.toLowerCase()
+    .replace(/[àáâ]/g,"a").replace(/[èéê]/g,"e")
+    .replace(/[ìí]/g,"i").replace(/[òó]/g,"o").replace(/[ùú]/g,"u");
+  return q.includes("canzone")||q.includes("brano")||q.includes("song")||
+    q.includes("componi")||q.includes("composizione")||
+    q.includes("ritornello")||q.includes("strofa")||q.includes("melodia")||
+    q.includes("testo canzone")||q.includes("musica per")||
+    q.includes("genera musica")||q.includes("crea musica")||
+    q.includes("scrivi una canzone")||q.includes("crea una canzone")||
+    q.includes("fammi una canzone")||q.includes("voglio una canzone")||
+    q.includes("canzone pop")||q.includes("canzone rock")||q.includes("canzone jazz")||
+    q.includes("canzone triste")||q.includes("canzone allegra");
+}
+
+// Parole chiave immagine
+function detectsImageIntent(t){
+  var q=t.toLowerCase()
+    .replace(/[àáâ]/g,"a").replace(/[èéê]/g,"e")
+    .replace(/[ìí]/g,"i").replace(/[òó]/g,"o").replace(/[ùú]/g,"u");
+  return q.includes("disegna")||q.includes("dipingi")||q.includes("illustra")||
+    (q.includes("immagine")&&(q.includes("crea")||q.includes("genera")||q.includes("fammi")||q.includes("fai")))||
+    (q.includes("foto")&&(q.includes("genera")||q.includes("crea")||q.includes("fai")))||
+    q.includes("genera un'immagine")||q.includes("crea un'immagine")||
+    q.includes("genera immagine")||q.includes("crea immagine");
+}
+
 async function sendMsg(){
   // Leggi testo PRIMA di tutto
   var text=inpEl.value.trim();
@@ -1083,6 +1117,39 @@ async function sendMsg(){
   else if(curMode==="counterfactual")msg="[COUNTERFACTUAL - analizza scenari alternativi di:] "+text;
   inpEl.value="";inpEl.style.height="auto";
   btnEl.disabled=true;
+  // ══════════════════════════════════════════════════════
+  // INTERCEPT: apri pannello dedicato per agenti speciali
+  // ══════════════════════════════════════════════════════
+  if(detectsMusicIntent(text)){
+    inpEl.value="";
+    // Pre-popola la descrizione nel pannello musica
+    var descEl=document.getElementById("musicDesc");
+    if(descEl) descEl.value=text;
+    // Pre-seleziona genere e mood dal testo
+    var q2=text.toLowerCase();
+    var genreEl=document.getElementById("musicGenre");
+    var moodEl=document.getElementById("musicMood");
+    if(genreEl){
+      if(q2.includes("jazz"))genreEl.value="jazz";
+      else if(q2.includes("rock"))genreEl.value="rock";
+      else if(q2.includes("classica")||q2.includes("classical"))genreEl.value="classical";
+      else if(q2.includes("elettronica")||q2.includes("electronic"))genreEl.value="electronic";
+      else if(q2.includes("folk"))genreEl.value="folk";
+      else if(q2.includes("blues"))genreEl.value="blues";
+      else genreEl.value="pop";
+    }
+    if(moodEl){
+      if(q2.includes("triste")||q2.includes("malinconica")||q2.includes("sad"))moodEl.value="sad";
+      else if(q2.includes("romantica")||q2.includes("romantico"))moodEl.value="romantic";
+      else if(q2.includes("energica")||q2.includes("energico")||q2.includes("veloce"))moodEl.value="energetic";
+      else if(q2.includes("calma")||q2.includes("calmo")||q2.includes("lenta"))moodEl.value="calm";
+      else if(q2.includes("drammatica")||q2.includes("dramatic"))moodEl.value="dramatic";
+      else moodEl.value="happy";
+    }
+    showMusicPanel();
+    return;
+  }
+
   addRow(text,"user");
   addTyping();
   try{
@@ -1099,11 +1166,8 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          // Persisti agente attivo
-          if(lastAgent!=="reasoner"&&lastAgent!=="auto"){
-            window._persistedAgent=lastAgent;
-          }
-          var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
+          if(lastAgent!=="reasoner"&&lastAgent!=="auto"){window._persistedAgent=lastAgent;}
+          var _AI={music_generator:"🎵",image_generator:"🎨",video_gen:"🎬",code:"💻",finance:"📈",
             crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
             travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
             security:"🛡️",quantum:"⚡",philosophy:"💭",history:"📚",creative:"✍️",
