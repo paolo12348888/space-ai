@@ -1,13 +1,7 @@
 spring:
   ai:
-    openai:
-      api-key: ${AI_API_KEY:}
-      base-url: ${AI_BASE_URL:https://api.deepseek.com}
-      chat:
-        options:
-          model: ${AI_MODEL:deepseek-chat}
-          max-tokens: ${AI_MAX_TOKENS:8096}
-          temperature: 0.7
+    # === Configurazione API nativa Anthropic ===
+    # Abilitare impostando space-ai.provider=anthropic
     anthropic:
       api-key: ${AI_API_KEY:}
       base-url: ${AI_BASE_URL:https://api.anthropic.com}
@@ -17,19 +11,34 @@ spring:
           max-tokens: ${AI_MAX_TOKENS:8096}
           temperature: 0.7
 
+    # === Configurazione API compatibile OpenAI ===
+    # Abilitare impostando space-ai.provider=openai (predefinito)
+    # Supporta OpenAI, Azure OpenAI, proxy API compatibili, ecc.
+    openai:
+      api-key: ${AI_API_KEY:}
+      base-url: ${AI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${AI_MODEL:gpt-4o}
+
+  # Modalità WEB SERVER per Render.com
   main:
     web-application-type: servlet
     banner-mode: off
 
+  # thread virtuali
   threads:
     virtual:
       enabled: true
 
+# === Configurazione personalizzata Space AI Java ===
+space-ai:
+  # Provider API: openai o anthropic
+  provider: ${SPACE_AI_PROVIDER:openai}
+
+# Log: in modalità CLI mostra solo WARN e superiori, per mantenere la console pulita
 server:
   port: ${PORT:10000}
-
-space-ai:
-  provider: ${SPACE_AI_PROVIDER:openai}
 
 logging:
   level:
