@@ -3493,12 +3493,16 @@ public class ChatController {
 
     // isAudio detection per musica
     private boolean needsMusic(String msg) {
-        String q = msg.toLowerCase();
-        return q.contains("crea una canzone") || q.contains("componi") ||
-               q.contains("scrivi una canzone") || q.contains("musica per") ||
-               q.contains("genera musica") || q.contains("crea musica") ||
-               q.contains("melodia") || q.contains("canzone su") ||
-               q.contains("music") || q.contains("song");
+        String q = msg.toLowerCase()
+            .replace("\u00e0","a").replace("\u00e8","e")
+            .replace("\u00ec","i").replace("\u00f2","o").replace("\u00f9","u");
+        return q.contains("canzone") || q.contains("brano") || q.contains("componi") ||
+               q.contains("melodia") || q.contains("ritornello") || q.contains("strofa") ||
+               q.contains("musica per") || q.contains("genera musica") || q.contains("crea musica") ||
+               q.contains("scrivi una canzone") || q.contains("crea una canzone") ||
+               q.contains("fammi una canzone") || q.contains("voglio una canzone") ||
+               q.contains("testo canzone") || q.contains("song") ||
+               (q.contains("music") && q.length() > 10);
     }
 
     @PostMapping("/audio/generate")
@@ -4880,6 +4884,7 @@ public class ChatController {
                     mRespMap.put("status","ok"); mRespMap.put("mode","music_gen");
                     mRespMap.put("sessionId",sessionId); mRespMap.put("musicData",mb);
                     mRespMap.put("response","\uD83C\uDFB5 Canzone generata! Usa il player ABCJS per ascoltarla.");
+                    mRespMap.put("agents", "[music_generator]");
                     return ResponseEntity.ok(mRespMap);
                 } catch (Exception me) { log.warn("MusicGen inline: {}", me.getMessage()); }
             }
@@ -5061,8 +5066,17 @@ public class ChatController {
             boolean isVisualCreative = curMode != null && curMode.equals("visual_creative") ||
                 q.contains("disegna") || q.contains("illustra") ||
                 q.contains("crea svg") || q.contains("genera svg");
-            boolean isImg = q.contains("genera immagine") || q.contains("crea immagine") ||
-                    (q.contains("immagine") && (q.contains("crea") || q.contains("genera")));
+            boolean isImg =
+                q.contains("genera immagine") || q.contains("crea immagine") ||
+                q.contains("genera un'immagine") || q.contains("crea un'immagine") ||
+                q.contains("genera un immagine") || q.contains("disegna") ||
+                q.contains("dipingi") || q.contains("illustra") ||
+                q.contains("foto di") || q.contains("genera foto") ||
+                q.contains("crea foto") || q.contains("fammi un'immagine") ||
+                q.contains("fammi una foto") || q.contains("immagine di") ||
+                (q.contains("immagine") && (q.contains("crea") || q.contains("genera") ||
+                 q.contains("fai") || q.contains("fammi") || q.contains("voglio"))) ||
+                (q.contains("foto") && (q.contains("genera") || q.contains("crea") || q.contains("fai")));
             // ── VISUAL CREATIVE: pipeline ibrida SVG + Pollinations ─────────
             if (isVisualCreative && !isImg) {
                 try {
@@ -5127,8 +5141,12 @@ public class ChatController {
                 saveMessages(sessionId, userMessage, textResp, supabaseUrl, supabaseKey);
                 if (imgResult.startsWith("IMAGE:"))
                     return ResponseEntity.ok(Map.of("response", textResp, "image", imgResult.substring(6),
-                            "imageType", "image/jpeg", "status", "ok", "model", model, "sessionId", sessionId));
-                return ResponseEntity.ok(Map.of("response", imgResult, "status", "ok", "model", model, "sessionId", sessionId));
+                            "imageType", "image/jpeg", "status", "ok", "model", model,
+                            "agents", "[image_generator]", "sessionId", sessionId));
+                return ResponseEntity.ok(Map.of("response", imgResult.startsWith("ERRORE") ? imgResult : textResp,
+                            "image", imgResult.startsWith("IMAGE_REAL:") ? imgResult.substring(11) : "",
+                            "status", "ok", "model", model,
+                            "agents", "[image_generator]", "sessionId", sessionId));
             }
             // Thinking mode (come Claude extended thinking)
             boolean useThinking = "true".equals(thinkingFlag) ||
