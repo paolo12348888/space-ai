@@ -1,61 +1,54 @@
-import os, glob, sys, shutil
+#!/usr/bin/env python3
+"""
+SPACE AI — Start script per Render.com
+Avvia il JAR Spring Boot in modalità web server (non CLI)
+"""
+import os
+import subprocess
+import sys
+import glob
 
-print("🌌 SPACE AI — Avvio su Render")
-
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Cerca Java in tutti i path possibili senza scaricarlo
-java_candidates = [
-    "/usr/bin/java",
-    "/usr/local/bin/java",
-    "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-    "/usr/lib/jvm/java-21/bin/java",
-    "/usr/lib/jvm/java-17-openjdk-amd64/bin/java",
-    "/usr/lib/jvm/temurin-21/bin/java",
-    os.path.join(PROJECT_DIR, ".java_runtime/bin/java"),
-    os.path.join(os.path.expanduser("~"), ".java_runtime/bin/java"),
-]
-
-java_bin = None
-for c in java_candidates:
-    if os.path.isfile(c) and os.access(c, os.X_OK):
-        java_bin = c
-        break
-
-if not java_bin:
-    java_bin = shutil.which("java")
-
-if not java_bin:
-    # Ultima risorsa: cerca nella build directory (installato durante build.sh)
-    for root, dirs, files in os.walk("/opt/render"):
-        if "java" in files:
-            candidate = os.path.join(root, "java")
-            if os.access(candidate, os.X_OK):
-                java_bin = candidate
-                break
-
-if not java_bin:
-    print("❌ Java non trovato! Assicurati che build.sh installi Java correttamente.")
+# Trova il JAR compilato
+jar_files = glob.glob("target/*.jar")
+if not jar_files:
+    print("ERRORE: nessun JAR trovato in target/", flush=True)
     sys.exit(1)
 
-print(f"   Java: {java_bin}")
+jar = jar_files[0]
+print(f"Avvio {jar}...", flush=True)
 
-jars = glob.glob(os.path.join(PROJECT_DIR, "target/space-ai-*.jar"))
-if not jars:
-    print("❌ JAR non trovato in target/")
-    sys.exit(1)
+# Java runtime
+java_home = os.environ.get("JAVA_HOME", "")
+if not java_home:
+    # Usa il Java copiato dal build.sh
+    local_java = os.path.join(os.getcwd(), ".java_runtime", "jdk-21")
+    if os.path.exists(local_java):
+        java_home = local_java
+    else:
+        java_home = os.path.expanduser("~/.java/jdk-21")
 
-jar  = jars[0]
-port = os.environ.get("PORT", "10000")
-print(f"   JAR: {jar}  |  Porta: {port}")
+java_bin = os.path.join(java_home, "bin", "java") if java_home else "java"
 
+# Porta da Render
+port = os.environ.get("PORT", "8080")
+
+# Comando Spring Boot in modalità web
 cmd = [
     java_bin,
-    "-Xmx400m", "-Xms128m",
+    "--enable-preview",
+    "-Xmx512m",
+    "-Xms256m",
     f"-Dserver.port={port}",
-    "-Dspring.main.web-application-type=servlet",
-    "-Dspring.main.banner-mode=off",
+    "-Dspring.main.web-application-type=servlet",  # FORZA modalità web
+    "-Dspring.profiles.active=default",
+    "--enable-native-access=ALL-UNNAMED",
+    "-Dfile.encoding=UTF-8",
     "-jar", jar
 ]
 
-os.execv(java_bin, cmd)
+print(f"Comando: {' '.join(cmd[:4])} ... -jar {jar}", flush=True)
+print(f"Porta: {port}", flush=True)
+
+# Avvia il processo
+proc = subprocess.run(cmd)
+sys.exit(proc.returncode)
