@@ -179,20 +179,23 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <!-- Box agente live -->
-        <div id="liveAgentBox" style="margin-top:18px;background:rgba(13,20,33,0.9);border:1px solid rgba(0,200,255,0.18);border-radius:16px;padding:16px 22px;display:flex;align-items:center;gap:14px;max-width:420px;width:90%;transition:all .3s">
-          <span id="liveAgentIcon" style="font-size:1.6rem;transition:all .3s">🤖</span>
-          <div>
-            <div id="liveAgentName" style="color:#4a6080;font-size:.88rem;font-family:'Syne',sans-serif;font-weight:500;transition:all .3s">Scrivi qualcosa per attivare l&apos;agente giusto...</div>
-            <div id="liveAgentSub" style="font-size:.68rem;color:#2a3a50;font-family:monospace;margin-top:2px">routing automatico</div>
-          </div>
+        <div class="chips">
+          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
+          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
+          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
+          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
+          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
+          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
+          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
+          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
+          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
+          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
+          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
+          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
+          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
+          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
+          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
         </div>
-        <!-- Bottone Hey SPACES -->
-        <button id="heySpacesBtn" onclick="toggleSpaces()" style="margin-top:16px;display:flex;align-items:center;gap:10px;background:rgba(0,200,255,0.08);border:1.5px solid rgba(0,200,255,0.25);border-radius:50px;padding:10px 24px;color:var(--accent);font-family:'Syne',sans-serif;font-size:.88rem;font-weight:600;cursor:pointer;transition:all .25s">
-          <span id="heySpacesIcon" style="font-size:1.1rem">🎙️</span>
-          <span id="heySpacesLabel">Hey SPACES</span>
-          <span style="font-size:.7rem;opacity:.5;margin-left:2px">AI vocale</span>
-        </button>
 
         <!-- Box agente live — appare SOLO mentre si digita, nascosto di default -->
         <div id="liveAgentHint" style="display:none;margin-top:14px;
@@ -514,7 +517,6 @@ function setMode(m){
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
 function startSpaces(){
   curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
-  (function(){var b=document.getElementById("heySpacesBtn");var l=document.getElementById("heySpacesLabel");var ic=document.getElementById("heySpacesIcon");if(b){b.style.background="rgba(0,200,255,0.22)";b.style.borderColor="rgba(0,200,255,0.8)";}if(l)l.textContent="⏹ Stop SPACES";if(ic)ic.textContent="🔴";})();
   addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
   speak("SPACES attivato. Sono pronto.",null);
 }
@@ -585,95 +587,6 @@ renderChatHistory();
   }catch(e){}
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
-
-(function(){
-  var AG={
-    music_generator:{i:"🎵",l:"Compositore Musicale",r:/canzone|brano|song|componi|melodia|ritornello|strofa|musica per/},
-    image_generator:{i:"🎨",l:"Generatore Immagini",r:/disegna|dipingi|illustra|genera.*immagin|crea.*immagin|immagine di|foto di/},
-    video_gen:      {i:"🎬",l:"Video AI",r:/genera.*video|crea.*video|fai.*video|video di/},
-    code:           {i:"💻",l:"Programmatore",r:/python|javascript|java|codice|programma|script|debug|bug|html|sql|react/},
-    finance:        {i:"📈",l:"Analista Finanziario",r:/macd|rsi|borsa|azioni|trading|investimento|analisi fondamentale/},
-    crypto:         {i:"₿",l:"Esperto Crypto",r:/bitcoin|ethereum|crypto|criptovalut|defi|nft/},
-    research:       {i:"📰",l:"Ricercatore",r:/notizie|news|ultime notizie|cronaca/},
-    medical:        {i:"🩺",l:"Consulente Medico",r:/sintomi|malattia|farmaco|medico|salute|diagnosi/},
-    legal:          {i:"⚖️",l:"Consulente Legale",r:/legge|contratto|diritto|avvocato/},
-    cooking:        {i:"👨‍🍳",l:"Chef",r:/ricetta|cucinare|ingredienti/},
-    travel:         {i:"✈️",l:"Viaggi",r:/viaggio|vacanza|hotel|volo/},
-    fitness:        {i:"💪",l:"Fitness",r:/allenamento|palestra|dieta/},
-    math:           {i:"🔢",l:"Matematico",r:/calcola|matematica|equazione/},
-    psychology:     {i:"🧠",l:"Psicologo",r:/psicolog|ansia|depress/},
-    translator:     {i:"🌍",l:"Traduttore",r:/traduci|in inglese|traduzione/},
-    security:       {i:"🛡️",l:"Security",r:/sicurezza.*sistema|hacking|pentest/},
-    quantum:        {i:"⚡",l:"Quantum AI",r:/quantum|qubit/},
-    ultra_review:   {i:"🔍",l:"Ultra Review",r:/analisi critica|analisi approfondita|pro e contro/}
-  };
-  function detect(t){
-    var q=t.toLowerCase().replace(/[àáâ]/g,"a").replace(/[èéê]/g,"e").replace(/[ìí]/g,"i").replace(/[òó]/g,"o").replace(/[ùú]/g,"u");
-    for(var k in AG){if(AG[k].r&&AG[k].r.test(q))return k;}
-    return null;
-  }
-  window._detectAgent=detect;
-  var debT=null,lastId=null;
-  inpEl.addEventListener("input",function(){
-    clearTimeout(debT);
-    debT=setTimeout(function(){
-      var v=inpEl.value.trim();
-      var hIcon=document.getElementById("liveAgentIcon");
-      var hName=document.getElementById("liveAgentName");
-      var hSub=document.getElementById("liveAgentSub");
-      var agBox=document.getElementById("liveAgentBox");
-      var modeLbl=document.getElementById("modeLbl");
-      if(!v){
-        var pa=window._persistedAgent;
-        if(pa&&AG[pa]){
-          if(hIcon)hIcon.textContent=AG[pa].i;
-          if(hName){hName.textContent=AG[pa].l+" (attivo)";hName.style.color="rgba(0,200,255,0.7)";hName.style.fontWeight="700";}
-          if(hSub)hSub.textContent="persiste finché cambi argomento";
-          if(agBox){agBox.style.borderColor="rgba(0,200,255,0.35)";agBox.style.background="rgba(0,200,255,0.05)";}
-        } else {
-          if(hIcon)hIcon.textContent="🤖";
-          if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
-          if(hSub)hSub.textContent="routing automatico";
-          if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
-          if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
-        }
-        lastId=null;return;
-      }
-      var id=detect(v);
-      if(id===lastId)return;
-      lastId=id;
-      if(id&&window._persistedAgent&&id!==window._persistedAgent)window._persistedAgent=null;
-      if(id){
-        if(hIcon)hIcon.textContent=AG[id].i;
-        if(hName){hName.textContent=AG[id].l;hName.style.color="var(--accent)";hName.style.fontWeight="700";}
-        if(hSub)hSub.textContent="verrà attivato automaticamente";
-        if(agBox){agBox.style.borderColor="rgba(0,200,255,0.45)";agBox.style.background="rgba(0,200,255,0.07)";}
-        if(modeLbl)modeLbl.innerHTML=AG[id].i+" "+AG[id].l;
-      } else {
-        if(hIcon)hIcon.textContent="🤖";
-        if(hName){hName.textContent="Scrivi qualcosa per attivare l'agente giusto...";hName.style.color="#4a6080";hName.style.fontWeight="500";}
-        if(hSub)hSub.textContent="routing automatico";
-        if(agBox){agBox.style.borderColor="rgba(0,200,255,0.18)";agBox.style.background="rgba(13,20,33,0.9)";}
-        if(modeLbl)modeLbl.innerHTML="&#129302; Auto";
-      }
-    },150);
-  });
-})();
-
-function toggleSpaces(){
-  if(spacesOn){
-    spacesOn=false;spacesWaiting=false;
-    if(window.currentSpacesRec){try{window.currentSpacesRec.stop();}catch(e){}}
-    if(window.speechSynthesis)window.speechSynthesis.cancel();
-    var b=document.getElementById("heySpacesBtn");
-    var l=document.getElementById("heySpacesLabel");
-    var ic=document.getElementById("heySpacesIcon");
-    if(b){b.style.background="rgba(0,200,255,0.08)";b.style.borderColor="rgba(0,200,255,0.25)";}
-    if(l)l.textContent="Hey SPACES";if(ic)ic.textContent="🎙️";
-    setMode("auto");return;
-  }
-  startSpaces();
-}
 
 // ═══════════════════════════════════════════════════════════════
 // LIVE AGENT DETECTION
@@ -1092,7 +1005,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:curMode||"auto",activeAgent:window._persistedAgent||""})
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||""})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
@@ -1102,33 +1015,6 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          // ── PERSISTENZA AGENTE ──
-          if(lastAgent!=="reasoner"&&lastAgent!=="auto"&&lastAgent!==""){
-            window._persistedAgent=lastAgent;
-            // Aggiorna box agente live
-            var _icons={music_generator:"🎵",image_generator:"🎨",video_gen:"🎬",code:"💻",
-              finance:"📈",crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
-              travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
-              security:"🛡️",quantum:"⚡",ultra_review:"🧠",reasoner:"🤖"};
-            var _labels={music_generator:"Musica",image_generator:"Immagini",video_gen:"Video",
-              code:"Codice",finance:"Finanza",crypto:"Crypto",research:"Notizie",
-              medical:"Medico",legal:"Legale",cooking:"Chef",travel:"Viaggi",
-              fitness:"Fitness",math:"Matematica",psychology:"Psicologia",
-              translator:"Traduttore",security:"Security",quantum:"Quantum",
-              ultra_review:"Ultra Review",reasoner:"Auto"};
-            var _ic=_icons[lastAgent]||"🤖";
-            var _lb=_labels[lastAgent]||lastAgent.replace(/_/g," ");
-            var _ml=document.getElementById("modeLbl");
-            if(_ml) _ml.innerHTML=_ic+" "+_lb+' <span style="font-size:.6rem;opacity:.5">(attivo)</span>';
-            var _hIcon=document.getElementById("liveAgentIcon");
-            var _hName=document.getElementById("liveAgentName");
-            var _hSub=document.getElementById("liveAgentSub");
-            var _agBox=document.getElementById("liveAgentBox");
-            if(_hIcon) _hIcon.textContent=_ic;
-            if(_hName){_hName.textContent=_lb+" (attivo)";_hName.style.color="rgba(0,200,255,0.8)";_hName.style.fontWeight="700";}
-            if(_hSub) _hSub.textContent="persiste finché cambi argomento";
-            if(_agBox){_agBox.style.borderColor="rgba(0,200,255,0.4)";_agBox.style.background="rgba(0,200,255,0.06)";}
-          }
           var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
             crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
             travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
