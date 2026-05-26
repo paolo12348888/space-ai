@@ -179,35 +179,63 @@ textarea::placeholder{color:var(--muted)}
         <img id="logoWL" class="wlogo" src="" alt="SPACE AI"/>
         <div class="whi">Ciao, sono <em>SPACE AI</em></div>
         <p class="wsub">148 agenti · 12 motori esclusivi · Quantum · Emotion · Dream · Temporal · Adversarial</p>
-        <div class="chips">
-          <div class="chip" onclick="qs('Come si usa il MACD nel trading?')">&#128200; MACD Trading</div>
-          <div class="chip" onclick="qs('Scrivi una funzione Python per leggere CSV')">&#128013; Python CSV</div>
-          <div class="chip" onclick="qs('Genera immagine di un tramonto cosmico')">&#127912; Genera immagine</div>
-          <div class="chip" onclick="qs('Notizie mercati finanziari oggi')">&#128269; Mercati live</div>
-          <div class="chip" onclick="qs('Analisi fondamentale Tesla TSLA')">&#128185; Analisi azioni</div>
-          <div class="chip" onclick="qs('Spiega come funziona il calcolo quantistico')">&#9889; Quantum AI</div>
-          <div class="chip" onclick="setMode('temporal');qs('Evoluzione e futuro dell intelligenza artificiale')">&#8987; Temporal</div>
-          <div class="chip" onclick="setMode('dream');qs('Genera idee creative per una startup AI')">&#129704; Dream</div>
-          <div class="chip" onclick="setMode('socratic');qs('Come funziona la blockchain?')">&#129302; Socratic</div>
-          <div class="chip" onclick="startSpaces()">&#127756; Attiva SPACES</div>
-          <div class="chip" onclick="setMode('visual_creative');qs('Disegna un paesaggio notturno con luna e stelle')">&#127912; Creativo Visivo</div>
-          <div class="chip" onclick="qs('Cerca le ultime notizie di oggi in Italia')">&#128269; Google Live</div>
-          <div class="chip" onclick="qs('Analizza e confronta i prezzi Bitcoin ed Ethereum oggi')">&#129302; Agent Loop</div>
-          <div class="chip" onclick="showGithubPanel()">&#128049; GitHub</div>
-          <div class="chip" onclick="showManusPanel()">&#129302; Manus Agent</div>
-        </div>
-
-        <!-- Box agente live — appare SOLO mentre si digita, nascosto di default -->
-        <div id="liveAgentHint" style="display:none;margin-top:14px;
-          background:rgba(0,200,255,0.07);border:1px solid rgba(0,200,255,0.3);
-          border-radius:14px;padding:14px 20px;align-items:center;gap:14px;
-          max-width:400px;width:90%;animation:agPulse 2s ease-in-out infinite">
-          <span id="liveAgentIcon" style="font-size:1.5rem">🤖</span>
+        <!-- Box agente live — sempre visibile, si aggiorna mentre si digita -->
+        <div id="liveAgentBox" style="
+          margin-top:20px;
+          background:rgba(13,20,33,0.92);
+          border:1px solid rgba(0,200,255,0.2);
+          border-radius:16px;
+          padding:18px 24px;
+          display:flex;
+          align-items:center;
+          gap:14px;
+          max-width:420px;
+          width:88%;
+          transition:all .3s ease;
+          box-shadow:0 0 20px rgba(0,200,255,0.06);
+        ">
+          <span id="liveAgentIcon" style="font-size:1.8rem;transition:all .3s">🤖</span>
           <div>
-            <div id="liveAgentName" style="color:var(--accent);font-weight:700;font-size:.95rem;font-family:'Syne',sans-serif"></div>
-            <div style="color:#3a5070;font-size:.72rem;font-family:monospace;margin-top:2px">verrà attivato automaticamente</div>
+            <div id="liveAgentName" style="
+              color:#4a6080;
+              font-size:.9rem;
+              font-family:'Syne',sans-serif;
+              font-weight:500;
+              transition:all .3s;
+              line-height:1.3;
+            ">Scrivi qualcosa per attivare l&apos;agente giusto...</div>
+            <div id="liveAgentSub" style="
+              font-size:.68rem;
+              color:#2a3a50;
+              font-family:monospace;
+              margin-top:3px;
+              letter-spacing:.3px;
+            ">routing automatico</div>
           </div>
         </div>
+
+        <!-- Bottone Hey SPACES centrale -->
+        <button id="heySpacesBtn" onclick="toggleSpaces()" style="
+          margin-top:18px;
+          display:flex;
+          align-items:center;
+          gap:10px;
+          background:rgba(0,200,255,0.08);
+          border:1.5px solid rgba(0,200,255,0.28);
+          border-radius:50px;
+          padding:12px 28px;
+          color:var(--accent);
+          font-family:'Syne',sans-serif;
+          font-size:.92rem;
+          font-weight:600;
+          cursor:pointer;
+          transition:all .25s;
+          letter-spacing:.3px;
+        ">
+          <span id="heySpacesIcon" style="font-size:1.2rem">🎙️</span>
+          <span id="heySpacesLabel">Hey SPACES</span>
+          <span style="font-size:.72rem;opacity:.5;margin-left:4px">AI vocale</span>
+        </button>
       </div>
     </div>
 
@@ -517,6 +545,14 @@ function setMode(m){
 var spacesWaiting=false; // true mentre aspetta risposta AI o parla
 function startSpaces(){
   curMode="spaces";spacesOn=true;spacesWaiting=false;setMode("spaces");closeSB();
+  (function(){
+    var b=document.getElementById("heySpacesBtn");
+    var l=document.getElementById("heySpacesLabel");
+    var ic=document.getElementById("heySpacesIcon");
+    if(b){b.style.background="rgba(0,200,255,0.2)";b.style.borderColor="rgba(0,200,255,0.8)";b.style.boxShadow="0 0 14px rgba(0,200,255,0.3)";}
+    if(l)l.textContent="⏹ Stop SPACES";
+    if(ic)ic.textContent="🔴";
+  })();
   addRow("&#127756; SPACES attivato! Sono in ascolto. Parla o scrivi.","ai");
   speak("SPACES attivato. Sono pronto.",null);
 }
@@ -587,6 +623,113 @@ renderChatHistory();
   }catch(e){}
 })();
 inpEl.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}});
+
+// ═══════════════════════════════════════════════════════
+// LIVE AGENT DETECTION — aggiorna box mentre si digita
+// ═══════════════════════════════════════════════════════
+(function(){
+  var AG={
+    music_generator:{i:"🎵",l:"Compositore Musicale",  r:/canzone|brano|song|componi|melodia|ritornello|strofa/},
+    image_generator:{i:"🎨",l:"Generatore Immagini",   r:/disegna|dipingi|illustra|genera.*immagin|crea.*immagin|immagine di|foto di/},
+    video_gen:      {i:"🎬",l:"Video AI",               r:/genera.*video|crea.*video|fai.*video/},
+    code:           {i:"💻",l:"Programmatore",          r:/python|javascript|java|codice|programma|script|debug|sql|html|react/},
+    finance:        {i:"📈",l:"Analista Finanziario",   r:/macd|rsi|borsa|azioni|trading|investimento/},
+    crypto:         {i:"₿", l:"Esperto Crypto",         r:/bitcoin|ethereum|crypto|criptovalut|defi|nft/},
+    research:       {i:"📰",l:"Ricercatore",            r:/notizie|news|ultime notizie|cronaca/},
+    medsci:         {i:"🔬",l:"MedSci - Letteratura Scientifica", r:/letteratura scientifica|linee guida|diagnosi differenziale|fisiopatolog|epidemiolog|oncolog|cardiolog|neurolog|tumore|cancro|immunoterapia|meta-analisi|cochrane|pubmed/},
+    medical:        {i:"🩺",l:"Consulente Medico",      r:/sintomi|malattia|farmaco|medico|salute|diagnosi/},
+    legal:          {i:"⚖️",l:"Consulente Legale",      r:/legge|contratto|diritto|avvocato/},
+    cooking:        {i:"👨‍🍳",l:"Chef & Ricette",       r:/ricetta|cucinare|ingredienti/},
+    travel:         {i:"✈️",l:"Esperto Viaggi",         r:/viaggio|vacanza|hotel|volo/},
+    fitness:        {i:"💪",l:"Coach Fitness",          r:/allenamento|palestra|dieta/},
+    math:           {i:"🔢",l:"Matematico",             r:/calcola|matematica|equazione/},
+    psychology:     {i:"🧠",l:"Psicologo",              r:/psicolog|ansia|depress/},
+    translator:     {i:"🌍",l:"Traduttore",             r:/traduci|in inglese|traduzione/},
+    security:       {i:"🛡️",l:"Security Analyst",      r:/vulnerabilit|hacking|pentest|malware/},
+    quantum:        {i:"⚡",l:"Quantum AI",             r:/quantum|qubit/},
+    ultra_review:   {i:"🔍",l:"Ultra Review",           r:/analisi critica|analisi approfondita|pro e contro/}
+  };
+  function detect(t){
+    var q=t.toLowerCase()
+      .replace(/[àáâ]/g,"a").replace(/[èéê]/g,"e")
+      .replace(/[ìí]/g,"i").replace(/[òó]/g,"o").replace(/[ùú]/g,"u");
+    for(var k in AG){if(AG[k].r&&AG[k].r.test(q))return k;}
+    return null;
+  }
+  window._detectAgent=detect;
+
+  function updateBox(id){
+    var box=document.getElementById("liveAgentBox");
+    var ico=document.getElementById("liveAgentIcon");
+    var nam=document.getElementById("liveAgentName");
+    var sub=document.getElementById("liveAgentSub");
+    var lbl=document.getElementById("modeLbl");
+    if(!box)return;
+    if(id&&AG[id]){
+      if(ico)ico.textContent=AG[id].i;
+      if(nam){nam.textContent=AG[id].l;nam.style.color="var(--accent)";nam.style.fontWeight="700";}
+      if(sub)sub.textContent="verrà attivato automaticamente";
+      box.style.borderColor="rgba(0,200,255,0.5)";
+      box.style.background="rgba(0,200,255,0.08)";
+      box.style.boxShadow="0 0 16px rgba(0,200,255,0.12)";
+      if(lbl)lbl.innerHTML=AG[id].i+" "+AG[id].l;
+    } else {
+      var pa=window._persistedAgent;
+      if(pa&&AG[pa]){
+        if(ico)ico.textContent=AG[pa].i;
+        if(nam){nam.textContent=AG[pa].l+" (attivo)";nam.style.color="rgba(0,200,255,0.7)";nam.style.fontWeight="600";}
+        if(sub)sub.textContent="persiste finché cambi argomento";
+        box.style.borderColor="rgba(0,200,255,0.3)";
+        box.style.background="rgba(0,200,255,0.04)";
+        box.style.boxShadow="none";
+      } else {
+        if(ico)ico.textContent="🤖";
+        if(nam){nam.textContent="Scrivi qualcosa per attivare l'agente giusto...";nam.style.color="#4a6080";nam.style.fontWeight="500";}
+        if(sub)sub.textContent="routing automatico";
+        box.style.borderColor="rgba(0,200,255,0.2)";
+        box.style.background="rgba(13,20,33,0.92)";
+        box.style.boxShadow="none";
+        if(lbl)lbl.innerHTML="&#129302; Auto";
+      }
+    }
+  }
+
+  var debT=null,lastId=null;
+  inpEl.addEventListener("input",function(){
+    clearTimeout(debT);
+    debT=setTimeout(function(){
+      var v=inpEl.value.trim();
+      if(!v){updateBox(null);lastId=null;return;}
+      var id=detect(v);
+      if(id===lastId)return;
+      lastId=id;
+      if(id&&window._persistedAgent&&id!==window._persistedAgent)
+        window._persistedAgent=null;
+      updateBox(id);
+    },150);
+  });
+  window._updateAgentBox=updateBox;
+})();
+
+// ═══════════════════════════════════════════════════════
+// TOGGLE SPACES
+// ═══════════════════════════════════════════════════════
+function toggleSpaces(){
+  if(spacesOn){
+    spacesOn=false;spacesWaiting=false;
+    if(window.currentSpacesRec){try{window.currentSpacesRec.stop();}catch(e){}}
+    if(window.speechSynthesis)window.speechSynthesis.cancel();
+    var b=document.getElementById("heySpacesBtn");
+    var l=document.getElementById("heySpacesLabel");
+    var ic=document.getElementById("heySpacesIcon");
+    if(b){b.style.background="rgba(0,200,255,0.08)";b.style.borderColor="rgba(0,200,255,0.28)";}
+    if(l)l.textContent="Hey SPACES";
+    if(ic)ic.textContent="🎙️";
+    setMode("auto");
+    return;
+  }
+  startSpaces();
+}
 
 // ═══════════════════════════════════════════════════════════════
 // LIVE AGENT DETECTION
@@ -1005,7 +1148,7 @@ async function sendMsg(){
     var res=await fetch("/api/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||""})
+      body:JSON.stringify({message:msg,sessionId:SID,imageBase64:imgBase64||"",mode:curMode||"auto",activeAgent:window._persistedAgent||""})
     });
     removeTyping();
     if(!res.ok){addRow("Errore server: "+res.status,"err");}
@@ -1015,27 +1158,32 @@ async function sendMsg(){
       else{
         if(data.agents){
           lastAgent=data.agents.replace("[","").replace("]","").split(",")[0].trim()||"reasoner";
-          var _AI={music_generator:"🎵",image_generator:"🎨",code:"💻",finance:"📈",
-            crypto:"₿",research:"📰",medical:"🩺",legal:"⚖️",cooking:"👨‍🍳",
-            travel:"✈️",fitness:"💪",math:"🔢",psychology:"🧠",translator:"🌍",
-            security:"🛡️",quantum:"⚡",philosophy:"💭",history:"📚",creative:"✍️",
+          // Persisti agente attivo
+          if(lastAgent!=="reasoner"&&lastAgent!=="auto"&&lastAgent!==""){
+            window._persistedAgent=lastAgent;
+          }
+          var _AI={music_generator:"🎵",image_generator:"🎨",video_gen:"🎬",code:"💻",
+            finance:"📈",crypto:"₿",research:"📰",medsci:"🔬",medical:"🩺",
+            legal:"⚖️",cooking:"👨‍🍳",travel:"✈️",fitness:"💪",math:"🔢",
+            psychology:"🧠",translator:"🌍",security:"🛡️",quantum:"⚡",
+            ultra_review:"🔍",philosophy:"💭",history:"📚",creative:"✍️",
             startup:"🚀",debug:"🔧",science:"🔬",ai:"🤖",reasoner:"🤖"};
-          var _AL={music_generator:"Musica",image_generator:"Immagini",code:"Codice",
-            finance:"Finanza",crypto:"Crypto",research:"Notizie",medical:"Medico",
-            legal:"Legale",cooking:"Chef",travel:"Viaggi",fitness:"Fitness",
-            math:"Matematica",psychology:"Psicologia",translator:"Traduttore",
-            security:"Security",quantum:"Quantum",philosophy:"Filosofia",
-            history:"Storia",creative:"Scrittore",startup:"Startup",
-            debug:"Debug",science:"Scienza",ai:"AI",reasoner:"Auto"};
+          var _AL={music_generator:"Musica",image_generator:"Immagini",video_gen:"Video",
+            code:"Codice",finance:"Finanza",crypto:"Crypto",research:"Notizie",
+            medsci:"MedSci",medical:"Medico",legal:"Legale",cooking:"Chef",
+            travel:"Viaggi",fitness:"Fitness",math:"Matematica",psychology:"Psicologia",
+            translator:"Traduttore",security:"Security",quantum:"Quantum",
+            ultra_review:"Ultra Review",philosophy:"Filosofia",history:"Storia",
+            creative:"Scrittore",startup:"Startup",debug:"Debug",science:"Scienza",
+            ai:"AI",reasoner:"Auto"};
           var ml=document.getElementById("modeLbl");
           if(ml){
             var ic=_AI[lastAgent]||"🤖";
             var lb=_AL[lastAgent]||lastAgent.replace(/_/g," ");
-            ml.innerHTML=ic+" "+lb;
+            ml.innerHTML=ic+" "+lb+' <span style="font-size:.6rem;opacity:.45">(attivo)</span>';
           }
-          // Nascondi hint dopo invio
-          var lh=document.getElementById("liveAgentHint");
-          if(lh) lh.style.display="none";
+          // Aggiorna box agente live con agente attivo
+          if(window._updateAgentBox) window._updateAgentBox(null);
         }
         lastQuery=text;
         // ── Music Gen ─────────────────────────────────────────────────
