@@ -1,11 +1,11 @@
 spring:
   ai:
     openai:
-      api-key: ${AI_API_KEY:}
-      base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
+      api-key: \${AI_API_KEY:}
+      base-url: \${AI_BASE_URL:https://api.groq.com/openai/v1}
       chat:
         options:
-          model: ${AI_MODEL:llama-3.3-70b-versatile}
+          model: \${AI_MODEL:llama-3.3-70b-versatile}
 
   main:
     web-application-type: servlet
@@ -16,10 +16,10 @@ spring:
       enabled: true
 
 server:
-  port: ${PORT:10000}
+  port: \${PORT:10000}
 
 space-ai:
-  provider: ${SPACE_AI_PROVIDER:openai}
+  provider: \${SPACE_AI_PROVIDER:openai}
 
 logging:
   level:
