@@ -1,11 +1,22 @@
 spring:
   ai:
-    openai:
-      api-key: \${AI_API_KEY:}
-      base-url: \${AI_BASE_URL:https://api.groq.com/openai/v1}
+    # === Configurazione API nativa Anthropic ===
+    anthropic:
+      api-key: ${AI_API_KEY:}
+      base-url: ${AI_BASE_URL:https://api.anthropic.com}
       chat:
         options:
-          model: \${AI_MODEL:llama-3.3-70b-versatile}
+          model: ${AI_MODEL:claude-sonnet-4-20250514}
+          max-tokens: ${AI_MAX_TOKENS:8096}
+          temperature: 0.7
+
+    # === Configurazione API compatibile OpenAI ===
+    openai:
+      api-key: ${AI_API_KEY:}
+      base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
+      chat:
+        options:
+          model: ${AI_MODEL:llama-3.3-70b-versatile}
 
   main:
     web-application-type: servlet
@@ -15,14 +26,17 @@ spring:
     virtual:
       enabled: true
 
+# === Server web ===
 server:
-  port: \${PORT:10000}
+  port: ${PORT:10000}
 
+# === Configurazione personalizzata Space AI Java ===
 space-ai:
-  provider: \${SPACE_AI_PROVIDER:openai}
+  provider: ${SPACE_AI_PROVIDER:openai}
 
 logging:
   level:
     root: WARN
     com.spaceai: INFO
-    org.springframework.web: INFO
+    org.springframework: WARN
+    org.jline: WARN
