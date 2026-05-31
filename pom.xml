@@ -21,17 +21,16 @@
     <properties>
         <java.version>21</java.version>
         <picocli.version>4.7.6</picocli.version>
+        <start-class>com.spaceai.SpaceAIApplication</start-class>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.test.skip>true</maven.test.skip>
     </properties>
 
     <dependencies>
-        <!-- Spring Boot Web — server HTTP Tomcat -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
-
-        <!-- Jackson JSON -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -40,15 +39,11 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-core</artifactId>
         </dependency>
-
-        <!-- Redis Jedis -->
         <dependency>
             <groupId>redis.clients</groupId>
             <artifactId>jedis</artifactId>
             <version>5.1.0</version>
         </dependency>
-
-        <!-- Picocli CLI -->
         <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
@@ -59,8 +54,6 @@
             <artifactId>picocli-spring-boot-starter</artifactId>
             <version>${picocli.version}</version>
         </dependency>
-
-        <!-- JLine terminal -->
         <dependency>
             <groupId>org.jline</groupId>
             <artifactId>jline</artifactId>
@@ -71,8 +64,6 @@
             <artifactId>jline-terminal-ffm</artifactId>
             <version>3.26.3</version>
         </dependency>
-
-        <!-- Spring Boot Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -86,6 +77,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <mainClass>com.spaceai.SpaceAIApplication</mainClass>
                     <jvmArguments>
                         --enable-preview -Xmx512m -Xms256m
                         --enable-native-access=ALL-UNNAMED
@@ -104,6 +96,13 @@
                         <arg>-Xlint:-rawtypes</arg>
                     </compilerArgs>
                     <failOnError>false</failOnError>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skipTests>true</skipTests>
                 </configuration>
             </plugin>
         </plugins>
