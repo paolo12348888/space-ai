@@ -1,6 +1,7 @@
 spring:
   ai:
     # === Configurazione API nativa Anthropic ===
+    # Abilitare impostando space-ai.provider=anthropic
     anthropic:
       api-key: ${AI_API_KEY:}
       base-url: ${AI_BASE_URL:https://api.anthropic.com}
@@ -11,32 +12,43 @@ spring:
           temperature: 0.7
 
     # === Configurazione API compatibile OpenAI ===
+    # Abilitare impostando space-ai.provider=openai (predefinito)
+    # Supporta OpenAI, Azure OpenAI, proxy API compatibili, ecc.
     openai:
       api-key: ${AI_API_KEY:}
-      base-url: ${AI_BASE_URL:https://api.groq.com/openai/v1}
+      base-url: ${AI_BASE_URL:https://api.openai.com}
       chat:
         options:
-          model: ${AI_MODEL:llama-3.3-70b-versatile}
+          model: ${AI_MODEL:gpt-4o}
 
+  # Non avvia il server Web (modalità CLI pura)
   main:
     web-application-type: servlet
     banner-mode: off
 
+  # thread virtuali
   threads:
     virtual:
       enabled: true
 
-# === Server web ===
-server:
-  port: ${PORT:10000}
-
 # === Configurazione personalizzata Space AI Java ===
 space-ai:
+  # Provider API: openai o anthropic
   provider: ${SPACE_AI_PROVIDER:openai}
 
+# Log: in modalità CLI mostra solo WARN e superiori, per mantenere la console pulita
 logging:
   level:
     root: WARN
-    com.spaceai: INFO
+    com.spaceai: WARN
     org.springframework: WARN
     org.jline: WARN
+
+# === Server web (serve index.html e worker JS) ===
+server:
+  port: ${PORT:8080}
+
+# === Persistenza distribuita Redis (Fase 3) ===
+# Se REDIS_URL non è impostato, usa solo file locale (nessuna regressione)
+spring.data.redis:
+  url: ${REDIS_URL:}
