@@ -38,6 +38,24 @@ spring:
   threads:
     virtual:
       enabled: true
+  ai:
+    anthropic:
+      api-key: ${AI_API_KEY:missing-key}
+      base-url: ${AI_BASE_URL:https://api.anthropic.com}
+      chat:
+        options:
+          model: ${AI_MODEL:claude-sonnet-4-20250514}
+          max-tokens: ${AI_MAX_TOKENS:8096}
+          temperature: 0.7
+    openai:
+      api-key: ${AI_API_KEY:missing-key}
+      base-url: ${AI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${AI_MODEL:gpt-4o}
+
+space-ai:
+  provider: ${SPACE_AI_PROVIDER:openai}
 
 server:
   port: ${PORT:10000}
