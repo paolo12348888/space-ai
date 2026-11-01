@@ -32,8 +32,17 @@ for path in candidates:
 cmd = [
     java_bin,
     "--enable-preview",
-    "-Xmx450m",
-    "-Xms128m",
+    "-Xmx320m",
+    "-Xms64m",
+    "-Xss512k",
+    "-XX:+UseSerialGC",
+    "-XX:MaxMetaspaceSize=160m",
+    "-XX:ReservedCodeCacheSize=64m",
+    "-XX:MaxDirectMemorySize=64m",
+    "-XX:TieredStopAtLevel=1",
+    "-XX:+ExitOnOutOfMemoryError",
+    "-Djava.security.egd=file:/dev/./urandom",
+    "-Dspring.jmx.enabled=false",
     f"-Dserver.port={port}",
     "-Dspring.main.web-application-type=servlet",
     "--enable-native-access=ALL-UNNAMED",
@@ -47,4 +56,6 @@ print(f"JAR: {jar}", flush=True)
 print(f"Java: {java_bin}", flush=True)
 
 result = subprocess.run(cmd)
+print(f"⚠ JVM terminata con codice {result.returncode} "
+      f"(-9 = ucciso da Render per memoria, 3 = OutOfMemoryError Java)", flush=True)
 sys.exit(result.returncode)

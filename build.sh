@@ -47,6 +47,13 @@ spring:
           model: ${AI_MODEL:claude-sonnet-4-20250514}
           max-tokens: ${AI_MAX_TOKENS:8096}
           temperature: 0.7
+    model:
+      embedding: none
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
     openai:
       api-key: ${AI_API_KEY:missing-key}
       base-url: ${AI_BASE_URL:https://api.openai.com}
@@ -67,6 +74,37 @@ logging:
     org.springframework.web: INFO
 YMLEOF
 echo "✅ application.yml (servlet mode) scritto"
+
+# ════════════════════════════════════════════════════════
+# STEP 2b: Su server la REPL da terminale non serve: disattivata
+# ════════════════════════════════════════════════════════
+CLIDIR="src/main/java/com/spaceai/cli"
+mkdir -p "$CLIDIR"
+cat > "$CLIDIR/SpaceAIRunner.java" << 'RUNEOF'
+package com.spaceai.cli;
+
+import com.spaceai.repl.ReplSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.stereotype.Component;
+
+@Component
+public class SpaceAIRunner implements CommandLineRunner {
+    private static final Logger log = LoggerFactory.getLogger(SpaceAIRunner.class);
+    private final ReplSession replSession;
+
+    public SpaceAIRunner(ReplSession replSession) {
+        this.replSession = replSession;
+    }
+
+    @Override
+    public void run(String... args) {
+        log.info("Space AI web server pronto (REPL da terminale disattivata)");
+    }
+}
+RUNEOF
+echo "✅ SpaceAIRunner (senza REPL) scritto"
 
 # ════════════════════════════════════════════════════════
 # STEP 3: Auto-fix ChatController bug riga 3441
