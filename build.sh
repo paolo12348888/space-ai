@@ -267,6 +267,97 @@ PYEOF
 fi
 
 # ════════════════════════════════════════════════════════
+# STEP 3b: Immagini piu fedeli al testo + modello Groq ritirato + variabili AI_*
+# (blocco separato: se fallisce, il fix del bug riga 3441 resta applicato)
+# ════════════════════════════════════════════════════════
+if [ -f "$CTRL" ]; then
+    echo "🎨 Patch immagini/video..."
+    python3 - << 'IMGEOF'
+import sys
+
+path = "src/main/java/com/spaceai/web/ChatController.java"
+
+JAVA_BLOCK = r'''private String enhancePromptForSD(String prompt) {
+        // Traduzione fedele via LLM (nessun tag di stile aggiunto). Se non disponibile, traduttore base.
+        String faithful = translatePromptFaithful(prompt);
+        if (faithful != null) return faithful;
+        return enhancePromptForSDLegacy(prompt);
+    }
+
+    private String translatePromptFaithful(String prompt) {
+        try {
+            if (prompt == null || prompt.isBlank()) return null;
+            if (rateLimitUntil > System.currentTimeMillis()) return null;
+            String sys = "You convert an image request into one precise English prompt for a text-to-image model. "
+                + "Keep EVERY detail the user gave: subjects, how many, colors, clothing, objects, setting, time of day, style, mood, camera angle. "
+                + "Do NOT add details, styles or quality words the user did not ask for. "
+                + "Drop request words such as create an image of or draw. "
+                + "Output ONLY the final English prompt on a single line, with no quotes and no comments.";
+            String out = callLLM(sys, prompt, new java.util.ArrayList<>(),
+                env("AI_BASE_URL", "https://api.groq.com/openai/v1"),
+                env("AI_API_KEY", ""),
+                env("AI_MODEL", "openai/gpt-oss-120b"), 300);
+            if (out == null) return null;
+            out = out.trim();
+            if (out.length() > 1 && out.startsWith("\"") && out.endsWith("\"")) out = out.substring(1, out.length() - 1).trim();
+            if (out.length() < 5 || out.indexOf('\n') >= 0 || out.length() > Math.max(400, prompt.length() * 4)) return null;
+            log.info("Image prompt tradotto fedelmente: [{}] -> [{}]", prompt, out);
+            return out;
+        } catch (Exception e) {
+            log.warn("Traduzione prompt via LLM fallita, uso traduttore base: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    '''
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def rep(old, new, label):
+        global content
+        n = content.count(old)
+        if n:
+            content = content.replace(old, new)
+        print(f"  {label}: {n} punti")
+
+    # --- Modello Groq ritirato + variabili GROQ_* mai impostate su Render ---
+    rep('llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'modello ritirato sostituito')
+    def wrap(old, new, label):
+        global content
+        if new in content:
+            print(f"  {label}: gia applicato")
+            return
+        rep(old, new, label)
+    wrap('env("GROQ_API_KEY","")',
+         'env("AI_API_KEY",env("GROQ_API_KEY",""))', 'GROQ_API_KEY -> AI_API_KEY')
+    wrap('env("GROQ_BASE_URL","https://api.groq.com/openai/v1")',
+         'env("AI_BASE_URL",env("GROQ_BASE_URL","https://api.groq.com/openai/v1"))', 'GROQ_BASE_URL -> AI_BASE_URL')
+    wrap('env("GROQ_MODEL","openai/gpt-oss-120b")',
+         'env("AI_MODEL",env("GROQ_MODEL","openai/gpt-oss-120b"))', 'GROQ_MODEL -> AI_MODEL')
+
+    # --- Immagini piu fedeli al testo ---
+    rep('return eng + qualityTags;', 'return eng;', 'tag di stile forzati rimossi')
+    rep('enhance=true', 'enhance=false', 'Pollinations enhance disattivato')
+    rep('https://api-inference.huggingface.co/models/',
+        'https://router.huggingface.co/hf-inference/models/', 'endpoint HuggingFace aggiornato')
+
+    sig = 'private String enhancePromptForSD(String prompt) {'
+    if sig in content and 'translatePromptFaithful' not in content:
+        content = content.replace(sig, JAVA_BLOCK + 'private String enhancePromptForSDLegacy(String prompt) {', 1)
+        print("  traduzione fedele via LLM: attivata")
+    else:
+        print("  traduzione fedele via LLM: gia presente o firma non trovata")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+except Exception as e:
+    print(f"  ⚠️  Patch immagini/video non applicata: {e}", file=sys.stderr)
+IMGEOF
+fi
+
+# ════════════════════════════════════════════════════════
 # STEP 4: Setup Java 21
 # ════════════════════════════════════════════════════════
 echo "📦 Setup Java 21..."
