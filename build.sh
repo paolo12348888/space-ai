@@ -107,6 +107,117 @@ RUNEOF
 echo "✅ SpaceAIRunner (senza REPL) scritto"
 
 # ════════════════════════════════════════════════════════
+# STEP 2c: Pagina di diagnostica TEMPORANEA /api/diag
+# (mostra l'errore vero del provider AI; da rimuovere a problema risolto)
+# ════════════════════════════════════════════════════════
+WEBDIR="src/main/java/com/spaceai/web"
+mkdir -p "$WEBDIR"
+cat > "$WEBDIR/DiagController.java" << 'DIAGEOF'
+package com.spaceai.web;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * DIAGNOSTICA TEMPORANEA: GET /api/diag
+ * Prova la stessa chiamata che fa la chat e mostra l'errore vero del provider.
+ * Non mostra mai la chiave. Da RIMUOVERE quando il problema e' risolto.
+ */
+@RestController
+@RequestMapping("/api")
+public class DiagController {
+
+    private static String env(String k, String d) {
+        String v = System.getenv(k);
+        return v == null ? d : v;
+    }
+
+    private static String clip(String s, int n) {
+        if (s == null) return "";
+        s = s.replace("\n", " ").replace("\r", " ");
+        return s.length() > n ? s.substring(0, n) + "..." : s;
+    }
+
+    private static String jsonEsc(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    @GetMapping("/diag")
+    public Map<String, Object> diag() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String baseUrl = env("AI_BASE_URL", "https://api.groq.com/openai/v1");
+        String key = env("AI_API_KEY", "");
+        String model = env("AI_MODEL", "llama-3.3-70b-versatile");
+
+        out.put("baseUrl", baseUrl);
+        out.put("model", model);
+        out.put("keyLength", key.length());
+        out.put("keyPrefix", key.trim().length() >= 4 ? key.trim().substring(0, 4) : "");
+        out.put("keyHasWhitespace", !key.equals(key.trim()));
+        out.put("baseUrlHasWhitespace", !baseUrl.equals(baseUrl.trim()));
+        out.put("modelHasWhitespace", !model.equals(model.trim()));
+
+        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        String base = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+
+        // 1) Elenco modelli disponibili con questa chiave
+        try {
+            HttpRequest r = HttpRequest.newBuilder(URI.create(base + "/models"))
+                .timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + key)
+                .header("User-Agent", "SPACE-AI/4.0")
+                .GET().build();
+            HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
+            out.put("modelsHttpStatus", resp.statusCode());
+            if (resp.statusCode() == 200) {
+                List<String> ids = new ArrayList<>();
+                Matcher m = Pattern.compile("\"id\"\\s*:\\s*\"([^\"]+)\"").matcher(resp.body());
+                while (m.find() && ids.size() < 40) ids.add(m.group(1));
+                out.put("configuredModelExists", ids.contains(model.trim()));
+                out.put("availableModels", ids);
+            } else {
+                out.put("modelsError", clip(resp.body(), 300));
+            }
+        } catch (Exception e) {
+            out.put("modelsException", e.getClass().getSimpleName() + ": " + clip(e.getMessage(), 200));
+        }
+
+        // 2) Stessa chiamata della chat, minima
+        try {
+            String body = "{\"model\":\"" + jsonEsc(model) + "\",\"max_tokens\":5,"
+                + "\"messages\":[{\"role\":\"user\",\"content\":\"ciao\"}]}";
+            HttpRequest r = HttpRequest.newBuilder(URI.create(base + "/chat/completions"))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + key)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "SPACE-AI/4.0")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build();
+            HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
+            out.put("chatHttpStatus", resp.statusCode());
+            out.put("chatResponse", clip(resp.body(), 400));
+        } catch (Exception e) {
+            out.put("chatException", e.getClass().getSimpleName() + ": " + clip(e.getMessage(), 200));
+        }
+        return out;
+    }
+}
+DIAGEOF
+echo "✅ DiagController scritto"
+
+# ════════════════════════════════════════════════════════
 # STEP 3: Auto-fix ChatController bug riga 3441
 # ════════════════════════════════════════════════════════
 CTRL="src/main/java/com/spaceai/web/ChatController.java"
