@@ -213,6 +213,68 @@ public class DiagController {
         }
         return out;
     }
+    private static Map<String, Object> probe(HttpClient http, HttpRequest r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        try {
+            HttpResponse<byte[]> resp = http.send(r, HttpResponse.BodyHandlers.ofByteArray());
+            m.put("status", resp.statusCode());
+            m.put("contentType", resp.headers().firstValue("content-type").orElse(""));
+            m.put("bytes", resp.body().length);
+            String ct = resp.headers().firstValue("content-type").orElse("");
+            if (!ct.startsWith("image/")) {
+                m.put("body", clip(new String(resp.body(), java.nio.charset.StandardCharsets.UTF_8), 250));
+            }
+        } catch (Exception e) {
+            m.put("exception", e.getClass().getSimpleName() + ": " + clip(e.getMessage(), 160));
+        }
+        return m;
+    }
+
+    /** GET /api/diag/image : stato di ogni motore immagini (TEMPORANEO). */
+    @GetMapping("/diag/image")
+    public Map<String, Object> diagImage() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String pollKey = env("POLLINATIONS_API_KEY", "").trim();
+        String hfKey = env("HF_TOKEN", "").trim();
+        String repKey = env("REPLICATE_API_TOKEN", "").trim();
+        out.put("hasPollinationsKey", !pollKey.isEmpty());
+        out.put("hasHfToken", !hfKey.isEmpty());
+        out.put("hasReplicateToken", !repKey.isEmpty());
+
+        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NORMAL).build();
+        try {
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(
+                "https://gen.pollinations.ai/image/a%20red%20apple?model=flux&width=256&height=256"))
+                .timeout(Duration.ofSeconds(40)).header("User-Agent", "SPACE-AI/4.0");
+            if (!pollKey.isEmpty()) b.header("Authorization", "Bearer " + pollKey);
+            out.put("pollinationsNuovo", probe(http, b.GET().build()));
+        } catch (Exception e) { out.put("pollinationsNuovo", e.getClass().getSimpleName()); }
+        try {
+            out.put("pollinationsVecchio", probe(http, HttpRequest.newBuilder(URI.create(
+                "https://image.pollinations.ai/prompt/a%20red%20apple?width=256&height=256&nologo=true"))
+                .timeout(Duration.ofSeconds(40)).header("User-Agent", "SPACE-AI/4.0").GET().build()));
+        } catch (Exception e) { out.put("pollinationsVecchio", e.getClass().getSimpleName()); }
+        if (!hfKey.isEmpty()) {
+            try {
+                out.put("huggingFace", probe(http, HttpRequest.newBuilder(URI.create(
+                    "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"))
+                    .timeout(Duration.ofSeconds(40))
+                    .header("Authorization", "Bearer " + hfKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"inputs\":\"a red apple\"}")).build()));
+            } catch (Exception e) { out.put("huggingFace", e.getClass().getSimpleName()); }
+        }
+        if (!repKey.isEmpty()) {
+            try {
+                out.put("replicateAccount", probe(http, HttpRequest.newBuilder(URI.create(
+                    "https://api.replicate.com/v1/account"))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Authorization", "Bearer " + repKey).GET().build()));
+            } catch (Exception e) { out.put("replicateAccount", e.getClass().getSimpleName()); }
+        }
+        return out;
+    }
 }
 DIAGEOF
 echo "✅ DiagController scritto"
@@ -311,6 +373,70 @@ JAVA_BLOCK = r'''private String enhancePromptForSD(String prompt) {
 
     '''
 
+NEW_ENGINES = r'''        // --- Motori nuovi: Pollinations (gen, con chiave) e Replicate FLUX schnell ---
+        {
+            String pk_n = env("POLLINATIONS_API_KEY", "").trim();
+            if (!pk_n.isEmpty()) {
+                try {
+                    long seed_n = Math.abs(engPrompt.hashCode()) % 99999;
+                    String enc_n = java.net.URLEncoder.encode(engPrompt, "UTF-8").replace("+", "%20");
+                    String url_n = "https://gen.pollinations.ai/image/" + enc_n
+                        + "?model=flux&width=1024&height=1024&nologo=true&seed=" + seed_n;
+                    HttpHeaders hh_n = new HttpHeaders();
+                    hh_n.setBearerAuth(pk_n);
+                    hh_n.set("User-Agent", "SPACE-AI/4.0");
+                    ResponseEntity<byte[]> r_n = imgClient.exchange(url_n,
+                        org.springframework.http.HttpMethod.GET, new HttpEntity<>(hh_n), byte[].class);
+                    if (r_n.getStatusCode().is2xxSuccessful() && r_n.getBody() != null && r_n.getBody().length > 5000) {
+                        log.info("Pollinations (gen) OK: {} bytes", r_n.getBody().length);
+                        return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(r_n.getBody());
+                    }
+                    log.warn("Pollinations (gen) risposta insufficiente");
+                } catch (Exception e_n) {
+                    String st_n = (e_n instanceof org.springframework.web.client.HttpStatusCodeException)
+                        ? String.valueOf(((org.springframework.web.client.HttpStatusCodeException) e_n).getStatusCode().value()) : "";
+                    log.warn("Pollinations (gen) fallito: {} {}", e_n.getClass().getSimpleName(), st_n);
+                }
+            }
+            String rk_n = env("REPLICATE_API_TOKEN", "").trim();
+            if (!rk_n.isEmpty()) {
+                try {
+                    HttpHeaders rh_n = new HttpHeaders();
+                    rh_n.setContentType(MediaType.APPLICATION_JSON);
+                    rh_n.setBearerAuth(rk_n);
+                    rh_n.set("Prefer", "wait");
+                    ObjectNode in_n = MAPPER.createObjectNode();
+                    in_n.put("prompt", engPrompt);
+                    in_n.put("aspect_ratio", "1:1");
+                    in_n.put("output_format", "jpg");
+                    in_n.put("num_outputs", 1);
+                    ObjectNode rq_n = MAPPER.createObjectNode();
+                    rq_n.set("input", in_n);
+                    ResponseEntity<String> rr_n = imgClient.postForEntity(
+                        "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
+                        new HttpEntity<>(MAPPER.writeValueAsString(rq_n), rh_n), String.class);
+                    JsonNode rj_n = MAPPER.readTree(rr_n.getBody());
+                    JsonNode o_n = rj_n.path("output");
+                    String ou_n = (o_n.isArray() && o_n.size() > 0) ? o_n.get(0).asText() : "";
+                    if (!ou_n.isEmpty()) {
+                        ResponseEntity<byte[]> ir_n = imgClient.getForEntity(ou_n, byte[].class);
+                        if (ir_n.getBody() != null && ir_n.getBody().length > 3000) {
+                            log.info("Replicate FLUX OK: {} bytes", ir_n.getBody().length);
+                            return "IMAGE:" + java.util.Base64.getEncoder().encodeToString(ir_n.getBody());
+                        }
+                    }
+                    log.warn("Replicate: nessuna immagine (stato {})", rj_n.path("status").asText());
+                } catch (Exception e_n) {
+                    String st_n = (e_n instanceof org.springframework.web.client.HttpStatusCodeException)
+                        ? String.valueOf(((org.springframework.web.client.HttpStatusCodeException) e_n).getStatusCode().value()) : "";
+                    log.warn("Replicate immagine fallito: {} {}", e_n.getClass().getSimpleName(), st_n);
+                }
+            }
+        }
+
+'''
+ANCHOR = 'String[] pollinationModels = {"flux", "turbo", "flux-realism"};'
+
 try:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -324,18 +450,12 @@ try:
 
     # --- Modello Groq ritirato + variabili GROQ_* mai impostate su Render ---
     rep('llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'modello ritirato sostituito')
-    def wrap(old, new, label):
-        global content
-        if new in content:
-            print(f"  {label}: gia applicato")
-            return
-        rep(old, new, label)
-    wrap('env("GROQ_API_KEY","")',
-         'env("AI_API_KEY",env("GROQ_API_KEY",""))', 'GROQ_API_KEY -> AI_API_KEY')
-    wrap('env("GROQ_BASE_URL","https://api.groq.com/openai/v1")',
-         'env("AI_BASE_URL",env("GROQ_BASE_URL","https://api.groq.com/openai/v1"))', 'GROQ_BASE_URL -> AI_BASE_URL')
-    wrap('env("GROQ_MODEL","openai/gpt-oss-120b")',
-         'env("AI_MODEL",env("GROQ_MODEL","openai/gpt-oss-120b"))', 'GROQ_MODEL -> AI_MODEL')
+    rep('env("GROQ_API_KEY","")',
+        'env("AI_API_KEY",env("GROQ_API_KEY",""))', 'GROQ_API_KEY -> AI_API_KEY')
+    rep('env("GROQ_BASE_URL","https://api.groq.com/openai/v1")',
+        'env("AI_BASE_URL",env("GROQ_BASE_URL","https://api.groq.com/openai/v1"))', 'GROQ_BASE_URL -> AI_BASE_URL')
+    rep('env("GROQ_MODEL","openai/gpt-oss-120b")',
+        'env("AI_MODEL",env("GROQ_MODEL","openai/gpt-oss-120b"))', 'GROQ_MODEL -> AI_MODEL')
 
     # --- Immagini piu fedeli al testo ---
     rep('return eng + qualityTags;', 'return eng;', 'tag di stile forzati rimossi')
@@ -349,6 +469,13 @@ try:
         print("  traduzione fedele via LLM: attivata")
     else:
         print("  traduzione fedele via LLM: gia presente o firma non trovata")
+
+    # --- Motori immagini nuovi (prima dei vecchi) ---
+    if ANCHOR in content and 'Motori nuovi: Pollinations (gen' not in content:
+        content = content.replace(ANCHOR, NEW_ENGINES + '        ' + ANCHOR, 1)
+        print("  motori immagini nuovi (Pollinations gen + Replicate): attivati")
+    else:
+        print("  motori immagini nuovi: gia presenti o punto di inserimento non trovato")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
