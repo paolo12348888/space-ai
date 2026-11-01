@@ -92,7 +92,7 @@
                         <arg>-Xlint:-rawtypes</arg>
                         <arg>-Xlint:-cast</arg>
                     </compilerArgs>
-                    <failOnError>false</failOnError>
+                    <failOnError>true</failOnError>
                     <showWarnings>false</showWarnings>
                 </configuration>
             </plugin>

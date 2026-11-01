@@ -135,5 +135,11 @@ mvn -version
 echo "🔨 Build Maven..."
 mvn clean package -DskipTests
 
-echo "✅ Build completata!"
+# Verifica: il JAR deve contenere la classe main, altrimenti fallisce subito
+JAR=$(ls target/*.jar | grep -v '\.original$' | head -1)
+if ! "$JAVA_HOME/bin/jar" tf "$JAR" | grep -q "BOOT-INF/classes/com/spaceai/SpaceAIApplication.class"; then
+    echo "❌ ERRORE: SpaceAIApplication.class manca nel JAR (compilazione fallita?)"
+    exit 1
+fi
+echo "✅ Build completata! Classe main presente nel JAR"
 ls -lh target/*.jar 2>/dev/null
