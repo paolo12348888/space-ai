@@ -96,6 +96,12 @@ try:
         content
     )
 
+    # Fix: Map<?,?>.getOrDefault("output","") non compila (riga 3441)
+    content = content.replace(
+        'Object _o = pr.getOrDefault("output","");',
+        'Object _o = pr.get("output");'
+    )
+
     if content != original:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
