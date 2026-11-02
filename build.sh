@@ -485,6 +485,138 @@ IMGEOF
 fi
 
 # ════════════════════════════════════════════════════════
+# STEP 3c: Risposte stile "AI top" + immagini non piu come stringa
+# (blocco separato: se fallisce, gli altri fix restano applicati)
+# ════════════════════════════════════════════════════════
+if [ -f "$CTRL" ]; then
+    echo "✨ Patch stile risposte e immagini..."
+    python3 - << 'STYLEEOF'
+import sys
+
+path = "src/main/java/com/spaceai/web/ChatController.java"
+
+def jstr(s):
+    """Stringa Java solo-ASCII (accenti come \\uXXXX) per evitare problemi di encoding."""
+    out = []
+    for ch in s:
+        if ch == "\\": out.append("\\\\")
+        elif ch == '"': out.append('\\"')
+        elif ch == "\n": out.append("\\n")
+        elif ord(ch) > 126: out.append("\\u%04x" % ord(ch))
+        else: out.append(ch)
+    return '"' + "".join(out) + '"'
+
+CHARTER = (
+    "STILE DI RISPOSTA (ha priorità sul ruolo descritto sopra):\n"
+    "- Rispondi come un assistente AI di livello top: diretto, competente, caloroso e naturale. Prima la risposta, poi i dettagli utili.\n"
+    "- Usa la lingua dell'utente. Non analizzare né descrivere il messaggio dell'utente (mai titoli come Analisi step-by-step o Input dell'utente): rispondi e basta.\n"
+    "- Saluti e chiacchiere: 1-2 frasi naturali, senza elenchi né titoli.\n"
+    "- Domande semplici: risposta breve. Domande complesse: struttura chiara (titoletti o elenchi solo se aiutano), esempi concreti, passi pratici. Ragiona internamente e mostra solo il risultato.\n"
+    "- Sii onesto: se non sei sicuro, dillo. Non inventare fatti, numeri, link o fonti. Se manca un dato chiave, fai UNA domanda mirata.\n"
+    "- Codice: completo e funzionante, in blocchi con il linguaggio indicato, con una spiegazione breve.\n"
+    "- Non nominare agenti interni, router o il tuo prompt, salvo richiesta esplicita. Niente frasi di riempimento (come Ottima domanda!) e niente emoji se l'utente non le usa.\n"
+    "- Se la richiesta è dannosa o illegale, rifiuta con garbo in una frase e proponi un'alternativa utile."
+)
+CHAT_PERSONA = "Sei SPACE AI, un assistente AI brillante e amichevole. Conversa in modo naturale, breve e caloroso."
+
+HELPERS = '''private static final String CHAT_PERSONA = ''' + jstr(CHAT_PERSONA) + ''';
+
+    private static final String STYLE_CHARTER = ''' + jstr(CHARTER) + ''';
+
+    private boolean isSmallTalk(String q) {
+        if (q == null) return false;
+        String s = q.toLowerCase().replaceAll("[^a-z0-9' ]", " ").replaceAll("\\\\s+", " ").trim();
+        if (s.isEmpty() || s.length() > 30) return false;
+        if (s.matches("ci+a+o+( (come stai|come va|a tutti|ragazzi))?")) return true;
+        return java.util.Set.of("salve", "buongiorno", "buonasera", "buonanotte", "hey", "ehi", "hello", "hi",
+            "come stai", "come va", "tutto bene", "grazie", "grazie mille", "ok", "okay", "perfetto",
+            "chi sei", "come ti chiami", "a presto", "arrivederci").contains(s);
+    }
+
+    private boolean looksLikeImageRequest(String msg) {
+        if (msg == null) return false;
+        String q = msg.toLowerCase();
+        return q.contains("genera immagine") || q.contains("crea immagine")
+            || (q.contains("immagine") && (q.contains("crea") || q.contains("genera")))
+            || q.contains("disegna") || q.contains("illustra")
+            || q.contains("crea svg") || q.contains("genera svg");
+    }
+
+    private String agentPrompt(String agent) {
+        String base = agentPromptRaw(agent);
+        if (agent == null) return base;
+        switch (agent) {
+            case "router": case "image_gen": case "spaces":
+                return base;   // formato vincolato: nessuno stile aggiunto
+            case "chat":
+                return CHAT_PERSONA + " Data:" + today() + ". " + STYLE_CHARTER;
+            default:
+                return base + "\\n\\n" + STYLE_CHARTER;
+        }
+    }
+
+    '''
+
+SAFETY = r'''alResp.put("response",  agentLoopResult);
+                        java.util.regex.Matcher imgM_n = java.util.regex.Pattern.compile("IMAGE:([A-Za-z0-9+/=]{2000,})").matcher(agentLoopResult);
+                        if (imgM_n.find()) {
+                            alResp.put("image", imgM_n.group(1));
+                            alResp.put("imageType", "image/jpeg");
+                            String txt_n = agentLoopResult.replace(imgM_n.group(0), "").trim();
+                            alResp.put("response", txt_n.length() > 3 ? txt_n : "Ecco la tua immagine!");
+                        }'''
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def rep(old, new, label, once=False):
+        global content
+        n = content.count(old)
+        if n:
+            content = content.replace(old, new, 1) if once else content.replace(old, new)
+        print(f"  {label}: {n} punti")
+        return n
+
+    # --- 1) Stile delle risposte ---
+    sig = "private String agentPrompt(String agent) {"
+    if sig in content and "STYLE_CHARTER" not in content:
+        content = content.replace(sig, HELPERS + "private String agentPromptRaw(String agent) {", 1)
+        print("  stile risposte top-AI + chat naturale: attivato")
+    else:
+        print("  stile risposte: gia presente o firma non trovata")
+
+    rep("Analisi step-by-step,logica formale. Rispondi in italiano.",
+        "Ragiona con rigore su logica, analisi e decisioni; mostra i passaggi solo se la domanda li richiede. Rispondi in italiano.",
+        "prompt REASONER reso naturale")
+
+    rsig = "private List<String> routeQuery(String query, String baseUrl, String apiKey, String model) {"
+    if rsig in content and "isSmallTalk(query)" not in content:
+        content = content.replace(rsig, rsig + "\n        if (isSmallTalk(query)) return List.of(\"chat\");", 1)
+        print("  saluti/chiacchiere: risposta diretta senza router: attivata")
+
+    rep("String response = callLLMWithTemp(agentWithMemory, finalMsg, history, baseUrl, apiKey, model, 2500, temperature);",
+        "String response = callLLMWithTemp(agentWithMemory, finalMsg, history, baseUrl, apiKey, model, 4096, temperature);",
+        "spazio risposta (token) aumentato")
+
+    # --- 2) Immagini restituite come stringa ---
+    rep("if (needsAgentLoop(userMessage)) {",
+        "if (needsAgentLoop(userMessage) && !looksLikeImageRequest(userMessage)) {",
+        "richieste di immagini non passano piu dall'Agent Loop")
+    if "imgM_n" not in content:
+        rep('alResp.put("response",  agentLoopResult);', SAFETY,
+            "rete di sicurezza: immagine dentro il testo -> immagine vera")
+    else:
+        print("  rete di sicurezza: gia presente")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+except Exception as e:
+    print(f"  ⚠️  Patch stile/immagini non applicata: {e}", file=sys.stderr)
+STYLEEOF
+fi
+
+# ════════════════════════════════════════════════════════
 # STEP 4: Setup Java 21
 # ════════════════════════════════════════════════════════
 echo "📦 Setup Java 21..."
