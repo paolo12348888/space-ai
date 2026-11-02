@@ -275,6 +275,58 @@ public class DiagController {
         }
         return out;
     }
+    /** GET /api/diag/gemini : modelli Gemini disponibili con la tua chiave (TEMPORANEO). */
+    @GetMapping("/diag/gemini")
+    public Map<String, Object> diagGemini() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String key = env("GEMINI_API_KEY", "").trim();
+        String cfg = env("GEMINI_MODEL", "gemini-2.0-flash").trim();
+        String vis = env("GEMINI_VISION_MODEL", env("GEMINI_MODEL", "gemini-2.5-flash")).trim();
+        out.put("hasGeminiKey", !key.isEmpty());
+        out.put("modelloTesto", cfg);
+        out.put("modelloVisione", vis);
+        if (key.isEmpty()) return out;
+        HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        try {
+            HttpRequest r = HttpRequest.newBuilder(URI.create(
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"))
+                .timeout(Duration.ofSeconds(20)).header("x-goog-api-key", key).GET().build();
+            HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
+            out.put("elencoHttpStatus", resp.statusCode());
+            if (resp.statusCode() == 200) {
+                List<String> names = new ArrayList<>();
+                Matcher m = Pattern.compile("\"name\"\\s*:\\s*\"models/([^\"]+)\"").matcher(resp.body());
+                while (m.find()) names.add(m.group(1));
+                List<String> chat = new ArrayList<>();
+                for (String n : names) {
+                    if (n.startsWith("gemini") && !n.contains("embedding") && !n.contains("tts")
+                        && !n.contains("live") && !n.contains("audio") && !n.contains("robotics")
+                        && !n.contains("computer-use") && chat.size() < 40) chat.add(n);
+                }
+                out.put("modelloTestoEsiste", names.contains(cfg));
+                out.put("modelloVisioneEsiste", names.contains(vis));
+                out.put("modelliGeminiDisponibili", chat);
+            } else {
+                out.put("elencoErrore", clip(resp.body(), 250));
+            }
+        } catch (Exception e) {
+            out.put("elencoException", e.getClass().getSimpleName() + ": " + clip(e.getMessage(), 160));
+        }
+        try {
+            HttpRequest r = HttpRequest.newBuilder(URI.create(
+                "https://generativelanguage.googleapis.com/v1beta/models/" + vis + ":generateContent"))
+                .timeout(Duration.ofSeconds(30))
+                .header("x-goog-api-key", key).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                    "{\"contents\":[{\"parts\":[{\"text\":\"ciao\"}]}],\"generationConfig\":{\"maxOutputTokens\":20}}")).build();
+            HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
+            out.put("provaVisioneHttpStatus", resp.statusCode());
+            if (resp.statusCode() != 200) out.put("provaVisioneErrore", clip(resp.body(), 250));
+        } catch (Exception e) {
+            out.put("provaVisioneException", e.getClass().getSimpleName() + ": " + clip(e.getMessage(), 160));
+        }
+        return out;
+    }
 }
 DIAGEOF
 echo "✅ DiagController scritto"
@@ -618,6 +670,118 @@ except Exception as e:
 STYLEEOF
 else
     echo "⏭️  Patch stile risposte NON applicata (attivala con SPACE_PATCH_STYLE=1)"
+fi
+
+# ════════════════════════════════════════════════════════
+# STEP 3d: Foto allegate lette davvero (Gemini) + niente Agent Loop con allegato
+# Attivo di default; spegnibile con SPACE_PATCH_VISION=0
+# ════════════════════════════════════════════════════════
+if [ -f "$CTRL" ] && [ "${SPACE_PATCH_VISION:-1}" = "1" ]; then
+    echo "👁️  Patch foto allegate..."
+    python3 - << 'VISIONEOF'
+import sys
+
+path = "src/main/java/com/spaceai/web/ChatController.java"
+
+VISION_JAVA = r'''private String analyzeImageBase64(String base64Image, String userMsg,
+                                       String baseUrl, String apiKey, String model) throws Exception {
+        // Lettura foto con Gemini (il modello principale non vede le immagini); se fallisce, metodo originale
+        String gk_n = env("GEMINI_API_KEY", "").trim();
+        if (!gk_n.isEmpty() && base64Image != null && !base64Image.isEmpty()) {
+            try {
+                String gm_n = env("GEMINI_VISION_MODEL", env("GEMINI_MODEL", "gemini-2.5-flash")).trim();
+                String mime_n = base64Image.startsWith("iVBOR") ? "image/png"
+                    : base64Image.startsWith("UklGR") ? "image/webp"
+                    : base64Image.startsWith("R0lGOD") ? "image/gif" : "image/jpeg";
+                ObjectNode req_n = MAPPER.createObjectNode();
+                ObjectNode sysObj_n = MAPPER.createObjectNode();
+                ArrayNode sysParts_n = MAPPER.createArrayNode();
+                ObjectNode sysText_n = MAPPER.createObjectNode();
+                sysText_n.put("text", "Sei SPACE AI, un assistente con capacita visive. Rispondi nella lingua dell'utente, in modo diretto e utile. "
+                    + "Se l'utente chiede di creare o modificare un'immagine, descrivi con onesta cio che vedi e cosa si puo fare, senza dire di aver generato qualcosa che non hai generato. "
+                    + "Usa il markdown solo se aiuta.");
+                sysParts_n.add(sysText_n);
+                sysObj_n.set("parts", sysParts_n);
+                req_n.set("system_instruction", sysObj_n);
+                ArrayNode contents_n = MAPPER.createArrayNode();
+                ObjectNode um_n = MAPPER.createObjectNode();
+                um_n.put("role", "user");
+                ArrayNode parts_n = MAPPER.createArrayNode();
+                ObjectNode tp_n = MAPPER.createObjectNode();
+                tp_n.put("text", (userMsg == null || userMsg.isEmpty()) ? "Analizza questa immagine in dettaglio." : userMsg);
+                parts_n.add(tp_n);
+                ObjectNode ip_n = MAPPER.createObjectNode();
+                ObjectNode inl_n = MAPPER.createObjectNode();
+                inl_n.put("mime_type", mime_n);
+                inl_n.put("data", base64Image);
+                ip_n.set("inline_data", inl_n);
+                parts_n.add(ip_n);
+                um_n.set("parts", parts_n);
+                contents_n.add(um_n);
+                req_n.set("contents", contents_n);
+                ObjectNode gc_n = MAPPER.createObjectNode();
+                gc_n.put("maxOutputTokens", 2048);
+                req_n.set("generationConfig", gc_n);
+                HttpHeaders h_n = new HttpHeaders();
+                h_n.setContentType(MediaType.APPLICATION_JSON);
+                h_n.set("x-goog-api-key", gk_n);
+                ResponseEntity<String> resp_n = restTemplate.postForEntity(
+                    "https://generativelanguage.googleapis.com/v1beta/models/" + gm_n + ":generateContent",
+                    new HttpEntity<>(MAPPER.writeValueAsString(req_n), h_n), String.class);
+                JsonNode outParts_n = MAPPER.readTree(resp_n.getBody()).path("candidates").path(0).path("content").path("parts");
+                StringBuilder sb_n = new StringBuilder();
+                for (JsonNode pn_n : outParts_n) sb_n.append(pn_n.path("text").asText(""));
+                if (sb_n.length() > 0) return sb_n.toString().trim();
+                log.warn("Vision Gemini: risposta vuota");
+            } catch (Exception e_n) {
+                String st_n = (e_n instanceof org.springframework.web.client.HttpStatusCodeException)
+                    ? String.valueOf(((org.springframework.web.client.HttpStatusCodeException) e_n).getStatusCode().value()) : "";
+                log.warn("Vision Gemini fallita: {} {}", e_n.getClass().getSimpleName(), st_n);
+            }
+        }
+        return analyzeImageBase64Legacy(base64Image, userMsg, baseUrl, apiKey, model);
+    }
+
+    '''
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    def rep(old, new, label):
+        global content
+        n = content.count(old)
+        if n:
+            content = content.replace(old, new)
+        print(f"  {label}: {n} punti")
+
+    # 1) Con una foto allegata la richiesta NON deve passare dall'Agent Loop (che non vede l'allegato)
+    call = "needsAgentLoop(userMessage)"
+    guard = '(needsAgentLoop(userMessage) && body.getOrDefault("imageBase64","").isEmpty())'
+    if guard not in content:
+        rep("if (" + call, "if (" + guard, "Agent Loop saltato se c'e una foto allegata")
+    else:
+        print("  Agent Loop/foto: gia applicato")
+
+    # 2) Lettura foto con Gemini
+    sig = ("private String analyzeImageBase64(String base64Image, String userMsg,\n"
+           "                                       String baseUrl, String apiKey, String model) throws Exception {")
+    if sig in content and "analyzeImageBase64Legacy" not in content:
+        content = content.replace(sig, VISION_JAVA + sig.replace("analyzeImageBase64(", "analyzeImageBase64Legacy(", 1), 1)
+        print("  lettura foto con Gemini: attivata")
+    else:
+        print("  lettura foto con Gemini: gia presente o firma non trovata")
+
+    # 3) Modello Gemini di testo: default aggiornato (si puo' forzare con la variabile GEMINI_MODEL)
+    rep('env("GEMINI_MODEL","gemini-2.0-flash")', 'env("GEMINI_MODEL","gemini-2.5-flash")', "modello Gemini di riserva aggiornato")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+except Exception as e:
+    print(f"  ⚠️  Patch visione non applicata: {e}", file=sys.stderr)
+VISIONEOF
+else
+    echo "⏭️  Patch foto allegate NON applicata (SPACE_PATCH_VISION=0)"
 fi
 
 # ════════════════════════════════════════════════════════
