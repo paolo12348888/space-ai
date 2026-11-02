@@ -332,7 +332,7 @@ fi
 # STEP 3b: Immagini piu fedeli al testo + modello Groq ritirato + variabili AI_*
 # (blocco separato: se fallisce, il fix del bug riga 3441 resta applicato)
 # ════════════════════════════════════════════════════════
-if [ -f "$CTRL" ]; then
+if [ -f "$CTRL" ] && [ "${SPACE_PATCH_IMG:-1}" = "1" ]; then
     echo "🎨 Patch immagini/video..."
     python3 - << 'IMGEOF'
 import sys
@@ -482,13 +482,15 @@ try:
 except Exception as e:
     print(f"  ⚠️  Patch immagini/video non applicata: {e}", file=sys.stderr)
 IMGEOF
+else
+    echo "⏭️  Patch immagini/video NON applicata (SPACE_PATCH_IMG=0)"
 fi
 
 # ════════════════════════════════════════════════════════
 # STEP 3c: Risposte stile "AI top" + immagini non piu come stringa
 # (blocco separato: se fallisce, gli altri fix restano applicati)
 # ════════════════════════════════════════════════════════
-if [ -f "$CTRL" ]; then
+if [ -f "$CTRL" ] && [ "${SPACE_PATCH_STYLE:-0}" = "1" ]; then
     echo "✨ Patch stile risposte e immagini..."
     python3 - << 'STYLEEOF'
 import sys
@@ -614,6 +616,8 @@ try:
 except Exception as e:
     print(f"  ⚠️  Patch stile/immagini non applicata: {e}", file=sys.stderr)
 STYLEEOF
+else
+    echo "⏭️  Patch stile risposte NON applicata (attivala con SPACE_PATCH_STYLE=1)"
 fi
 
 # ════════════════════════════════════════════════════════
